@@ -84,25 +84,25 @@ Rendering a PlanningNode  may start more work than is required just for that pla
 # Phase 1
 
 Phase 1 is the smallest architecture that can replace `vibevoice_app.py` while moving to the XML document format.
-It should preserve current VibeVoice behavior, current speaker-to-voice lookup behavior, and current round-by-round concatenation behavior.
-It should not yet add sound effects, mixing, mastering, scene composition, or any audio graph beyond simple concatenation of VibeVoice output.
+It should preserve current VibeVoice behavior and current speaker-to-voice lookup behavior while using `<script>` elements as the renderable unit.
+It should include output-format conversion to the configured production format.
+It should not yet add sound effects, scene composition, or a general audio graph beyond ordered concatenation plus required output formatting.
 
 ## Phase 1 success criteria
 
 * An XML input document can express the same information currently expressed by the plain text file consumed by `vibevoice_app.py`.
-* The rendered output for an equivalent document follows the same parsing rules as `vibevoice_app.py`:
+* The rendered output for an equivalent document preserves the same core VibeVoice constraints as `vibevoice_app.py`:
   * YAML speaker map
-  * speaker lines in `speaker: text` form
-  * leading non-speaker lines passed through as prompt text before dialogue
-  * at most 4 distinct speakers per VibeVoice round
-  * rounds rendered independently and concatenated in order
-* Phase 1 returns model-native audio. In practice that means 24k mono output from VibeVoice, not yet 48k stereo production audio.
+  * script text made entirely of `speaker: text` lines
+  * at most 4 distinct speakers per script
+  * scripts rendered independently and concatenated in order
+* Phase 1 returns production-format audio. VibeVoice still renders 24k mono internally, but Phase 1 converts to the configured output sample rate and channel layout, defaulting to 48k stereo.
 * Errors in the incoming document identify the relevant XML node and, when practical, line/column information.
 
 ## Phase 1 document format
 
-The Phase 1 document should make VibeVoice round boundaries explicit in XML rather than preserving the plain text `----` separator convention inside script text.
-That keeps the human-facing format structured without forcing later phases to reverse engineer semantic boundaries from raw text.
+The Phase 1 document should use `<script>` as the renderable VibeVoice unit.
+The plain text `----` separator convention from `vibevoice_app.py` should disappear rather than being recreated in XML.
 
 Proposed shape:
 
@@ -113,14 +113,11 @@ anna: anna.wav
 ben: ben.wav
   </speaker-map>
   <script>
-    <round>
-Intro text that is not speaker-labelled.
 Anna: First line.
 Ben: Response.
-    </round>
-    <round>
+  </script>
+  <script>
 Anna: Another round.
-    </round>
   </script>
 </production>
 ```
@@ -130,13 +127,12 @@ Phase 1 guarantees for this format:
 * Exactly one `<production>` root.
 * Exactly one `<speaker-map>` per production.
 * One or more `<script>` elements per production.
-* One or more `<round>` elements per `<script>`.
 * `<speaker-map>` content is YAML text.
-* `<round>` content is plain text interpreted with the same speaker-line rules as `vibevoice_app.py`.
+* `<script>` content is plain text interpreted as `speaker: text` lines only.
 
 Phase 1 does not guarantee that `<script>` is the long-term unit of dramatic structure.
 Later phases may add scenes, assets, effects, and transitions around or above scripts.
-The stable guarantee is that a production contains ordered renderable text units, and in Phase 1 those units are reached through `<script>/<round>`.
+The stable guarantee is that a production contains ordered renderable text units, and in Phase 1 those units are the `<script>` elements.
 
 ## Phase 1 objects to create
 
@@ -145,14 +141,13 @@ The stable guarantee is that a production contains ordered renderable text units
 * `TextNode`: wrapper around literal text in the XML document.
 * `ProductionNode`: semantic root node for a production document.
 * `SpeakerMapNode`: parsed representation of speakers to voice files. Input is YAML inside `<speaker-map>`.
-* `ScriptNode`: ordered container for one or more rounds.
-* `RoundNode`: text for one VibeVoice generation round.
+* `ScriptNode`: text for one VibeVoice generation request.
 
 * `ProductionPlan`: top-level plan for one production.
-* `ScriptPlan`: ordered concatenation of round plans.
-* `RoundPlan`: one VibeVoice request using one round of text and the shared speaker map.
+* `ScriptPlan`: one VibeVoice request using one script and the shared speaker map.
 * `SpeakerMapPlan`: validated map from canonical speaker names to resolved voice references.
-* `VibeVoiceResource`: resource owning model lifecycle and fulfilling round render requests.
+* `VibeVoiceResource`: resource owning model lifecycle and fulfilling script render requests.
+* `OutputFormatResource`: resamples and upmixes concatenated production audio into the configured output format.
 * `ProductionResult`: wraps the rendered production audio and its sample rate.
 
 ## Phase 1 parsing and validation
@@ -170,9 +165,10 @@ Validation should happen in two layers:
 * Content validation during node-specific validation/planning:
   * `<speaker-map>` YAML is not a mapping
   * speaker names or voice names are empty or non-strings
-  * a round has no valid `speaker: text` lines
-  * a round references a speaker missing from the speaker map
-  * a round uses more than four distinct speakers
+  * a script has no valid `speaker: text` lines
+  * a script contains non-speaker lines
+  * a script references a speaker missing from the speaker map
+  * a script uses more than four distinct speakers
 
 Programmer misuse should still surface as normal Python exceptions.
 Incoming document problems should be wrapped with document-context errors that include node identity and location.
@@ -186,9 +182,9 @@ Recommended flow:
 
 1. `ProductionNode.plan()` creates a `ProductionPlan`.
 2. `SpeakerMapNode` produces a `SpeakerMapPlan` that normalizes speaker names and resolves voice references.
-3. Each `RoundNode` produces a `RoundPlan`.
-4. Each `ScriptPlan` preserves the source document order of its rounds.
-5. `ProductionPlan` preserves the source document order of its scripts.
+3. Each `ScriptNode` produces a `ScriptPlan`.
+4. `ProductionPlan` preserves the source document order of its scripts.
+5. `ProductionPlan.render()` concatenates model-native script outputs and then passes the production audio through `OutputFormatResource`.
 
 Document nodes should remain plain semantic objects.
 Dependency injection should begin at the planning/resource layer, where shared model state and configuration actually exist.
@@ -196,28 +192,30 @@ Dependency injection should begin at the planning/resource layer, where shared m
 Stable Phase 1 interfaces:
 
 * `SpeakerMapPlan` exposes a canonical lookup from script speaker name to resolved voice reference.
-* `RoundPlan` exposes the normalized prompt text plus normalized ordered dialogue lines for one VibeVoice call.
-* `VibeVoiceResource` accepts a round-level request and returns one rendered mono clip.
-* `ScriptPlan.render()` concatenates its round results in order with no inserted gaps.
-* `ProductionPlan.render()` concatenates its script results in order with no inserted gaps.
+* `ScriptPlan` exposes the normalized ordered dialogue lines for one VibeVoice call.
+* `VibeVoiceResource` accepts a script-level request and returns one rendered mono clip at the model-native sample rate.
+* `ProductionPlan.render()` concatenates its script results in order with no inserted gaps before output-format conversion.
+* `OutputFormatResource` converts concatenated production audio to the configured sample rate and channel layout.
 
-Implementation details that are not interface guarantees:
+Implementation details (not interface guarantees, but decisions for phase 1):
+* `VibeVoiceResource` should do real batching in phase 1. It will be a significant performance win. Some selection of batch size is needed. Default to 10.
+* for now, torch device is cuda and dtype is bfloat16
+* Voice resolution should happen during planning to catch errors there.
 
-* whether voice resolution happens fully during planning or lazily during first render
-* whether `VibeVoiceResource` batches requests immediately in Phase 1 or just renders them one-by-one behind a batch-capable interface
-* torch device selection, dtype selection, or flash-attention fallback behavior
+
 
 ## Phase 1 render results
 
-Phase 1 should use the existing `RenderResult` abstraction, but only the subset needed for simple concatenation.
+Phase 1 should use the existing `RenderResult` abstraction for intermediate and final audio.
 
 Phase 1 guarantees:
 
-* `audio` is a contiguous mono numpy array
-* `sample_rate` is the model-native output sample rate for the rendered clip
-* `pre_margin`, `post_margin`, `pre_gap`, and `post_gap` are all zero for Phase 1 VibeVoice output unless a later Phase 1 bug fix proves a non-zero margin is required to describe generated silence already present in the clip
+* `ScriptPlan.render()` returns model-native audio as a contiguous mono numpy array at the model-native sample rate.
+* `ProductionPlan.render()` returns a contiguous numpy array in the configured production output format.
+* Phase 1 production output defaults to stereo at 48000 Hz.
+* `pre_margin`, `post_margin`, `pre_gap`, and `post_gap` are all zero for Phase 1 output unless a later Phase 1 bug fix proves a non-zero margin is required to describe generated silence already present in the clip.
 
-That keeps the render contract compatible with later DSP work without pretending that Phase 1 already has meaningful margin/gap composition semantics.
+That keeps the render contract compatible with later DSP work without pretending that Phase 1 already has scene-level composition semantics.
 
 ## Phase 1 resource boundaries
 
@@ -227,10 +225,16 @@ That keeps the render contract compatible with later DSP work without pretending
 * `VibeVoiceForConditionalGenerationInference`
 * model loading details
 * device placement
-* conversion from `RoundPlan` data into the normalized script text expected by VibeVoice
+* conversion from `ScriptPlan` data into the normalized script text expected by VibeVoice
 
-`RoundPlan` should not know torch or model details.
-It should know only semantic text content and resolved voice references.
+`ScriptPlan` should not know torch or model details.
+It should know only semantic dialogue content and resolved voice references.
+
+`OutputFormatResource` is the Phase 1 component responsible for:
+
+* resampling from model-native audio to the configured production sample rate
+* converting mono model output to the configured channel layout
+* keeping the conversion policy simple and deterministic so later phases can wrap it in richer mastering or mixing steps
 
 `SpeakerMapPlan` should normalize the speaker map in the same way `vibevoice_app.py` does today:
 
@@ -242,17 +246,16 @@ It should know only semantic text content and resolved voice references.
 
 1. Build the XML parser and semantic nodes with source locations.
 2. Implement validation and document-context errors.
-3. Implement `SpeakerMapPlan`, `RoundPlan`, and `ScriptPlan`.
+3. Implement `SpeakerMapPlan` and `ScriptPlan`.
 4. Wrap existing VibeVoice generation logic behind `VibeVoiceResource`.
-5. Implement `ProductionPlan.render()` and WAV output.
-6. Add a compatibility test corpus that compares XML-driven output structure against the current `vibevoice_app.py` behavior for equivalent inputs.
+5. Implement `OutputFormatResource`.
+6. Implement `ProductionPlan.render()` and WAV output.
+7. Add a compatibility test corpus that compares XML-driven output structure against the current `vibevoice_app.py` behavior for equivalent inputs.
 
 ## Explicit Phase 1 non-goals
 
 * effects chains
 * background sound or music
 * scene-level mixing
-* stereo rendering
-* sample-rate conversion to project output rate
 * general-purpose batching across unrelated model resources
 * a document schema for everything needed by later full productions
