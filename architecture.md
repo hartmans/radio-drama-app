@@ -19,7 +19,7 @@ To create an app that can take a human-edited xml script and turn it into a high
   * Most nodes, plans and resources should be AsyncInjectables
   * Find VibeVoiceResource and SpeakerVoicePlan through injectors
   * Most of Carthage above the dependency injection layer are not useful to this project
-  
+* We are using XML, but the document is for humans. Other formats within XML is fine. As an example, the speaker map is a yaml document in an xml element.
 # Low Level
 
 ## DocumentNode
