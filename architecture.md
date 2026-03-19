@@ -285,7 +285,9 @@ Architecturally, it is a reason to keep model invocation behind a narrow request
 * a pure fake implementation for unit tests
 
 Cache keys should be derived from the semantic model request, not raw incidental input text.
-At minimum the key should include the normalized script content, resolved voice references, model identity, and generation settings that affect output length.
+For Phase 1, `VibeVoiceResource` only needs one model configuration, so the key can stay simple.
+At minimum it should include the normalized script content and resolved voice references.
+It should not try to encode generation parameters in order to chase exact output length, because the cache is only meant to provide plausible structural test data rather than reproduce a specific generation exactly.
 
 ## Explicit Phase 1 non-goals
 
