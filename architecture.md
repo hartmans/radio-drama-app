@@ -234,7 +234,7 @@ It should know only semantic text content and resolved voice references.
 
 `SpeakerMapPlan` should normalize the speaker map in the same way `vibevoice_app.py` does today:
 
-* preserve original spellings for user-facing errors
+* preserve user-authored speaker names for user-facing errors
 * support case-insensitive lookup
 * resolve voice files by direct path, by file name within the configured voice directory, and by stem within the configured voice directory
 
