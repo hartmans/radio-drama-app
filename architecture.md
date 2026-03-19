@@ -252,6 +252,41 @@ It should know only semantic dialogue content and resolved voice references.
 6. Implement `ProductionPlan.render()` and WAV output.
 7. Add a compatibility test corpus that compares XML-driven output structure against the current `vibevoice_app.py` behavior for equivalent inputs.
 
+## Testing strategy
+
+Use `pytest`.
+
+Most tests should not depend on a live VibeVoice model.
+Parser, validation, planning, batching, and output-format logic should be testable with ordinary unit tests and fixture-provided fake render results.
+
+Model-backed tests should run through a cache-aware pytest fixture around `VibeVoiceResource`.
+That fixture should support two modes:
+
+* live mode: if a request is missing from cache, run the real model call, record the cached metadata, and return a synthetic audio array for the rest of the test
+* cache mode: if a request is missing from cache, call `pytest.skip`
+
+For Phase 1, the cache does not need to store rendered waveform data.
+It should store only the model output metadata needed by higher-level tests.
+At minimum that means:
+
+* model-native sample rate
+* model-native frame count
+
+Later phases can extend cached metadata with values such as margins, gap-related metadata, forced-alignment points, or similar structural render outputs.
+
+The fixture can then return white noise of the cached length at the cached sample rate.
+That is enough for tests that only care about ordering, concatenation, batching boundaries, output-format conversion, and other structural properties above the actual model output.
+
+This means `VibeVoiceResource` will often be mocked in tests, and that is acceptable.
+Architecturally, it is a reason to keep model invocation behind a narrow request/response boundary so tests can substitute:
+
+* the real model-backed implementation
+* a cache-backed implementation
+* a pure fake implementation for unit tests
+
+Cache keys should be derived from the semantic model request, not raw incidental input text.
+At minimum the key should include the normalized script content, resolved voice references, model identity, and generation settings that affect output length.
+
 ## Explicit Phase 1 non-goals
 
 * effects chains
