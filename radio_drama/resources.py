@@ -106,6 +106,18 @@ class VibeVoiceResource(AsyncInjectable):
                     pending.registration.future.set_result(RenderResult(audio=audio))
 
     def _render_batch_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
+        generated = self._render_batch_native_sync(batch)
+        return [
+            convert_audio_format(
+                audio,
+                input_sample_rate=self.sample_rate,
+                output_sample_rate=self.config.resolved_output_sample_rate,
+                output_channels=self.config.resolved_output_channels,
+            )
+            for audio in generated
+        ]
+
+    def _render_batch_native_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
         requests = [pending.registration.request for pending in batch]
         processor, model = self._ensure_loaded()
         inputs = processor(
@@ -136,15 +148,7 @@ class VibeVoiceResource(AsyncInjectable):
             raise RuntimeError(
                 f"Model generation returned {len(generated)} clips for {len(batch)} requests"
             )
-        return [
-            convert_audio_format(
-                self._normalize_audio_array(audio),
-                input_sample_rate=self.sample_rate,
-                output_sample_rate=self.config.resolved_output_sample_rate,
-                output_channels=self.config.resolved_output_channels,
-            )
-            for audio in generated
-        ]
+        return [self._normalize_audio_array(audio) for audio in generated]
 
     def _ensure_loaded(
         self,
