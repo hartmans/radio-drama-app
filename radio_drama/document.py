@@ -131,36 +131,7 @@ class SpeakerMapNode(ElementNode):
 
         return await ainjector(SpeakerMapPlan, node=self)
 
-
-@dataclass(slots=True)
-class SoundNode(ElementNode):
-    """Document node for an inline named sound reference."""
-    allow_text: bool = field(default=True, init=False)
-
-    @property
-    def ref(self) -> str:
-        attribute_ref = self.attributes.get("ref")
-        normalized_attribute_ref = attribute_ref.strip() if attribute_ref is not None else ""
-        normalized_text_ref = self.normalized_text_content
-
-        if attribute_ref is not None and not normalized_attribute_ref:
-            raise self.error("<sound> ref attribute cannot be empty")
-        if attribute_ref is not None and normalized_text_ref and normalized_text_ref != normalized_attribute_ref:
-            raise self.error("<sound> text content must match the ref attribute when both are present")
-        if normalized_attribute_ref:
-            return normalized_attribute_ref
-        if normalized_text_ref:
-            return normalized_text_ref
-        raise self.error("<sound> requires either a ref attribute or text content")
-
-    def validate_document(self) -> None:
-        self.ref
-        return ElementNode.validate_document(self)
-
-    async def plan(self, ainjector):
-        from .planning import SoundPlan
-
-        return await ainjector(SoundPlan, node=self)
+from .sound import SoundNode
 
 
 @dataclass(slots=True)
@@ -219,11 +190,22 @@ class ProductionNode(ElementNode):
 
         from .init import radio_drama_injector
         from .planning import ProductionPlan, SpeakerMapPlan
+        from .effects import PresetPlan
+        from .sound import ProductionDocumentPath
 
         production_injector = radio_drama_injector(
             ainjector.injector,
             event_loop=asyncio.get_running_loop(),
         )
+        if (
+            production_injector.injector_containing(ProductionDocumentPath) is None
+            and self.location.source is not None
+        ):
+            production_injector.add_provider(
+                InjectionKey(ProductionDocumentPath),
+                ProductionDocumentPath(Path(self.location.source)),
+                close=False,
+            )
         production_ainjector = production_injector(type(ainjector))
         speaker_map_plan = await self.speaker_map_node.plan(production_ainjector)
         production_injector.add_provider(
@@ -232,10 +214,16 @@ class ProductionNode(ElementNode):
             close=False,
         )
         audio_plans = [await script_node.plan(production_ainjector) for script_node in self.script_nodes]
-        return await production_ainjector(
+        production_plan = await production_ainjector(
             ProductionPlan,
             node=self,
             audio_plans=audio_plans,
+        )
+        return await production_ainjector(
+            PresetPlan,
+            node=self,
+            audio_plan=production_plan,
+            preset_name="master",
         )
 
 

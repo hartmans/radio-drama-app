@@ -187,6 +187,7 @@ async def render_production_result(
     injector = radio_drama_injector(
         config=config,
         event_loop=asyncio.get_running_loop(),
+        document_path=Path(production_path),
     )
     try:
         ainjector = injector(AsyncInjector)
@@ -273,4 +274,8 @@ def _normalize_preset_name(preset_name: str) -> str:
 
 
 def available_preview_presets() -> tuple[str, ...]:
-    return (NO_PRESET_NAME, *available_effect_chains())
+    return tuple(
+        preset_name
+        for preset_name in (NO_PRESET_NAME, *available_effect_chains())
+        if preset_name != "master"
+    )

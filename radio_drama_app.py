@@ -60,6 +60,7 @@ def main() -> None:
         injector = radio_drama_injector(
             config=config,
             event_loop=asyncio.get_running_loop(),
+            document_path=Path(args.file),
         )
         try:
             ainjector = injector(AsyncInjector)

@@ -121,7 +121,7 @@ class EffectChain:
         audio = normalize_audio_array(result.audio)
         for stage in self.stages:
             audio = stage.apply(audio, sample_rate=sample_rate)
-        return RenderResult(
+        return type(result)(
             audio=audio,
             pre_margin=result.pre_margin,
             post_margin=result.post_margin,
@@ -150,6 +150,9 @@ class PresetPlan(AudioPlan):
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         return self.audio_plan.leaf_audio_plans()
+
+    def __getattr__(self, name: str):
+        return getattr(self.audio_plan, name)
 
     async def render_node(self) -> RenderResult:
         base_result = await self.audio_plan.render()
@@ -356,6 +359,15 @@ def _mix_white_noise(
 
 
 _PRESET_CHAINS: Mapping[str, EffectChain] = {
+    "master": EffectChain(
+        name="master",
+        stages=(
+            FFmpegFilterEffectStage(
+                name="master_loudnorm",
+                filter_graph="loudnorm",
+            ),
+        ),
+    ),
     "narrator": EffectChain(
         name="narrator",
         stages=(

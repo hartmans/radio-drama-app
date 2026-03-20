@@ -5,26 +5,22 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import numpy as np
 import yaml
 from carthage.dependency_injection import AsyncInjectable, Injector, inject
 
 from .config import ProductionConfig
-from .document import DocumentNode, ProductionNode, ScriptNode, SoundNode, SpeakerMapNode, TextNode
 from .errors import DocumentError
 from .rendering import ProductionResult, RenderResult
+from .audio import SUPPORTED_AUDIO_EXTENSIONS
 
 
-_SUPPORTED_AUDIO_EXTENSIONS = {
-    ".wav",
-    ".mp3",
-    ".flac",
-    ".ogg",
-    ".m4a",
-    ".aac",
-}
+if TYPE_CHECKING:
+    from .document import DocumentNode, ProductionNode, ScriptNode, SpeakerMapNode, TextNode
+
+
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 
 
@@ -245,7 +241,7 @@ class SpeakerMapPlan(PlanningNode):
 
         catalog: dict[str, Path] = {}
         for child in sorted(voice_directory.iterdir()):
-            if not child.is_file() or child.suffix.lower() not in _SUPPORTED_AUDIO_EXTENSIONS:
+            if not child.is_file() or child.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
                 continue
             catalog.setdefault(child.name, child)
             catalog.setdefault(child.stem, child)
@@ -339,6 +335,8 @@ class ScriptPlan(AudioPlan):
         )
 
     async def _parse_contents(self) -> list[DialogueContents]:
+        from .document import TextNode
+
         contents: list[DialogueContents] = []
         pending_text: list[str] = []
 
@@ -481,14 +479,30 @@ class ConcatAudioPlan(AudioPlan):
 
 
 @inject(config=ProductionConfig)
-class SoundPlan(AudioPlan):
-    """Placeholder sound plan that currently renders silence."""
+class SlicePlan(AudioPlan):
+    """Audio plan that returns a time slice of an existing render result."""
 
-    def __init__(self, node: SoundNode, **kwargs) -> None:
-        super().__init__(node=node, **kwargs)
+    def __init__(
+        self,
+        result: RenderResult,
+        *,
+        start_time: float,
+        end_time: float,
+        node=None,
+        **kwargs,
+    ) -> None:
+        super().__init__(node=node, set_gap=False, **kwargs)
+        self.result = result
+        self.start_time = start_time
+        self.end_time = end_time
 
     async def render_node(self) -> RenderResult:
-        return self.with_plan_timing(RenderResult.empty(channels=self.config.resolved_output_channels))
+        if self.end_time < self.start_time:
+            raise ValueError("end_time must be greater than or equal to start_time")
+        frame_rate = self.config.resolved_output_sample_rate
+        start_frame = max(0, int(round(self.start_time * frame_rate)))
+        end_frame = max(start_frame, int(round(self.end_time * frame_rate)))
+        return RenderResult(audio=self.result.audio[start_frame:end_frame])
 
 
 @inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)

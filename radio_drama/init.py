@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from carthage.dependency_injection import InjectionKey, Injector
 
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .resources import VibeVoiceResource
+from .sound import NormalizedSoundCache, ProductionDocumentPath
 
 
 def radio_drama_injector(
@@ -14,6 +16,7 @@ def radio_drama_injector(
     *,
     config: ProductionConfig | None = None,
     event_loop: asyncio.AbstractEventLoop | None = None,
+    document_path: Path | None = None,
 ) -> Injector:
     """Build a radio-drama injector with shared app-level resources.
 
@@ -26,6 +29,12 @@ def radio_drama_injector(
     injector = Injector(parent_injector=base_injector)
     if config is not None:
         injector.add_provider(config)
+    if document_path is not None:
+        injector.replace_provider(
+            InjectionKey(ProductionDocumentPath),
+            ProductionDocumentPath(Path(document_path)),
+            close=False,
+        )
     if event_loop is not None:
         injector.replace_provider(
             InjectionKey(asyncio.AbstractEventLoop),
@@ -36,4 +45,6 @@ def radio_drama_injector(
         injector.add_provider(VibeVoiceResource)
     if injector.injector_containing(WhisperXResource) is None:
         injector.add_provider(WhisperXResource)
+    if injector.injector_containing(NormalizedSoundCache) is None:
+        injector.add_provider(NormalizedSoundCache)
     return injector

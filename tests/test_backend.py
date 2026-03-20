@@ -8,8 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from scipy.io import wavfile
 
-from radio_drama.backend import PresetAudioStore, create_app
-from radio_drama.effects import available_effect_chains
+from radio_drama.backend import PresetAudioStore, available_preview_presets, create_app
 from radio_drama.rendering import RenderResult
 
 
@@ -36,7 +35,10 @@ def test_preset_audio_store_prepares_and_slices():
     assert np.allclose(dry_sliced.audio, store.base_result.audio[480:])
 
 
-@pytest.mark.parametrize("preset_name", available_effect_chains())
+@pytest.mark.parametrize(
+    "preset_name",
+    [preset_name for preset_name in available_preview_presets() if preset_name != "none"],
+)
 def test_built_in_presets_materially_change_audio(preset_name: str):
     store = PresetAudioStore(base_result=_base_result(), sample_rate=48000)
 

@@ -10,10 +10,11 @@ from carthage.dependency_injection import AsyncInjector
 from radio_drama.config import ProductionConfig
 from radio_drama.forced_alignment import copy_dialogue_contents
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import DialogueAudio, DialogueLine, ScriptRenderRequest, SoundPlan, SpeakerVoiceReference
+from radio_drama.planning import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
+from radio_drama.rendering import RenderResult
+from radio_drama.sound import SoundPlan
 from radio_drama.testing import CachedVibeVoiceResource
 from radio_drama.testing import CachedWhisperXResource
-from radio_drama.rendering import RenderResult
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

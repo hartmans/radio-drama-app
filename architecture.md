@@ -28,6 +28,7 @@ Current document contract:
 * `<script preset="...">` selects a named render-time effect preset
 * `<script>` may also contain inline `<sound>` elements
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
+* relative `<sound>` references are resolved under a `sounds/` tree next to the source XML document
 * a script may contain stanza continuation lines and paragraph breaks
 * an empty script is valid
 
@@ -63,11 +64,13 @@ Current plan types:
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
   `DialogueLine` holds spoken text
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
-* `SoundPlan`: current placeholder plan for `<sound>` elements; it renders silence today so script speech rendering stays unchanged while the planning structure grows
+* `SoundPlan`: resolves one sound asset, starts cached normalization work during `async_ready()`, and renders the normalized production-format sound
+* `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
-* `ForcedAlignmentPlan`: wraps a `ScriptPlan` when inline `DialogueAudio` items are present, keeps rendered audio unchanged, and fills `start_pos` on ordered `DialogueContents`
+* `ForcedAlignmentPlan`: wraps a `ScriptPlan` when inline `DialogueAudio` items are present, fills `start_pos` on ordered `DialogueContents`, then builds a splice plan from `SlicePlan` and inline audio plans through `ConcatAudioPlan`
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready
+  the final production render is then wrapped in a top-level `PresetPlan("master")`
 
 Planning rule for presets:
 
@@ -76,6 +79,7 @@ Planning rule for presets:
 * if a script contains `DialogueAudio`, planning wraps the script in `ForcedAlignmentPlan`
 * if the same script also has a preset, `PresetPlan` wraps outside the forced-alignment wrapper so the preset covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
+* the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.
 
@@ -89,6 +93,7 @@ Current resource contract:
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
+* `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 
 The important boundary is that plans create semantic requests and resources fulfill them. Higher-level planning code should not embed model-specific batching or loading mechanics.
 
@@ -103,9 +108,11 @@ Current rendering contract:
 * `RenderResult` retains gap and margin fields for later composition work
 * `ProductionResult` is the top-level rendered output type
 * effect processing consumes and returns `RenderResult`, preserving those fields while replacing the audio buffer
+* inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and concatenating the inserted sounds
 
 Current production behavior is ordered concatenation of rendered script results.
 Script-level `pre_gap` and `post_gap` values are measured in seconds and become actual silence when a `ConcatAudioPlan` joins adjacent child results.
+The final production result is then passed through the `master` preset.
 
 ## Effects and presets
 
@@ -121,6 +128,7 @@ Current effects contract:
 
 Current built-in presets:
 
+* `master`: the production-level mastering pass, currently just FFmpeg `loudnorm`
 * `narrator`, `thoughts`: inner-monologue or produced narration variants with center-focused stereo, stronger leveling, and abstract ambience
 * `outdoor1`: a lighter open-air variant with extra width and sparse reflections
 * `outdoor2`: a deliberately obvious outdoor diagnostic variant with wider stereo, audible noise bed, and a strong echo tail

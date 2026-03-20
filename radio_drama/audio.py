@@ -6,6 +6,16 @@ import numpy as np
 from scipy.signal import resample_poly
 
 
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".flac",
+    ".ogg",
+    ".m4a",
+    ".aac",
+}
+
+
 def normalize_audio_array(audio: np.ndarray) -> np.ndarray:
     array = np.asarray(audio, dtype=np.float32)
     return np.ascontiguousarray(array, dtype=np.float32)

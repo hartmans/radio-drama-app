@@ -5,7 +5,6 @@ from .document import (
     ElementNode,
     ProductionNode,
     ScriptNode,
-    SoundNode,
     SpeakerMapNode,
     TextNode,
     parse_production_file,
@@ -35,12 +34,13 @@ from .planning import (
     ProductionPlan,
     ScriptPlan,
     ScriptRenderRequest,
-    SoundPlan,
+    SlicePlan,
     SpeakerMapPlan,
     SpeakerVoiceReference,
 )
 from .rendering import ProductionResult, RenderResult
 from .resources import VibeVoiceResource
+from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
 
 __all__ = [
     "AudioPlan",
@@ -58,10 +58,12 @@ __all__ = [
     "EffectChain",
     "FFmpegFilterEffectStage",
     "ForcedAlignmentPlan",
+    "NormalizedSoundCache",
     "PedalboardEffectStage",
     "PlanningNode",
     "PresetPlan",
     "ProductionConfig",
+    "ProductionDocumentPath",
     "ProductionNode",
     "ProductionPlan",
     "ProductionResult",
@@ -70,6 +72,7 @@ __all__ = [
     "ScriptNode",
     "ScriptPlan",
     "ScriptRenderRequest",
+    "SlicePlan",
     "SoundNode",
     "SourceLocation",
     "SpeakerMapNode",

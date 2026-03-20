@@ -11,7 +11,15 @@ from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import resample_audio
 from .config import ProductionConfig
-from .planning import AudioPlan, DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
+from .planning import (
+    AudioPlan,
+    ConcatAudioPlan,
+    DialogueAudio,
+    DialogueContents,
+    DialogueLine,
+    ScriptPlan,
+    SlicePlan,
+)
 from .rendering import RenderResult
 
 
@@ -109,7 +117,7 @@ class WhisperXResource(AsyncInjectable):
 
 @inject(config=ProductionConfig)
 class ForcedAlignmentPlan(AudioPlan):
-    """Wrapper that fills start positions for dialogue contents without changing audio."""
+    """Wrapper that aligns inline audio and splices it into rendered dialogue."""
 
     def __init__(
         self,
@@ -128,7 +136,57 @@ class ForcedAlignmentPlan(AudioPlan):
         base_result = await self.script_plan.render()
         resource = await self.ainjector.get_instance_async(WhisperXResource)
         self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
-        return base_result
+        if not any(isinstance(content, DialogueAudio) for content in self.contents):
+            return base_result
+
+        spliced_plan = await self._spliced_audio_plan(base_result)
+        spliced_result = await spliced_plan.render()
+        return RenderResult(
+            audio=spliced_result.audio,
+            pre_margin=base_result.pre_margin,
+            post_margin=base_result.post_margin,
+            pre_gap=base_result.pre_gap,
+            post_gap=base_result.post_gap,
+        )
+
+    async def _spliced_audio_plan(self, base_result: RenderResult) -> ConcatAudioPlan:
+        frame_rate = self.config.resolved_output_sample_rate
+        total_duration = _audio_duration(base_result.audio, frame_rate)
+        start_time = 0.0
+        audio_plans: list[AudioPlan] = []
+
+        for content in self.contents:
+            if not isinstance(content, DialogueAudio):
+                continue
+            cut_point = min(max(content.start_pos, start_time), total_duration)
+            if cut_point > start_time:
+                audio_plans.append(
+                    await self.ainjector(
+                        SlicePlan,
+                        result=base_result,
+                        start_time=start_time,
+                        end_time=cut_point,
+                    )
+                )
+            audio_plans.append(content.audio_plan)
+            start_time = cut_point
+
+        if start_time < total_duration or not audio_plans:
+            audio_plans.append(
+                await self.ainjector(
+                    SlicePlan,
+                    result=base_result,
+                    start_time=start_time,
+                    end_time=total_duration,
+                )
+            )
+
+        return await self.ainjector(
+            ConcatAudioPlan,
+            node=self.node,
+            audio_plans=audio_plans,
+            set_gap=False,
+        )
 
 
 def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[DialogueContents]:
