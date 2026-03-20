@@ -8,9 +8,12 @@ import pytest
 from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.config import ProductionConfig
+from radio_drama.forced_alignment import copy_dialogue_contents
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ScriptRenderRequest
+from radio_drama.planning import DialogueAudio, DialogueLine, ScriptRenderRequest, SoundPlan, SpeakerVoiceReference
 from radio_drama.testing import CachedVibeVoiceResource
+from radio_drama.testing import CachedWhisperXResource
+from radio_drama.rendering import RenderResult
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,19 @@ class FakeCachedVibeVoiceResource(CachedVibeVoiceResource):
             np.full(self.native_frame_count, fill_value=index + 1, dtype=np.float32)
             for index, _ in enumerate(batch)
         ]
+
+
+class FakeCachedWhisperXResource(CachedWhisperXResource):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.live_call_count = 0
+
+    async def _live_fill_start_positions(self, contents, result):
+        self.live_call_count += 1
+        updated = copy_dialogue_contents(contents)
+        for index, content in enumerate(updated):
+            content.start_pos = index * 0.25
+        return updated
 
 
 def test_cached_vibevoice_resource_replays_cached_metadata(
@@ -105,6 +121,83 @@ def test_cached_vibevoice_resource_skips_when_cache_is_missing(
             )
             registration = await resource.register_request(request)
             await registration.render()
+        finally:
+            injector.close()
+
+    with pytest.raises(pytest.skip.Exception):
+        asyncio.run(runner())
+
+
+def test_cached_whisperx_resource_replays_cached_metadata(
+    cached_whisperx_resource_factory,
+    tmp_path: Path,
+):
+    config = ProductionConfig(output_sample_rate=48000, output_channels=2)
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="Hello there."),
+        DialogueAudio(audio_plan=SoundPlan(node=None)),
+        DialogueLine(speaker=speaker, spoken_text="General Kenobi."),
+    ]
+    result = RenderResult(audio=np.zeros((128, 2), dtype=np.float32))
+    cache_dir = tmp_path / "forced-alignment-cache"
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            live_resource = await cached_whisperx_resource_factory(
+                ainjector,
+                mode="live",
+                cache_dir=cache_dir,
+                resource_type=FakeCachedWhisperXResource,
+            )
+            live_contents = await live_resource.fill_start_positions(contents, result)
+
+            cache_resource = await cached_whisperx_resource_factory(
+                ainjector,
+                mode="cache",
+                cache_dir=cache_dir,
+                resource_type=FakeCachedWhisperXResource,
+            )
+            cache_contents = await cache_resource.fill_start_positions(contents, result)
+            return live_resource, live_contents, cache_resource, cache_contents
+        finally:
+            injector.close()
+
+    live_resource, live_contents, cache_resource, cache_contents = asyncio.run(runner())
+    assert live_resource.live_call_count == 1
+    assert cache_resource.live_call_count == 0
+    assert [content.start_pos for content in live_contents] == [0.0, 0.25, 0.5]
+    assert [content.start_pos for content in cache_contents] == [0.0, 0.25, 0.5]
+
+
+def test_cached_whisperx_resource_skips_when_cache_is_missing(
+    cached_whisperx_resource_factory,
+    tmp_path: Path,
+):
+    config = ProductionConfig(output_sample_rate=48000, output_channels=2)
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [DialogueLine(speaker=speaker, spoken_text="Hello there.")]
+    result = RenderResult(audio=np.zeros((128, 2), dtype=np.float32))
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await cached_whisperx_resource_factory(
+                ainjector,
+                mode="cache",
+                cache_dir=tmp_path / "forced-alignment-cache",
+                resource_type=FakeCachedWhisperXResource,
+            )
+            await resource.fill_start_positions(contents, result)
         finally:
             injector.close()
 

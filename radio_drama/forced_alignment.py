@@ -9,12 +9,16 @@ from typing import Sequence
 import numpy as np
 from carthage.dependency_injection import AsyncInjectable, inject
 
+from .audio import resample_audio
 from .config import ProductionConfig
 from .planning import AudioPlan, DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
 from .rendering import RenderResult
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+_WHISPERX_LANGUAGE = "en"
+_WHISPERX_MODEL = "large-v3"
+_WHISPERX_SAMPLE_RATE = 16000
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,12 +78,24 @@ class WhisperXResource(AsyncInjectable):
         mono_audio = np.asarray(audio, dtype=np.float32)
         if mono_audio.ndim == 2:
             mono_audio = mono_audio.mean(axis=1)
+        mono_audio = resample_audio(
+            mono_audio,
+            input_sample_rate=sample_rate,
+            output_sample_rate=_WHISPERX_SAMPLE_RATE,
+        )
 
         device = self.config.resolved_device
-        model = whisperx.load_model("small", device=device, compute_type="float32")
-        transcription = model.transcribe(mono_audio, batch_size=1)
-        language_code = transcription.get("language", "en")
-        align_model, metadata = whisperx.load_align_model(language_code=language_code, device=device)
+        model = whisperx.load_model(
+            _WHISPERX_MODEL,
+            device=device,
+            compute_type="default",
+            language=_WHISPERX_LANGUAGE,
+        )
+        transcription = model.transcribe(mono_audio, batch_size=1, language=_WHISPERX_LANGUAGE)
+        align_model, metadata = whisperx.load_align_model(
+            language_code=_WHISPERX_LANGUAGE,
+            device=device,
+        )
         aligned = whisperx.align(
             transcription["segments"],
             align_model,

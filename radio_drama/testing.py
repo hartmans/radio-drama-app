@@ -10,7 +10,8 @@ from typing import Callable, Sequence
 import numpy as np
 
 from .audio import convert_audio_format
-from .planning import ScriptRenderRequest
+from .forced_alignment import WhisperXResource, copy_dialogue_contents
+from .planning import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult
 from .resources import RegisteredRenderRequest, VibeVoiceResource
 
@@ -22,7 +23,18 @@ class CachedRenderMetadata:
     frame_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class CachedForcedAlignmentMetadata:
+    """Persisted structural metadata for one forced-alignment request."""
+
+    start_positions: tuple[float, ...]
+
+
 class MissingCachedRenderMetadata(RuntimeError):
+    pass
+
+
+class MissingCachedForcedAlignmentMetadata(RuntimeError):
     pass
 
 
@@ -214,3 +226,123 @@ class CachedVibeVoiceResource(VibeVoiceResource):
             ensure_ascii=True,
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class CachedWhisperXResource(WhisperXResource):
+    """Cache-aware ``WhisperXResource`` substitute for pytest."""
+    _CACHE_FORMAT_VERSION = 2
+
+    def __init__(
+        self,
+        cache_directory: str | Path,
+        *,
+        mode: str = "cache",
+        **kwargs,
+    ) -> None:
+        if mode not in {"cache", "live"}:
+            raise ValueError("mode must be 'cache' or 'live'")
+        super().__init__(**kwargs)
+        self.cache_directory = Path(cache_directory)
+        self.mode = mode
+
+    async def fill_start_positions(
+        self,
+        contents: Sequence[DialogueContents],
+        result: RenderResult,
+    ) -> list[DialogueContents]:
+        metadata = self._load_cached_metadata(contents, result)
+        if metadata is None:
+            if self.mode == "cache":
+                import pytest
+
+                pytest.skip(f"No cached forced-alignment metadata for request {self._cache_key(contents, result)}")
+            aligned_contents = await self._live_fill_start_positions(contents, result)
+            metadata = CachedForcedAlignmentMetadata(
+                start_positions=tuple(float(content.start_pos) for content in aligned_contents),
+            )
+            self._store_cached_metadata(contents, result, metadata)
+            return aligned_contents
+        return self._apply_cached_metadata(contents, metadata)
+
+    async def _live_fill_start_positions(
+        self,
+        contents: Sequence[DialogueContents],
+        result: RenderResult,
+    ) -> list[DialogueContents]:
+        return await super().fill_start_positions(contents, result)
+
+    def _apply_cached_metadata(
+        self,
+        contents: Sequence[DialogueContents],
+        metadata: CachedForcedAlignmentMetadata,
+    ) -> list[DialogueContents]:
+        copied = copy_dialogue_contents(contents)
+        if len(copied) != len(metadata.start_positions):
+            raise MissingCachedForcedAlignmentMetadata(
+                "Cached forced-alignment metadata length does not match contents"
+            )
+        for content, start_pos in zip(copied, metadata.start_positions, strict=True):
+            content.start_pos = float(start_pos)
+        return copied
+
+    def _load_cached_metadata(
+        self,
+        contents: Sequence[DialogueContents],
+        result: RenderResult,
+    ) -> CachedForcedAlignmentMetadata | None:
+        cache_path = self.cache_directory / f"{self._cache_key(contents, result)}.json"
+        if not cache_path.is_file():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        return CachedForcedAlignmentMetadata(
+            start_positions=tuple(payload["start_positions"]),
+        )
+
+    def _store_cached_metadata(
+        self,
+        contents: Sequence[DialogueContents],
+        result: RenderResult,
+        metadata: CachedForcedAlignmentMetadata,
+    ) -> None:
+        cache_path = self.cache_directory / f"{self._cache_key(contents, result)}.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(asdict(metadata), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _cache_key(
+        self,
+        contents: Sequence[DialogueContents],
+        result: RenderResult,
+    ) -> str:
+        payload = json.dumps(
+            {
+                "contents": [_serialize_dialogue_content(content) for content in contents],
+                "audio_sha256": hashlib.sha256(
+                    np.ascontiguousarray(result.audio, dtype=np.float32).tobytes()
+                ).hexdigest(),
+                "frame_count": int(result.frame_count),
+                "channel_count": int(result.channel_count),
+                "sample_rate": int(self.config.resolved_output_sample_rate),
+                "cache_format_version": self._CACHE_FORMAT_VERSION,
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _serialize_dialogue_content(content: DialogueContents) -> dict[str, object]:
+    if isinstance(content, DialogueLine):
+        return {
+            "type": "line",
+            "speaker": content.speaker.authored_name,
+            "spoken_text": content.spoken_text,
+        }
+    audio_node = getattr(content.audio_plan, "node", None)
+    return {
+        "type": "audio",
+        "node": getattr(audio_node, "display_name", None),
+        "attributes": getattr(audio_node, "attributes", {}),
+    }

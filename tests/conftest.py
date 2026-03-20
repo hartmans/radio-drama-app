@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from radio_drama.testing import CachedVibeVoiceDouble, CachedVibeVoiceResource
+from radio_drama.testing import (
+    CachedVibeVoiceDouble,
+    CachedVibeVoiceResource,
+    CachedWhisperXResource,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def pytest_addoption(parser):
@@ -26,6 +33,19 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         help="directory for cached VibeVoice render metadata",
+    )
+    parser.addoption(
+        "--forced-alignment-mode",
+        action="store",
+        default="cache",
+        choices=("cache", "live"),
+        help="mode for cache-backed forced-alignment test resources",
+    )
+    parser.addoption(
+        "--forced-alignment-cache-dir",
+        action="store",
+        default=None,
+        help="directory for cached forced-alignment metadata",
     )
 
 
@@ -81,6 +101,43 @@ def cached_vibevoice_resource_factory(vibevoice_mode: str, vibevoice_cache_dir: 
             cache_directory=directory,
             mode=mode or vibevoice_mode,
             seed=seed,
+            **kwargs,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def forced_alignment_mode(pytestconfig):
+    return pytestconfig.getoption("--forced-alignment-mode")
+
+
+@pytest.fixture
+def forced_alignment_cache_dir(pytestconfig):
+    configured = pytestconfig.getoption("--forced-alignment-cache-dir")
+    if configured:
+        return Path(configured)
+    return REPO_ROOT / "tests" / "resources" / "forced_alignment_cache"
+
+
+@pytest.fixture
+def cached_whisperx_resource_factory(
+    forced_alignment_mode: str,
+    forced_alignment_cache_dir: Path,
+):
+    def factory(
+        ainjector,
+        *,
+        mode: str | None = None,
+        cache_dir: Path | None = None,
+        resource_type=CachedWhisperXResource,
+        **kwargs,
+    ):
+        directory = cache_dir or forced_alignment_cache_dir
+        return ainjector(
+            resource_type,
+            cache_directory=directory,
+            mode=mode or forced_alignment_mode,
             **kwargs,
         )
 
