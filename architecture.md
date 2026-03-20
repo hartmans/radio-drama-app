@@ -99,7 +99,7 @@ Preset support is intentionally narrow at the interface boundary and flexible in
 Current effects contract:
 
 * `EffectChain` is a named ordered sequence of stages
-* each stage receives production-format numpy audio plus the output sample rate
+* each stage receives stereo production-format numpy audio plus the output sample rate
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
 * preset names are resolved at render time, not baked into `ScriptPlan`
 * unknown preset names are document errors attached to the originating `<script>`

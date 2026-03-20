@@ -4,6 +4,7 @@ import math
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Callable, Mapping, Protocol
 
@@ -24,7 +25,7 @@ class EffectStage(Protocol):
     backend: str
 
     def apply(self, audio: np.ndarray, *, sample_rate: int) -> np.ndarray:
-        """Return transformed audio in the same production format."""
+        """Return transformed stereo audio in production format."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +53,7 @@ class PedalboardEffectStage:
             board = self.board_factory()
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("Pedalboard is required for this effect stage") from exc
-        board_input = audio if audio.ndim == 1 else np.asarray(audio, dtype=np.float32).T
-        processed = board(board_input, sample_rate, reset=True)
-        if np.asarray(processed).ndim == 1:
-            return normalize_audio_array(processed)
+        processed = board(np.asarray(audio, dtype=np.float32).T, sample_rate, reset=True)
         return normalize_audio_array(np.asarray(processed, dtype=np.float32).T)
 
 
@@ -185,70 +183,54 @@ def scipy_signal_stage(
 
 
 def available_effect_chains() -> tuple[str, ...]:
-    return tuple(sorted(_PRESET_BUILDERS))
+    return tuple(sorted(_PRESET_CHAINS))
 
 
 def build_named_effect_chain(name: str) -> EffectChain:
-    normalized = name.strip().lower()
-    return _PRESET_BUILDERS[normalized]()
+    return _PRESET_CHAINS[name.strip().lower()]
 
 
 def _db_to_gain(decibels: float) -> float:
     return float(10.0 ** (decibels / 20.0))
 
 
-def _ensure_2d(audio: np.ndarray) -> tuple[np.ndarray, bool]:
-    normalized = normalize_audio_array(audio)
-    if normalized.ndim == 1:
-        return normalized[:, np.newaxis], True
-    return normalized, False
-
-
-def _restore_dimensionality(audio: np.ndarray, was_mono: bool) -> np.ndarray:
-    if was_mono:
-        return normalize_audio_array(audio[:, 0])
-    return normalize_audio_array(audio)
-
-
 def _filter_audio(
     audio: np.ndarray,
-    *,
     sample_rate: int,
+    *,
     btype: str,
     cutoff_hz: float,
     order: int = 2,
 ) -> np.ndarray:
-    array_2d, was_mono = _ensure_2d(audio)
+    normalized = normalize_audio_array(audio)
     nyquist = sample_rate / 2.0
     normalized_cutoff = min(max(cutoff_hz / nyquist, 1e-5), 0.999)
     sos = butter(order, normalized_cutoff, btype=btype, output="sos")
-    filtered = sosfiltfilt(sos, array_2d, axis=0)
-    return _restore_dimensionality(filtered, was_mono)
+    return normalize_audio_array(sosfiltfilt(sos, normalized, axis=0))
 
 
 def _tilt_tone(
     audio: np.ndarray,
-    *,
     sample_rate: int,
+    *,
     low_band_db: float = 0.0,
     high_band_db: float = 0.0,
 ) -> np.ndarray:
-    array_2d, was_mono = _ensure_2d(audio)
-    low_band = _ensure_2d(_filter_audio(array_2d, sample_rate=sample_rate, btype="lowpass", cutoff_hz=220.0))[0]
-    high_band = _ensure_2d(_filter_audio(array_2d, sample_rate=sample_rate, btype="highpass", cutoff_hz=3200.0))[0]
-    mid_band = array_2d - low_band - high_band
-    tilted = (
+    normalized = normalize_audio_array(audio)
+    low_band = _filter_audio(normalized, sample_rate, btype="lowpass", cutoff_hz=220.0)
+    high_band = _filter_audio(normalized, sample_rate, btype="highpass", cutoff_hz=3200.0)
+    mid_band = normalized - low_band - high_band
+    return normalize_audio_array(
         low_band * _db_to_gain(low_band_db)
         + mid_band
         + high_band * _db_to_gain(high_band_db)
     )
-    return _restore_dimensionality(tilted, was_mono)
 
 
 def _compress_audio(
     audio: np.ndarray,
-    *,
     sample_rate: int,
+    *,
     threshold_db: float,
     ratio: float,
     attack_ms: float,
@@ -257,8 +239,8 @@ def _compress_audio(
 ) -> np.ndarray:
     if ratio <= 0:
         raise ValueError("ratio must be positive")
-    array_2d, was_mono = _ensure_2d(audio)
-    envelope = np.max(np.abs(array_2d), axis=1)
+    normalized = normalize_audio_array(audio)
+    envelope = np.max(np.abs(normalized), axis=1)
     attack_coeff = math.exp(-1.0 / max(sample_rate * attack_ms / 1000.0, 1.0))
     release_coeff = math.exp(-1.0 / max(sample_rate * release_ms / 1000.0, 1.0))
     smoothed = np.zeros_like(envelope)
@@ -275,69 +257,58 @@ def _compress_audio(
         0.0,
     )
     gain = np.power(10.0, (gain_reduction_db + makeup_db) / 20.0).astype(np.float32)
-    compressed = array_2d * gain[:, np.newaxis]
-    return _restore_dimensionality(compressed, was_mono)
+    return normalize_audio_array(normalized * gain[:, np.newaxis])
 
 
-def _mid_side_mix(audio: np.ndarray, *, mid_gain: float, side_gain: float) -> np.ndarray:
-    array_2d, was_mono = _ensure_2d(audio)
-    if was_mono or array_2d.shape[1] < 2:
-        return _restore_dimensionality(array_2d * mid_gain, was_mono)
-    left = array_2d[:, 0]
-    right = array_2d[:, 1]
+def _mid_side_mix(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    mid_gain: float,
+    side_gain: float,
+) -> np.ndarray:
+    del sample_rate
+    normalized = normalize_audio_array(audio)
+    left = normalized[:, 0]
+    right = normalized[:, 1]
     mid = 0.5 * (left + right) * mid_gain
     side = 0.5 * (left - right) * side_gain
-    mixed = array_2d.copy()
+    mixed = normalized.copy()
     mixed[:, 0] = mid + side
     mixed[:, 1] = mid - side
-    return _restore_dimensionality(mixed, was_mono=False)
+    return normalize_audio_array(mixed)
 
 
 def _early_reflections(
     audio: np.ndarray,
-    *,
     sample_rate: int,
+    *,
     taps: tuple[tuple[float, float, float], ...],
     dry_mix: float = 1.0,
 ) -> np.ndarray:
-    array_2d, was_mono = _ensure_2d(audio)
-    if array_2d.shape[1] == 1:
-        rendered = array_2d * dry_mix
-        mono_source = array_2d[:, 0]
-        for delay_ms, left_gain, right_gain in taps:
-            delay_frames = max(1, int(round(sample_rate * delay_ms / 1000.0)))
-            delayed = np.pad(mono_source, (delay_frames, 0))[: mono_source.shape[0]]
-            rendered[:, 0] += delayed * ((left_gain + right_gain) * 0.5)
-        return _restore_dimensionality(rendered, was_mono=True)
-
-    rendered = array_2d * dry_mix
-    mono_source = array_2d.mean(axis=1)
+    normalized = normalize_audio_array(audio)
+    rendered = normalized * dry_mix
+    mono_source = normalized.mean(axis=1)
     for delay_ms, left_gain, right_gain in taps:
         delay_frames = max(1, int(round(sample_rate * delay_ms / 1000.0)))
         delayed = np.pad(mono_source, (delay_frames, 0))[: mono_source.shape[0]]
         rendered[:, 0] += delayed * left_gain
         rendered[:, 1] += delayed * right_gain
-    return _restore_dimensionality(rendered, was_mono=False)
+    return normalize_audio_array(rendered)
 
 
-def _build_narrator1_chain() -> EffectChain:
-    return EffectChain(
+_PRESET_CHAINS: Mapping[str, EffectChain] = {
+    "narrator1": EffectChain(
         name="narrator1",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=70.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=70.0),
             ),
             numpy_stage(
                 "leveling_compressor",
-                lambda audio, sample_rate: _compress_audio(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _compress_audio,
                     threshold_db=-24.0,
                     ratio=2.1,
                     attack_ms=8.0,
@@ -347,48 +318,33 @@ def _build_narrator1_chain() -> EffectChain:
             ),
             numpy_stage(
                 "center_focus",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=1.08, side_gain=0.84),
+                partial(_mid_side_mix, mid_gain=1.08, side_gain=0.84),
             ),
             numpy_stage(
                 "presence_tilt",
-                lambda audio, sample_rate: _tilt_tone(
-                    audio,
-                    sample_rate=sample_rate,
-                    low_band_db=-0.8,
-                    high_band_db=0.8,
-                ),
+                partial(_tilt_tone, low_band_db=-0.8, high_band_db=0.8),
             ),
             numpy_stage(
                 "cognitive_halo",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((7.0, 0.05, 0.08), (13.0, 0.04, 0.03)),
                     dry_mix=0.98,
                 ),
             ),
         ),
-    )
-
-
-def _build_narrator2_chain() -> EffectChain:
-    return EffectChain(
+    ),
+    "narrator2": EffectChain(
         name="narrator2",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=75.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=75.0),
             ),
             numpy_stage(
                 "produced_compressor",
-                lambda audio, sample_rate: _compress_audio(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _compress_audio,
                     threshold_db=-26.0,
                     ratio=2.6,
                     attack_ms=6.0,
@@ -398,87 +354,58 @@ def _build_narrator2_chain() -> EffectChain:
             ),
             numpy_stage(
                 "centered_stereo",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=1.05, side_gain=0.92),
+                partial(_mid_side_mix, mid_gain=1.05, side_gain=0.92),
             ),
             numpy_stage(
                 "air_tilt",
-                lambda audio, sample_rate: _tilt_tone(
-                    audio,
-                    sample_rate=sample_rate,
-                    low_band_db=-1.0,
-                    high_band_db=1.1,
-                ),
+                partial(_tilt_tone, low_band_db=-1.0, high_band_db=1.1),
             ),
             numpy_stage(
                 "wide_halo",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((9.0, 0.03, 0.08), (17.0, 0.07, 0.03)),
                     dry_mix=0.97,
                 ),
             ),
         ),
-    )
-
-
-def _build_outdoor1_chain() -> EffectChain:
-    return EffectChain(
+    ),
+    "outdoor1": EffectChain(
         name="outdoor1",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=80.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=80.0),
             ),
             numpy_stage(
                 "light_presence",
-                lambda audio, sample_rate: _tilt_tone(
-                    audio,
-                    sample_rate=sample_rate,
-                    low_band_db=-0.3,
-                    high_band_db=0.5,
-                ),
+                partial(_tilt_tone, low_band_db=-0.3, high_band_db=0.5),
             ),
             numpy_stage(
                 "open_width",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=1.0, side_gain=1.08),
+                partial(_mid_side_mix, mid_gain=1.0, side_gain=1.08),
             ),
             numpy_stage(
                 "air_reflection",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((18.0, 0.025, 0.03),),
                     dry_mix=0.995,
                 ),
             ),
         ),
-    )
-
-
-def _build_outdoor2_chain() -> EffectChain:
-    return EffectChain(
+    ),
+    "outdoor2": EffectChain(
         name="outdoor2",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=95.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=95.0),
             ),
             numpy_stage(
                 "light_compressor",
-                lambda audio, sample_rate: _compress_audio(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _compress_audio,
                     threshold_db=-23.0,
                     ratio=1.7,
                     attack_ms=10.0,
@@ -488,87 +415,58 @@ def _build_outdoor2_chain() -> EffectChain:
             ),
             numpy_stage(
                 "bright_open_width",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=0.98, side_gain=1.14),
+                partial(_mid_side_mix, mid_gain=0.98, side_gain=1.14),
             ),
             numpy_stage(
                 "upper_air",
-                lambda audio, sample_rate: _tilt_tone(
-                    audio,
-                    sample_rate=sample_rate,
-                    low_band_db=-0.5,
-                    high_band_db=0.9,
-                ),
+                partial(_tilt_tone, low_band_db=-0.5, high_band_db=0.9),
             ),
             numpy_stage(
                 "far_surface_reflection",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((26.0, 0.02, 0.03), (41.0, 0.018, 0.014)),
                     dry_mix=0.992,
                 ),
             ),
         ),
-    )
-
-
-def _build_indoor1_chain() -> EffectChain:
-    return EffectChain(
+    ),
+    "indoor1": EffectChain(
         name="indoor1",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=70.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=70.0),
             ),
             numpy_stage(
                 "small_room",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((14.0, 0.08, 0.05), (23.0, 0.05, 0.08), (31.0, 0.03, 0.03)),
                     dry_mix=0.96,
                 ),
             ),
             numpy_stage(
                 "slight_narrowing",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=1.03, side_gain=0.88),
+                partial(_mid_side_mix, mid_gain=1.03, side_gain=0.88),
             ),
             numpy_stage(
                 "warm_room_tilt",
-                lambda audio, sample_rate: _tilt_tone(
-                    audio,
-                    sample_rate=sample_rate,
-                    low_band_db=0.5,
-                    high_band_db=-0.2,
-                ),
+                partial(_tilt_tone, low_band_db=0.5, high_band_db=-0.2),
             ),
         ),
-    )
-
-
-def _build_indoor2_chain() -> EffectChain:
-    return EffectChain(
+    ),
+    "indoor2": EffectChain(
         name="indoor2",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="highpass",
-                    cutoff_hz=75.0,
-                ),
+                partial(_filter_audio, btype="highpass", cutoff_hz=75.0),
             ),
             numpy_stage(
                 "room_leveling",
-                lambda audio, sample_rate: _compress_audio(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _compress_audio,
                     threshold_db=-25.0,
                     ratio=1.9,
                     attack_ms=9.0,
@@ -578,35 +476,20 @@ def _build_indoor2_chain() -> EffectChain:
             ),
             numpy_stage(
                 "tighter_room",
-                lambda audio, sample_rate: _early_reflections(
-                    audio,
-                    sample_rate=sample_rate,
+                partial(
+                    _early_reflections,
                     taps=((17.0, 0.1, 0.06), (29.0, 0.06, 0.1), (44.0, 0.03, 0.03)),
                     dry_mix=0.94,
                 ),
             ),
             numpy_stage(
                 "narrow_focus",
-                lambda audio, _: _mid_side_mix(audio, mid_gain=1.05, side_gain=0.82),
+                partial(_mid_side_mix, mid_gain=1.05, side_gain=0.82),
             ),
             scipy_signal_stage(
                 "ceiling_soften",
-                lambda audio, sample_rate: _filter_audio(
-                    audio,
-                    sample_rate=sample_rate,
-                    btype="lowpass",
-                    cutoff_hz=9000.0,
-                ),
+                partial(_filter_audio, btype="lowpass", cutoff_hz=9000.0),
             ),
         ),
-    )
-
-
-_PRESET_BUILDERS: Mapping[str, Callable[[], EffectChain]] = {
-    "narrator1": _build_narrator1_chain,
-    "narrator2": _build_narrator2_chain,
-    "outdoor1": _build_outdoor1_chain,
-    "outdoor2": _build_outdoor2_chain,
-    "indoor1": _build_indoor1_chain,
-    "indoor2": _build_indoor2_chain,
+    ),
 }
