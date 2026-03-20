@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import subprocess
 import tempfile
@@ -128,6 +129,9 @@ class EffectChain:
             post_gap=result.post_gap,
         )
 
+    async def render(self, result: RenderResult, *, sample_rate: int) -> RenderResult:
+        return await asyncio.to_thread(self.apply, result, sample_rate=sample_rate)
+
 
 @inject(config=ProductionConfig)
 class PresetPlan(AudioPlan):
@@ -156,7 +160,10 @@ class PresetPlan(AudioPlan):
             raise self.document_error(
                 f"Unknown preset {self.preset_name!r}. Available presets: {available}"
             ) from exc
-        return chain.apply(base_result, sample_rate=self.config.resolved_output_sample_rate)
+        return await chain.render(
+            base_result,
+            sample_rate=self.config.resolved_output_sample_rate,
+        )
 
 
 def callable_stage(

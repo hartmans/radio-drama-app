@@ -110,6 +110,19 @@ Current built-in presets:
 * `outdoor1`, `outdoor2`: mostly dry open-air variants with light width and sparse reflections
 * `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image
 
+## Backend preview service
+
+The preset-preview backend is a thin diagnostic layer above the existing planning and effects interfaces.
+
+Current backend contract:
+
+* `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`
+* the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
+* preset preparation runs concurrently and reuses the same `EffectChain` interface as document-driven render-time presets
+* audio slice requests address a prepared preset plus a playback time, and the backend responds with a WAV stream starting at that point in the production
+
+The backend exists to make preset evaluation easier. It should stay narrow and should not grow a second planning or rendering path separate from the main Python interfaces.
+
 ## Testing architecture
 
 Default `pytest` runs should stay fast and should not require the live model.

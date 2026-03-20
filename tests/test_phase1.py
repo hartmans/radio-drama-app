@@ -181,6 +181,17 @@ def test_convert_audio_format_resamples_and_upmixes():
     assert np.allclose(result[:, 0], result[:, 1])
 
 
+def test_render_result_from_time_returns_shared_slice():
+    base_audio = np.arange(20, dtype=np.float32).reshape(10, 2)
+    result = RenderResult(audio=base_audio)
+
+    sliced = result.from_time(0.25, sample_rate=8)
+
+    assert sliced.audio.shape == (8, 2)
+    assert np.array_equal(sliced.audio, base_audio[2:])
+    assert np.shares_memory(result.audio, sliced.audio)
+
+
 def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: Path):
     class FakeBatchingResource(VibeVoiceResource):
         def __init__(self, **kwargs):

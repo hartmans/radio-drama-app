@@ -32,6 +32,16 @@ class RenderResult:
             return 1
         return int(self.audio.shape[1])
 
+    def from_time(self, time_seconds: float, *, sample_rate: int) -> "RenderResult":
+        start_frame = max(0, int(time_seconds * sample_rate))
+        return type(self)(
+            audio=self.audio[start_frame:],
+            pre_margin=self.pre_margin,
+            post_margin=self.post_margin,
+            pre_gap=self.pre_gap,
+            post_gap=self.post_gap,
+        )
+
     @classmethod
     def empty(cls, *, channels: int = 1) -> "RenderResult":
         if channels == 1:
