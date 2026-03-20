@@ -56,7 +56,7 @@ class CachedVibeVoiceDouble:
 
         rng = np.random.default_rng(self.seed)
         audio = rng.standard_normal(metadata.frame_count, dtype=np.float32) * 1e-3
-        return RenderResult(audio=audio, sample_rate=metadata.sample_rate)
+        return RenderResult(audio=audio)
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
         payload = json.dumps(

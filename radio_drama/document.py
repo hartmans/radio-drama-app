@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import textwrap
 import xml.sax
@@ -110,10 +111,10 @@ class SpeakerMapNode(ElementNode):
 class ScriptNode(ElementNode):
     allow_text: bool = field(default=True, init=False)
 
-    async def plan(self, ainjector, speaker_map_plan):
+    async def plan(self, ainjector):
         from .planning import ScriptPlan
 
-        return await ainjector(ScriptPlan, node=self, speaker_map_plan=speaker_map_plan)
+        return await ainjector(ScriptPlan, node=self)
 
 
 @dataclass(slots=True)
@@ -139,17 +140,27 @@ class ProductionNode(ElementNode):
         return self.require_children("script")
 
     async def plan(self, ainjector):
-        from .planning import ProductionPlan
+        from carthage.dependency_injection import InjectionKey, Injector
 
-        speaker_map_plan = await self.speaker_map_node.plan(ainjector)
-        script_plans = [
-            await script_node.plan(ainjector, speaker_map_plan)
-            for script_node in self.script_nodes
-        ]
-        return await ainjector(
+        from .planning import ProductionPlan, SpeakerMapPlan
+
+        production_injector = Injector(parent_injector=ainjector.injector)
+        production_injector.replace_provider(
+            InjectionKey(asyncio.AbstractEventLoop),
+            asyncio.get_running_loop(),
+            close=False,
+        )
+        production_ainjector = production_injector(type(ainjector))
+        speaker_map_plan = await self.speaker_map_node.plan(production_ainjector)
+        production_injector.add_provider(
+            InjectionKey(SpeakerMapPlan),
+            speaker_map_plan,
+            close=False,
+        )
+        script_plans = [await script_node.plan(production_ainjector) for script_node in self.script_nodes]
+        return await production_ainjector(
             ProductionPlan,
             node=self,
-            speaker_map_plan=speaker_map_plan,
             script_plans=script_plans,
         )
 

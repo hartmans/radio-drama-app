@@ -8,7 +8,6 @@ import numpy as np
 @dataclass(slots=True)
 class RenderResult:
     audio: np.ndarray
-    sample_rate: int
     pre_margin: float = 0.0
     post_margin: float = 0.0
     pre_gap: float = 0.0
@@ -28,29 +27,19 @@ class RenderResult:
         return int(self.audio.shape[1])
 
     @classmethod
-    def empty(cls, sample_rate: int, *, channels: int = 1) -> "RenderResult":
+    def empty(cls, *, channels: int = 1) -> "RenderResult":
         if channels == 1:
             audio = np.zeros(0, dtype=np.float32)
         else:
             audio = np.zeros((0, channels), dtype=np.float32)
-        return cls(audio=audio, sample_rate=sample_rate)
+        return cls(audio=audio)
 
     @classmethod
-    def concatenate(
-        cls,
-        results: list["RenderResult"],
-        *,
-        sample_rate: int | None = None,
-    ) -> "RenderResult":
+    def concatenate(cls, results: list["RenderResult"]) -> "RenderResult":
         if not results:
-            if sample_rate is None:
-                raise ValueError("sample_rate is required when concatenating no results")
-            return cls.empty(sample_rate=sample_rate)
-        target_rate = sample_rate or results[0].sample_rate
-        if any(result.sample_rate != target_rate for result in results):
-            raise ValueError("Cannot concatenate render results with different sample rates")
+            return cls.empty()
         audio = np.concatenate([result.audio for result in results], axis=0)
-        return cls(audio=audio, sample_rate=target_rate)
+        return cls(audio=audio)
 
 
 class ProductionResult(RenderResult):

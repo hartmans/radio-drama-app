@@ -2,27 +2,35 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from math import gcd
 from typing import Sequence
 
 import numpy as np
 import torch
 from carthage.dependency_injection import AsyncInjectable, inject
-from scipy.signal import resample_poly
 from vibevoice.modular.modeling_vibevoice_inference import (
     VibeVoiceForConditionalGenerationInference,
 )
 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
+from .audio import convert_audio_format
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .planning import ScriptRenderRequest
-from .rendering import ProductionResult, RenderResult
+from .rendering import RenderResult
+
+
+@dataclass(slots=True)
+class RegisteredRenderRequest:
+    resource: "VibeVoiceResource"
+    request: ScriptRenderRequest
+    future: asyncio.Future
+
+    async def render(self) -> RenderResult:
+        return await self.resource.render_registered_request(self)
 
 
 @dataclass(slots=True)
 class _PendingRender:
-    request: ScriptRenderRequest
-    future: asyncio.Future
+    registration: RegisteredRenderRequest
 
 
 @inject(config=ProductionConfig)
@@ -45,16 +53,35 @@ class VibeVoiceResource(AsyncInjectable):
         return self._sample_rate
 
     def empty_result(self) -> RenderResult:
-        return RenderResult.empty(sample_rate=MODEL_NATIVE_SAMPLE_RATE)
+        return RenderResult.empty(channels=self.config.resolved_output_channels)
 
-    async def render_request(self, request: ScriptRenderRequest) -> RenderResult:
+    async def register_request(
+        self,
+        request: ScriptRenderRequest | None,
+    ) -> RegisteredRenderRequest:
         loop = asyncio.get_running_loop()
-        future = loop.create_future()
+        registration = RegisteredRenderRequest(
+            resource=self,
+            request=request or ScriptRenderRequest(normalized_script="", voice_samples=()),
+            future=loop.create_future(),
+        )
         async with self._pending_lock:
-            self._pending.append(_PendingRender(request=request, future=future))
+            if request is None:
+                registration.future.set_result(self.empty_result())
+            else:
+                self._pending.append(_PendingRender(registration=registration))
+        return registration
+
+    async def render_registered_request(
+        self,
+        registration: RegisteredRenderRequest,
+    ) -> RenderResult:
+        if registration.future.done():
+            return await registration.future
+        async with self._pending_lock:
             if self._drain_task is None or self._drain_task.done():
                 self._drain_task = asyncio.create_task(self._drain_pending())
-        return await future
+        return await registration.future
 
     async def _drain_pending(self) -> None:
         while True:
@@ -70,16 +97,16 @@ class VibeVoiceResource(AsyncInjectable):
                 rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
             except Exception as exc:
                 for pending in batch:
-                    if not pending.future.done():
-                        pending.future.set_exception(exc)
+                    if not pending.registration.future.done():
+                        pending.registration.future.set_exception(exc)
                 continue
 
             for pending, audio in zip(batch, rendered_audios, strict=True):
-                if not pending.future.done():
-                    pending.future.set_result(RenderResult(audio=audio, sample_rate=self.sample_rate))
+                if not pending.registration.future.done():
+                    pending.registration.future.set_result(RenderResult(audio=audio))
 
     def _render_batch_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
-        requests = [pending.request for pending in batch]
+        requests = [pending.registration.request for pending in batch]
         processor, model = self._ensure_loaded()
         inputs = processor(
             text=[request.normalized_script for request in requests],
@@ -109,7 +136,15 @@ class VibeVoiceResource(AsyncInjectable):
             raise RuntimeError(
                 f"Model generation returned {len(generated)} clips for {len(batch)} requests"
             )
-        return [self._normalize_audio_array(audio) for audio in generated]
+        return [
+            convert_audio_format(
+                self._normalize_audio_array(audio),
+                input_sample_rate=self.sample_rate,
+                output_sample_rate=self.config.resolved_output_sample_rate,
+                output_channels=self.config.resolved_output_channels,
+            )
+            for audio in generated
+        ]
 
     def _ensure_loaded(
         self,
@@ -203,53 +238,3 @@ class VibeVoiceResource(AsyncInjectable):
         if array.ndim != 1:
             raise ValueError(f"Expected mono audio after generation, got {array.shape!r}")
         return np.ascontiguousarray(array, dtype=np.float32)
-
-
-@inject(config=ProductionConfig)
-class OutputFormatResource(AsyncInjectable):
-    def convert(self, render_result: RenderResult) -> ProductionResult:
-        audio = np.asarray(render_result.audio, dtype=np.float32)
-        if audio.ndim == 0:
-            audio = audio.reshape(1)
-        if render_result.sample_rate != self.config.resolved_output_sample_rate:
-            audio = self._resample(
-                audio,
-                render_result.sample_rate,
-                self.config.resolved_output_sample_rate,
-            )
-        audio = self._convert_channels(audio, self.config.resolved_output_channels)
-        return ProductionResult(
-            audio=audio,
-            sample_rate=self.config.resolved_output_sample_rate,
-            pre_margin=render_result.pre_margin,
-            post_margin=render_result.post_margin,
-            pre_gap=render_result.pre_gap,
-            post_gap=render_result.post_gap,
-        )
-
-    def _resample(self, audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
-        factor = gcd(source_rate, target_rate)
-        up = target_rate // factor
-        down = source_rate // factor
-        if audio.ndim == 1:
-            return np.ascontiguousarray(resample_poly(audio, up, down), dtype=np.float32)
-        return np.ascontiguousarray(resample_poly(audio, up, down, axis=0), dtype=np.float32)
-
-    def _convert_channels(self, audio: np.ndarray, channels: int) -> np.ndarray:
-        if channels < 1:
-            raise ValueError("output_channels must be at least 1")
-        if channels == 1:
-            if audio.ndim == 1:
-                return np.ascontiguousarray(audio, dtype=np.float32)
-            if audio.shape[1] == 1:
-                return np.ascontiguousarray(audio[:, 0], dtype=np.float32)
-            return np.ascontiguousarray(audio.mean(axis=1), dtype=np.float32)
-        if audio.ndim == 1:
-            mono = audio[:, np.newaxis]
-        elif audio.shape[1] == 1:
-            mono = audio
-        elif audio.shape[1] == channels:
-            return np.ascontiguousarray(audio, dtype=np.float32)
-        else:
-            mono = audio.mean(axis=1, keepdims=True)
-        return np.ascontiguousarray(np.repeat(mono, channels, axis=1), dtype=np.float32)

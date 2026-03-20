@@ -1,3 +1,4 @@
+from .audio import convert_audio_format, convert_channel_count, resample_audio
 from .config import ProductionConfig
 from .document import (
     DocumentNode,
@@ -20,14 +21,15 @@ from .planning import (
     SpeakerVoiceReference,
 )
 from .rendering import ProductionResult, RenderResult
-from .resources import OutputFormatResource, VibeVoiceResource
+from .resources import VibeVoiceResource
 
 __all__ = [
+    "convert_audio_format",
+    "convert_channel_count",
     "DialogueLine",
     "DocumentError",
     "DocumentNode",
     "ElementNode",
-    "OutputFormatResource",
     "PlanningNode",
     "ProductionConfig",
     "ProductionNode",
@@ -45,4 +47,5 @@ __all__ = [
     "VibeVoiceResource",
     "parse_production_file",
     "parse_production_string",
+    "resample_audio",
 ]

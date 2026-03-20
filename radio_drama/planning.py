@@ -9,8 +9,9 @@ from typing import Mapping, Sequence
 import yaml
 from carthage.dependency_injection import AsyncInjectable, Injector, inject
 
-from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
+from .config import ProductionConfig
 from .document import DocumentNode, ProductionNode, ScriptNode, SpeakerMapNode
+from .errors import DocumentError
 from .rendering import ProductionResult, RenderResult
 
 
@@ -165,14 +166,18 @@ class SpeakerMapPlan(PlanningNode):
             raise self.document_error(f"No supported voice files were found in {voice_directory}")
         return catalog
 
+    async def render_node(self):
+        return None
 
+
+@inject(speaker_map_plan=SpeakerMapPlan)
 class ScriptPlan(PlanningNode):
-    def __init__(self, node: ScriptNode, speaker_map_plan: SpeakerMapPlan, **kwargs) -> None:
+    def __init__(self, node: ScriptNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
-        self.speaker_map_plan = speaker_map_plan
         self.dialogue_lines: list[DialogueLine] = []
         self.ordered_speakers: list[SpeakerVoiceReference] = []
         self.render_request: ScriptRenderRequest | None = None
+        self._registered_request = None
 
     async def async_ready(self):
         self.dialogue_lines = self._parse_dialogue()
@@ -194,15 +199,14 @@ class ScriptPlan(PlanningNode):
                 normalized_script=normalized_script,
                 voice_samples=tuple(str(ref.resolved_path) for ref in self.ordered_speakers),
             )
-        return await super().async_ready()
-
-    async def render_node(self) -> RenderResult:
         from .resources import VibeVoiceResource
 
         resource = await self.ainjector.get_instance_async(VibeVoiceResource)
-        if self.render_request is None:
-            return resource.empty_result()
-        return await resource.render_request(self.render_request)
+        self._registered_request = await resource.register_request(self.render_request)
+        return await super().async_ready()
+
+    async def render_node(self) -> RenderResult:
+        return await self._registered_request.render()
 
     def _parse_dialogue(self) -> list[DialogueLine]:
         text = self.node.normalized_text_content
@@ -268,26 +272,25 @@ class ScriptPlan(PlanningNode):
         return ordered
 
 
+@inject(speaker_map_plan=SpeakerMapPlan)
 class ProductionPlan(PlanningNode):
     def __init__(
         self,
         node: ProductionNode,
-        speaker_map_plan: SpeakerMapPlan,
         script_plans: Sequence[ScriptPlan],
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
-        self.speaker_map_plan = speaker_map_plan
         self.script_plans = list(script_plans)
 
     async def render_node(self) -> ProductionResult:
-        from .resources import OutputFormatResource
-
         await self.speaker_map_plan.render()
         script_results = [await script_plan.render() for script_plan in self.script_plans]
-        combined = RenderResult.concatenate(
-            script_results,
-            sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+        combined = RenderResult.concatenate(script_results)
+        return ProductionResult(
+            audio=combined.audio,
+            pre_margin=combined.pre_margin,
+            post_margin=combined.post_margin,
+            pre_gap=combined.pre_gap,
+            post_gap=combined.post_gap,
         )
-        output_format_resource = await self.ainjector.get_instance_async(OutputFormatResource)
-        return output_format_resource.convert(combined)

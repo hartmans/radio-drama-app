@@ -75,6 +75,8 @@ It should be the consistent entry point for planning-layer behavior, including:
 
 All plan classes should be AsyncInjectables unless there is a strong architectural reason not to.
 Convenience in a particular phase is not a sufficient reason to mix constructor patterns.
+Because DocumentNodes remain plain semantic objects, it is acceptable for `plan()` to take an injector argument.
+If so, that interface should be consistent across document nodes.
 
 ## RenderResults
 
@@ -103,7 +105,7 @@ Rendering a PlanningNode  may start more work than is required just for that pla
 RenderResult should also grow reusable helpers rather than forcing each plan to rebuild basic audio operations.
 Examples include:
 
-* an empty result at a known sample rate
+* an empty result in the configured production format
 * concatenation helpers
 * normalization of array shape and dtype
 * frame-count helpers
@@ -183,8 +185,7 @@ The stable guarantee is that a production contains ordered renderable text units
 * `ScriptPlan`: one VibeVoice request using one script and the shared speaker map.
 * `SpeakerMapPlan`: validated map from canonical speaker names to resolved voice references.
 * `VibeVoiceResource`: resource owning model lifecycle and fulfilling script render requests.
-* `OutputFormatResource`: resamples and upmixes concatenated production audio into the configured output format.
-* `ProductionResult`: wraps the rendered production audio and its sample rate.
+* `ProductionResult`: wraps the rendered production audio in configured production format.
 
 ## Phase 1 parsing and validation
 
@@ -220,8 +221,11 @@ Recommended flow:
 3. Each `ScriptNode` produces a `ScriptPlan`.
 4. `ProductionPlan` preserves the source document order of its scripts.
 5. Each plan has a `render()` method, even if rendering is a no-op for that plan.
-6. `ProductionPlan.render()` asks its child plans to render rather than embedding the plan-to-render transition in separate procedural helpers.
-7. `ProductionPlan.render()` concatenates model-native script outputs and then passes the production audio through `OutputFormatResource`.
+6. Shared plan dependencies such as `SpeakerMapPlan` should be injected through a production-scoped injector rather than threaded explicitly through unrelated `plan()` calls.
+7. `ScriptPlan.async_ready()` should register its render request with `VibeVoiceResource`, but should not start rendering yet.
+8. Rendering any registered script may trigger the resource to batch and fulfill other registered script requests.
+9. `ProductionPlan.render()` asks its child plans to render rather than embedding the plan-to-render transition in separate procedural helpers.
+10. `ProductionPlan.render()` concatenates already-normalized production-format script results.
 
 Document nodes should remain plain semantic objects.
 Dependency injection should begin at the planning/resource layer, where shared model state and configuration actually exist.
@@ -231,9 +235,8 @@ Stable Phase 1 interfaces:
 
 * `SpeakerMapPlan` exposes a canonical lookup from script speaker name to resolved voice reference.
 * `ScriptPlan` exposes the normalized ordered dialogue stanzas for one VibeVoice call.
-* `VibeVoiceResource` accepts a script-level request and returns one rendered mono clip at the model-native sample rate.
-* `ProductionPlan.render()` concatenates its script results in order with no inserted gaps before output-format conversion.
-* `OutputFormatResource` converts concatenated production audio to the configured sample rate and channel layout.
+* `VibeVoiceResource` accepts a script-level request, batches registered requests, and returns one rendered clip already converted to production sample rate and channel layout.
+* `ProductionPlan.render()` concatenates its script results in order with no inserted gaps and no later format-conversion step.
 
 Implementation details (not interface guarantees, but decisions for phase 1):
 * `VibeVoiceResource` should do real batching in phase 1. It will be a significant performance win. Some selection of batch size is needed. Default to 10.
@@ -248,8 +251,10 @@ Phase 1 should use the existing `RenderResult` abstraction for intermediate and 
 
 Phase 1 guarantees:
 
-* `ScriptPlan.render()` returns model-native audio as a contiguous mono numpy array at the model-native sample rate.
-* An empty script renders successfully and returns zero samples at the model-native sample rate.
+* All `RenderResult` audio is already in the configured production output format.
+* `RenderResult` does not need to carry sample rate or channel count; those are production-level configuration, not per-result state, in Phase 1.
+* `ScriptPlan.render()` returns a contiguous numpy array in the configured production output format.
+* An empty script renders successfully and returns zero samples in the configured production output format.
 * `ProductionPlan.render()` returns a contiguous numpy array in the configured production output format.
 * Phase 1 production output defaults to stereo at 48000 Hz.
 * `pre_margin`, `post_margin`, `pre_gap`, and `post_gap` are all zero for Phase 1 output unless a later Phase 1 bug fix proves a non-zero margin is required to describe generated silence already present in the clip.
@@ -265,15 +270,13 @@ That keeps the render contract compatible with later DSP work without pretending
 * model loading details
 * device placement
 * conversion from `ScriptPlan` data into the normalized script text expected by VibeVoice
+* registration and batching of planned render requests
+* conversion from model-native 24k mono output into the configured production format
 
 `ScriptPlan` should not know torch or model details.
 It should know only semantic dialogue content and resolved voice references.
 
-`OutputFormatResource` is the Phase 1 component responsible for:
-
-* resampling from model-native audio to the configured production sample rate
-* converting mono model output to the configured channel layout
-* keeping the conversion policy simple and deterministic so later phases can wrap it in richer mastering or mixing steps
+Reusable audio format conversion helpers should live outside `VibeVoiceResource`, for example in an `audio.py` module, so other resources can normalize audio without reimplementing resampling or channel conversion.
 
 `SpeakerMapPlan` should normalize the speaker map in the same way `vibevoice_app.py` does today:
 
@@ -301,7 +304,7 @@ Main code and tests should not embed Codex-specific wakeup hacks.
 2. Implement validation and document-context errors.
 3. Implement `SpeakerMapPlan` and `ScriptPlan`.
 4. Wrap existing VibeVoice generation logic behind `VibeVoiceResource`.
-5. Implement `OutputFormatResource`.
+5. Implement reusable audio format conversion helpers.
 6. Implement `ProductionPlan.render()` and WAV output.
 7. Add a compatibility test corpus that compares XML-driven output structure against the current `vibevoice_app.py` behavior for equivalent inputs.
 

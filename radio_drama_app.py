@@ -72,7 +72,7 @@ def main() -> None:
 
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(output, production_result.audio, production_result.sample_rate)
+        sf.write(output, production_result.audio, config.resolved_output_sample_rate)
 
     asyncio.run(runner())
 
