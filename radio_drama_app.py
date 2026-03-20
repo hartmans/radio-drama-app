@@ -4,7 +4,11 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from radio_drama.phase1 import ProductionConfig, render_production_file
+import soundfile as sf
+from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector
+
+from radio_drama.config import ProductionConfig
+from radio_drama.document import parse_production_file
 
 
 def _default_output_path(input_path: str) -> str:
@@ -14,21 +18,32 @@ def _default_output_path(input_path: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render a Phase 1 radio-drama XML document to WAV.")
     parser.add_argument("file", help="Input XML file.")
-    parser.add_argument("--voice-dir", default="./voices", help="Directory containing reference voice files.")
-    parser.add_argument("--model-file", default="/srv/ai/models/vibevoice/vibevoice-large", help="Path to the VibeVoice model directory.")
+    parser.add_argument("--voice-dir", default=None, help="Directory containing reference voice files.")
+    parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
     parser.add_argument("--output", default=None, help="Output WAV path. Defaults to the input path with a .wav extension.")
-    parser.add_argument("--output-sample-rate", type=int, default=48000, help="Output WAV sample rate.")
-    parser.add_argument("--output-channels", type=int, default=2, help="Output WAV channel count.")
-    parser.add_argument("--batch-size", type=int, default=10, help="Maximum VibeVoice batch size.")
-    parser.add_argument("--device", default="cuda", help="Preferred torch device.")
-    parser.add_argument("--cfg-scale", type=float, default=1.3, help="VibeVoice cfg_scale.")
-    parser.add_argument("--disable-prefill", action="store_true", help="Disable VibeVoice prefill.")
-    parser.add_argument("--ddpm-inference-steps", type=int, default=5, help="VibeVoice DDPM inference steps.")
+    parser.add_argument("--output-sample-rate", type=int, default=None, help="Output WAV sample rate override.")
+    parser.add_argument("--output-channels", type=int, default=None, help="Output WAV channel count override.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Maximum VibeVoice batch size override.")
+    parser.add_argument("--device", default=None, help="Preferred torch device override.")
+    parser.add_argument("--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override.")
+    parser.add_argument(
+        "--disable-prefill",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Disable VibeVoice prefill.",
+    )
+    parser.add_argument(
+        "--ddpm-inference-steps",
+        type=int,
+        default=None,
+        help="VibeVoice DDPM inference steps override.",
+    )
     args = parser.parse_args()
 
     output_path = args.output or _default_output_path(args.file)
     config = ProductionConfig(
-        voice_directory=Path(args.voice_dir),
+        voice_directory=Path(args.voice_dir) if args.voice_dir is not None else None,
         model_name=args.model_file,
         output_sample_rate=args.output_sample_rate,
         output_channels=args.output_channels,
@@ -38,7 +53,28 @@ def main() -> None:
         disable_prefill=args.disable_prefill,
         ddpm_inference_steps=args.ddpm_inference_steps,
     )
-    asyncio.run(render_production_file(args.file, output_path, config))
+
+    async def runner() -> None:
+        production_node = parse_production_file(args.file)
+        injector = Injector()
+        injector.add_provider(config)
+        injector.replace_provider(
+            InjectionKey(asyncio.AbstractEventLoop),
+            asyncio.get_running_loop(),
+            close=False,
+        )
+        try:
+            ainjector = injector(AsyncInjector)
+            production_plan = await production_node.plan(ainjector)
+            production_result = await production_plan.render()
+        finally:
+            injector.close()
+
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(output, production_result.audio, production_result.sample_rate)
+
+    asyncio.run(runner())
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@ import textwrap
 import xml.sax
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from .errors import DocumentError, SourceLocation
 
@@ -19,6 +18,14 @@ class DocumentNode:
     @property
     def display_name(self) -> str:
         return self.__class__.__name__
+
+    def error(
+        self,
+        message: str,
+        *,
+        location: SourceLocation | None = None,
+    ) -> DocumentError:
+        return DocumentError(message, node=self, location=location)
 
 
 @dataclass(slots=True)
@@ -52,8 +59,27 @@ class ElementNode(DocumentNode):
                 f"{self.display_name} does not allow child element <{tag_name}>",
                 node=self,
                 location=location,
-            )
+        )
         return child_type(location=location, tag_name=tag_name)
+
+    def child_elements_named(self, tag_name: str) -> list["ElementNode"]:
+        return [child for child in self.element_children if child.tag_name == tag_name]
+
+    def require_one_child(self, tag_name: str) -> "ElementNode":
+        children = self.child_elements_named(tag_name)
+        if not children:
+            raise self.error(f"{self.display_name} requires one <{tag_name}> element")
+        if len(children) > 1:
+            raise children[1].error(
+                f"{self.display_name} may contain only one <{tag_name}> element"
+            )
+        return children[0]
+
+    def require_children(self, tag_name: str) -> list["ElementNode"]:
+        children = self.child_elements_named(tag_name)
+        if not children:
+            raise self.error(f"{self.display_name} requires at least one <{tag_name}> element")
+        return children
 
     @property
     def element_children(self) -> list["ElementNode"]:
@@ -75,7 +101,7 @@ class SpeakerMapNode(ElementNode):
     allow_text: bool = field(default=True, init=False)
 
     async def plan(self, ainjector):
-        from .phase1 import SpeakerMapPlan
+        from .planning import SpeakerMapPlan
 
         return await ainjector(SpeakerMapPlan, node=self)
 
@@ -84,10 +110,10 @@ class SpeakerMapNode(ElementNode):
 class ScriptNode(ElementNode):
     allow_text: bool = field(default=True, init=False)
 
-    def plan(self, speaker_map_plan):
-        from .phase1 import ScriptPlan
+    async def plan(self, ainjector, speaker_map_plan):
+        from .planning import ScriptPlan
 
-        return ScriptPlan.from_node(self, speaker_map_plan)
+        return await ainjector(ScriptPlan, node=self, speaker_map_plan=speaker_map_plan)
 
 
 @dataclass(slots=True)
@@ -101,31 +127,25 @@ class ProductionNode(ElementNode):
     )
 
     def validate_phase1(self) -> None:
-        speaker_maps = [child for child in self.element_children if child.tag_name == "speaker-map"]
-        scripts = [child for child in self.element_children if child.tag_name == "script"]
-        if not speaker_maps:
-            raise DocumentError("A production requires one <speaker-map> element", node=self)
-        if len(speaker_maps) > 1:
-            raise DocumentError("A production may contain only one <speaker-map> element", node=speaker_maps[1])
-        if not scripts:
-            raise DocumentError("A production requires at least one <script> element", node=self)
+        self.require_one_child("speaker-map")
+        self.require_children("script")
 
     @property
     def speaker_map_node(self) -> SpeakerMapNode:
-        for child in self.element_children:
-            if isinstance(child, SpeakerMapNode):
-                return child
-        raise KeyError("speaker-map")
+        return self.require_one_child("speaker-map")
 
     @property
     def script_nodes(self) -> list[ScriptNode]:
-        return [child for child in self.element_children if isinstance(child, ScriptNode)]
+        return self.require_children("script")
 
     async def plan(self, ainjector):
-        from .phase1 import ProductionPlan
+        from .planning import ProductionPlan
 
         speaker_map_plan = await self.speaker_map_node.plan(ainjector)
-        script_plans = [script_node.plan(speaker_map_plan) for script_node in self.script_nodes]
+        script_plans = [
+            await script_node.plan(ainjector, speaker_map_plan)
+            for script_node in self.script_nodes
+        ]
         return await ainjector(
             ProductionPlan,
             node=self,

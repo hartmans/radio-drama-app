@@ -1,3 +1,4 @@
+from .config import ProductionConfig
 from .document import (
     DocumentNode,
     ElementNode,
@@ -9,19 +10,17 @@ from .document import (
     parse_production_string,
 )
 from .errors import DocumentError, SourceLocation
-from .phase1 import (
+from .planning import (
     DialogueLine,
-    ProductionConfig,
+    PlanningNode,
     ProductionPlan,
     ScriptPlan,
     ScriptRenderRequest,
     SpeakerMapPlan,
     SpeakerVoiceReference,
-    VibeVoiceResource,
-    OutputFormatResource,
-    render_production_file,
 )
 from .rendering import ProductionResult, RenderResult
+from .resources import OutputFormatResource, VibeVoiceResource
 
 __all__ = [
     "DialogueLine",
@@ -29,6 +28,7 @@ __all__ = [
     "DocumentNode",
     "ElementNode",
     "OutputFormatResource",
+    "PlanningNode",
     "ProductionConfig",
     "ProductionNode",
     "ProductionPlan",
@@ -45,5 +45,4 @@ __all__ = [
     "VibeVoiceResource",
     "parse_production_file",
     "parse_production_string",
-    "render_production_file",
 ]

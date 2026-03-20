@@ -6,4 +6,4 @@
 * ~/ai/vibevoice/.venv is the venv to use
 * Commit after changes
 * Codex sandbox note: in this environment, `asyncio` cross-thread wakeups can fail unless the loop already has some scheduled timer/task activity. In practice, `loop.call_soon_threadsafe(...)` may not wake an otherwise-idle loop inside sandboxed Python commands, even though the same code works outside the sandbox.
-* Codex sandbox workaround: if a repro, test, or utility script depends on a background thread notifying an `asyncio` task, wrap the await with the helper in `sandbox_asyncio_workaround.py` or otherwise keep a small sleeper task alive. This is a debugging/workflow workaround for Codex sandbox execution, not a production design choice for the app itself.
+* Codex sandbox workaround: do not put Codex-specific wakeup hacks in main code or tests. If a command needs the workaround, run it through `codex_python_runner.py`, which applies the patch from `sandbox_asyncio_workaround.py` before executing a Python module or script.

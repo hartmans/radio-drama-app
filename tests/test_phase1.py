@@ -5,18 +5,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector
 
-from radio_drama.carthage_support import AsyncInjector, InjectionKey, Injector
+from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
-from radio_drama.phase1 import (
-    OutputFormatResource,
-    ProductionConfig,
-    ScriptPlan,
-    ScriptRenderRequest,
-    VibeVoiceResource,
-)
+from radio_drama.planning import ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
+from radio_drama.resources import OutputFormatResource, VibeVoiceResource
 from radio_drama.testing import CachedRenderMetadata
 
 
@@ -59,7 +55,77 @@ def test_speaker_map_plan_resolves_stem_lookup(tmp_path: Path):
     assert plan.lookup("anna").authored_name == "Anna"
 
 
-def test_script_plan_rejects_non_speaker_lines(tmp_path: Path):
+def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First sentence.
+                    Continued line.
+
+                    Another paragraph.
+                  </script>
+                </production>
+                """,
+                source_name="stanza.xml",
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            return await root.script_nodes[0].plan(ainjector, speaker_map_plan)
+        finally:
+            injector.close()
+
+    script_plan = asyncio.run(runner())
+    assert len(script_plan.dialogue_lines) == 1
+    assert script_plan.dialogue_lines[0].spoken_text == (
+        "First sentence. Continued line. Another paragraph."
+    )
+
+
+def test_script_plan_allows_empty_script(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        def empty_result(self) -> RenderResult:
+            return RenderResult.empty(sample_rate=MODEL_NATIVE_SAMPLE_RATE)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.add_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+
+                  </script>
+                </production>
+                """,
+                source_name="empty-script.xml",
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            script_plan = await root.script_nodes[0].plan(ainjector, speaker_map_plan)
+            return script_plan.render_request, await script_plan.render()
+        finally:
+            injector.close()
+
+    render_request, render_result = asyncio.run(runner())
+    assert render_request is None
+    assert render_result.sample_rate == MODEL_NATIVE_SAMPLE_RATE
+    assert render_result.frame_count == 0
+
+
+def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path)
@@ -79,11 +145,11 @@ def test_script_plan_rejects_non_speaker_lines(tmp_path: Path):
                 source_name="bad-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            root.script_nodes[0].plan(speaker_map_plan)
+            await root.script_nodes[0].plan(ainjector, speaker_map_plan)
         finally:
             injector.close()
 
-    with pytest.raises(DocumentError, match="Scripts may contain only `speaker: text` lines"):
+    with pytest.raises(DocumentError, match="Scripts may begin only with a recognized `speaker:` stanza"):
         asyncio.run(runner())
 
 
@@ -110,7 +176,7 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.batch_sizes: list[int] = []
-            self._sample_rate = 24000
+            self._sample_rate = MODEL_NATIVE_SAMPLE_RATE
 
         def _render_batch_sync(self, batch):
             self.batch_sizes.append(len(batch))
@@ -131,37 +197,13 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
         try:
             resource = await ainjector(FakeBatchingResource)
             requests = [
-                ScriptPlan(
-                    node=root.script_nodes[0],
-                    dialogue_lines=[],
-                    ordered_speakers=[],
-                    render_request=ScriptRenderRequest(
-                        normalized_script=f"Speaker 1: Line {index + 1}",
-                        voice_samples=("voice.wav",),
-                    ),
+                ScriptRenderRequest(
+                    normalized_script=f"Speaker 1: Line {index + 1}",
+                    voice_samples=("voice.wav",),
                 )
-                for index, root in enumerate(
-                    [
-                        parse_production_string(
-                            """
-                            <production>
-                              <speaker-map>Anna: anna.wav</speaker-map>
-                              <script>Anna: One.</script>
-                            </production>
-                            """
-                        ),
-                        parse_production_string(
-                            """
-                            <production>
-                              <speaker-map>Anna: anna.wav</speaker-map>
-                              <script>Anna: Two.</script>
-                            </production>
-                            """
-                        ),
-                    ]
-                )
+                for index in range(2)
             ]
-            results = await asyncio.gather(*(resource.render_script(request) for request in requests))
+            results = await asyncio.gather(*(resource.render_request(request) for request in requests))
             return resource.batch_sizes, results
         finally:
             injector.close()
@@ -177,8 +219,11 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=24000, output_channels=1)
 
     class FakeVibeVoice:
-        async def render_script(self, script_plan: ScriptPlan) -> RenderResult:
-            value = float(script_plan.render_request.normalized_script[-1])
+        def empty_result(self) -> RenderResult:
+            return RenderResult.empty(sample_rate=MODEL_NATIVE_SAMPLE_RATE)
+
+        async def render_request(self, request: ScriptRenderRequest) -> RenderResult:
+            value = float(request.normalized_script[-1])
             return RenderResult(audio=np.array([value], dtype=np.float32), sample_rate=24000)
 
     class FakeOutputFormat:

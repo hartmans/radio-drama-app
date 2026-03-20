@@ -8,7 +8,7 @@ from typing import Callable
 
 import numpy as np
 
-from .phase1 import ScriptRenderRequest
+from .planning import ScriptRenderRequest
 from .rendering import RenderResult
 
 

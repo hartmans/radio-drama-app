@@ -14,7 +14,7 @@ To create an app that can take a human-edited xml script and turn it into a high
 * wrappers around process invocation (no direct asyncio called process)
 * Model calls/interaction in isolated classes: vibevoice, qwen-tts and some other code bases in this stack have strict dependencies and may need to get thrown into their own processes
 * Interfaces to isolated model classes should be pickleable for eventual multiprocess/separate interpreter
-* Beyond what is implied below, semantic content and representational content are mixed together. models are smart, not manipulated by processor classes
+* Beyond what is implied below, semantic content and representational content are mixed together. models are smart, not manipulated by processor classes or functions. New functionality should be added by adding new classes without needing to update some global planner or renderer.
 * use carthage.Injector and Injectable for managing resources and non-local state
   * Most nodes, plans and resources should be AsyncInjectables
   * Find VibeVoiceResource and SpeakerVoicePlan through injectors
@@ -34,8 +34,15 @@ A DocumentNode representing an element has an inner list of document nodes repre
 DocumentNodes do have semantic awareness of what their part of the document means.
 So as part of converting the document to DocumentNodes, an outer DocumentNode is responsible for having a map of what inner elements are permitted and what DocumentNodes are used for those.
 We assume a DocumentNode has one single set of allowed inner nodes; we can catch illegal combinations like a node being repeated that should not be  during scheduling or some sort of validation function on DocumentNode
+DocumentNode should grow a small set of reusable helpers rather than pushing every error-path into individual subclasses.
+Examples include:
 
+* constructing document-context errors from the node
+* reporting child-element errors consistently
+* collecting or normalizing inner text
+* common cardinality checks such as exactly-one, at-most-one, or one-or-more child lookups
 
+DocumentNode remains semantic rather than generic, but the repeated mechanics of location-aware validation should live in shared helpers.
 
 ## PlanningNode
 
@@ -56,6 +63,18 @@ Examples include:
 * Loading/setting up models
 
 Often work like that may involve a cache to make sure that work is not repeated if multiple parts of the plan reference the same resource.
+
+PlanningNode should be a real base class.
+It should be the consistent entry point for planning-layer behavior, including:
+
+* holding the source DocumentNode that produced the plan
+* providing a common async construction pattern
+* providing a common render entry point
+* caching or memoizing render work where appropriate
+* shared helpers for location-aware errors raised during planning or rendering
+
+All plan classes should be AsyncInjectables unless there is a strong architectural reason not to.
+Convenience in a particular phase is not a sufficient reason to mix constructor patterns.
 
 ## RenderResults
 
@@ -80,6 +99,18 @@ total_pre_gap: If set, calculate the pre_gap such that pre_gap = total_pre_gap-p
 total_post_gap: If set calculate post_gap as total_post_gap-post_margin
 
 Rendering a PlanningNode  may start more work than is required just for that planning node. As an example if a PlanningScript is being batched together with other PlanningScripts , rendering any one of those should render the entire batch.
+
+RenderResult should also grow reusable helpers rather than forcing each plan to rebuild basic audio operations.
+Examples include:
+
+* an empty result at a known sample rate
+* concatenation helpers
+* normalization of array shape and dtype
+* frame-count helpers
+
+Not every PlanningNode necessarily renders to audio.
+Some plans, such as a validated speaker map, may have a render method that is a no-op and returns `None`.
+The important interface guarantee is that every plan has a render path, not that every plan produces sound.
 
 # Phase 1
 
@@ -128,7 +159,11 @@ Phase 1 guarantees for this format:
 * Exactly one `<speaker-map>` per production.
 * One or more `<script>` elements per production.
 * `<speaker-map>` content is YAML text.
-* `<script>` content is plain text interpreted as `speaker: text` lines only.
+* `<script>` content is plain text interpreted as speaker stanzas.
+  * a stanza begins with `speaker:`
+  * following non-speaker lines belong to the current speaker until another recognized `speaker:` line
+  * blank lines may appear within a stanza
+  * an entirely empty script is valid and renders to zero samples
 
 Phase 1 does not guarantee that `<script>` is the long-term unit of dramatic structure.
 Later phases may add scenes, assets, effects, and transitions around or above scripts.
@@ -143,6 +178,7 @@ The stable guarantee is that a production contains ordered renderable text units
 * `SpeakerMapNode`: parsed representation of speakers to voice files. Input is YAML inside `<speaker-map>`.
 * `ScriptNode`: text for one VibeVoice generation request.
 
+* `PlanningNode`: base class for all plans.
 * `ProductionPlan`: top-level plan for one production.
 * `ScriptPlan`: one VibeVoice request using one script and the shared speaker map.
 * `SpeakerMapPlan`: validated map from canonical speaker names to resolved voice references.
@@ -165,8 +201,7 @@ Validation should happen in two layers:
 * Content validation during node-specific validation/planning:
   * `<speaker-map>` YAML is not a mapping
   * speaker names or voice names are empty or non-strings
-  * a script has no valid `speaker: text` lines
-  * a script contains non-speaker lines
+  * non-speaker content appears before any speaker stanza begins
   * a script references a speaker missing from the speaker map
   * a script uses more than four distinct speakers
 
@@ -184,15 +219,18 @@ Recommended flow:
 2. `SpeakerMapNode` produces a `SpeakerMapPlan` that normalizes speaker names and resolves voice references.
 3. Each `ScriptNode` produces a `ScriptPlan`.
 4. `ProductionPlan` preserves the source document order of its scripts.
-5. `ProductionPlan.render()` concatenates model-native script outputs and then passes the production audio through `OutputFormatResource`.
+5. Each plan has a `render()` method, even if rendering is a no-op for that plan.
+6. `ProductionPlan.render()` asks its child plans to render rather than embedding the plan-to-render transition in separate procedural helpers.
+7. `ProductionPlan.render()` concatenates model-native script outputs and then passes the production audio through `OutputFormatResource`.
 
 Document nodes should remain plain semantic objects.
 Dependency injection should begin at the planning/resource layer, where shared model state and configuration actually exist.
+The planning/resource layer should be organized around reusable abstractions rather than around a one-off "phase1" module.
 
 Stable Phase 1 interfaces:
 
 * `SpeakerMapPlan` exposes a canonical lookup from script speaker name to resolved voice reference.
-* `ScriptPlan` exposes the normalized ordered dialogue lines for one VibeVoice call.
+* `ScriptPlan` exposes the normalized ordered dialogue stanzas for one VibeVoice call.
 * `VibeVoiceResource` accepts a script-level request and returns one rendered mono clip at the model-native sample rate.
 * `ProductionPlan.render()` concatenates its script results in order with no inserted gaps before output-format conversion.
 * `OutputFormatResource` converts concatenated production audio to the configured sample rate and channel layout.
@@ -211,6 +249,7 @@ Phase 1 should use the existing `RenderResult` abstraction for intermediate and 
 Phase 1 guarantees:
 
 * `ScriptPlan.render()` returns model-native audio as a contiguous mono numpy array at the model-native sample rate.
+* An empty script renders successfully and returns zero samples at the model-native sample rate.
 * `ProductionPlan.render()` returns a contiguous numpy array in the configured production output format.
 * Phase 1 production output defaults to stereo at 48000 Hz.
 * `pre_margin`, `post_margin`, `pre_gap`, and `post_gap` are all zero for Phase 1 output unless a later Phase 1 bug fix proves a non-zero margin is required to describe generated silence already present in the clip.
@@ -241,6 +280,20 @@ It should know only semantic dialogue content and resolved voice references.
 * preserve user-authored speaker names for user-facing errors
 * support case-insensitive lookup
 * resolve voice files by direct path, by file name within the configured voice directory, and by stem within the configured voice directory
+
+## Runtime defaults
+
+Runtime defaults should live in configuration objects or resource logic, not in the argparse frontend.
+The frontend should primarily pass explicit overrides.
+This keeps library use and CLI use from drifting apart.
+
+It is acceptable for many config fields to be `None` until a resource resolves them to defaults.
+
+## Codex sandbox workaround
+
+The Codex asyncio workaround is not part of the application architecture.
+If needed for development in this environment, it should live in an external runner wrapper that applies the patch before executing a Python module or script.
+Main code and tests should not embed Codex-specific wakeup hacks.
 
 ## Phase 1 implementation order
 
