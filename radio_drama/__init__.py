@@ -23,10 +23,12 @@ from .effects import (
     numpy_stage,
     scipy_signal_stage,
 )
+from .forced_alignment import ForcedAlignmentPlan, WhisperXResource
 from .init import radio_drama_injector
 from .planning import (
     AudioPlan,
     ConcatAudioPlan,
+    DialogueAudio,
     DialogueContents,
     DialogueLine,
     PlanningNode,
@@ -45,6 +47,7 @@ __all__ = [
     "available_effect_chains",
     "build_named_effect_chain",
     "ConcatAudioPlan",
+    "DialogueAudio",
     "DialogueContents",
     "convert_audio_format",
     "convert_channel_count",
@@ -54,6 +57,7 @@ __all__ = [
     "ElementNode",
     "EffectChain",
     "FFmpegFilterEffectStage",
+    "ForcedAlignmentPlan",
     "PedalboardEffectStage",
     "PlanningNode",
     "PresetPlan",
@@ -74,6 +78,7 @@ __all__ = [
     "SoundPlan",
     "TextNode",
     "VibeVoiceResource",
+    "WhisperXResource",
     "numpy_stage",
     "normalize_effect_chain_name",
     "parse_production_file",

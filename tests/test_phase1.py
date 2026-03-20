@@ -12,8 +12,9 @@ from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
+from radio_drama.forced_alignment import ForcedAlignmentPlan, WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ConcatAudioPlan, ScriptRenderRequest, SoundPlan
+from radio_drama.planning import ConcatAudioPlan, DialogueAudio, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.testing import CachedRenderMetadata
@@ -140,7 +141,7 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
     assert render_result.channel_count == 2
 
 
-def test_script_plan_contents_preserve_dialogue_and_collect_sound_plans(tmp_path: Path):
+def test_script_with_sound_wraps_in_forced_alignment_plan(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path)
@@ -153,9 +154,14 @@ def test_script_plan_contents_preserve_dialogue_and_collect_sound_plans(tmp_path
 
             return Registered()
 
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            return contents
+
     async def runner():
         injector, ainjector = await _make_async_injector(config)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -173,29 +179,96 @@ def test_script_plan_contents_preserve_dialogue_and_collect_sound_plans(tmp_path
                 """,
                 source_name="script-sound.xml",
             )
-            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
-            script_plan = await root.script_nodes[0].plan(ainjector)
-            sound_plan = next(
-                content for content in script_plan.contents if isinstance(content, SoundPlan)
+            production_plan = await root.plan(ainjector)
+            audio_plan = production_plan.audio_plans[0]
+            dialogue_audio = next(
+                content
+                for content in audio_plan.script_plan.contents
+                if isinstance(content, DialogueAudio)
             )
-            sound_result = await sound_plan.render()
-            return script_plan, sound_result
+            sound_result = await dialogue_audio.audio_plan.render()
+            return audio_plan, sound_result
         finally:
             injector.close()
 
-    script_plan, sound_result = asyncio.run(runner())
-    assert [type(content).__name__ for content in script_plan.contents] == [
+    audio_plan, sound_result = asyncio.run(runner())
+    assert isinstance(audio_plan, ForcedAlignmentPlan)
+    assert [type(content).__name__ for content in audio_plan.script_plan.contents] == [
         "DialogueLine",
-        "SoundPlan",
+        "DialogueAudio",
         "DialogueLine",
     ]
-    assert [line.spoken_text for line in script_plan.dialogue_lines] == ["First line.", "Response."]
-    assert script_plan.render_request.normalized_script == (
+    assert [line.spoken_text for line in audio_plan.script_plan.dialogue_lines] == [
+        "First line.",
+        "Response.",
+    ]
+    assert audio_plan.script_plan.render_request.normalized_script == (
         "Speaker 1: First line.\nSpeaker 2: Response."
     )
     assert sound_result.frame_count == 0
     assert sound_result.channel_count == 2
+
+
+def test_forced_alignment_plan_render_keeps_audio_and_records_positions(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=2)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.ones((4, 2), dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            for index, content in enumerate(contents):
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.5))
+                else:
+                    updated.append(
+                        type(content)(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            start_pos=float(index),
+                        )
+                    )
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: anna.wav
+                  </speaker-map>
+                  <script>
+                    Anna: First line.
+                    <sound ref="door" />
+                    Ben: Response.
+                  </script>
+                </production>
+                """,
+                source_name="forced-alignment-render.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            audio_plan = production_plan.audio_plans[0]
+            return audio_plan, await audio_plan.render()
+        finally:
+            injector.close()
+
+    audio_plan, result = asyncio.run(runner())
+    assert isinstance(audio_plan, ForcedAlignmentPlan)
+    assert result.audio.shape == (4, 2)
+    assert [content.start_pos for content in audio_plan.contents] == [0.0, 0.5, 2.0]
 
 
 def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):

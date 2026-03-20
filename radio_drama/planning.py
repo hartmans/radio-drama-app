@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
@@ -35,8 +36,15 @@ class SpeakerVoiceReference:
     resolved_path: Path
 
 
-@dataclass(frozen=True, slots=True)
-class DialogueLine:
+@dataclass(slots=True)
+class DialogueContents:
+    """One ordered item inside a script, later addressable by aligned time."""
+
+    start_pos: float = field(default=math.nan, kw_only=True)
+
+
+@dataclass(slots=True)
+class DialogueLine(DialogueContents):
     """Normalized dialogue stanza belonging to one resolved speaker."""
     speaker: SpeakerVoiceReference
     spoken_text: str
@@ -143,7 +151,11 @@ class AudioPlan(PlanningNode):
         )
 
 
-type DialogueContents = AudioPlan | DialogueLine
+@dataclass(slots=True)
+class DialogueAudio(DialogueContents):
+    """Inline zero-duration audio insertion point within a script."""
+
+    audio_plan: AudioPlan
 
 
 @inject(config=ProductionConfig)
@@ -293,6 +305,39 @@ class ScriptPlan(AudioPlan):
     def dialogue_lines(self) -> list[DialogueLine]:
         return [content for content in self.contents if isinstance(content, DialogueLine)]
 
+    @property
+    def dialogue_audios(self) -> list[DialogueAudio]:
+        return [content for content in self.contents if isinstance(content, DialogueAudio)]
+
+    @classmethod
+    async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
+        if "preset" in node.attributes and node.preset is None:
+            raise node.error("<script> preset attribute cannot be empty")
+
+        script_plan = await ainjector(cls, node=node)
+        audio_plan: AudioPlan = script_plan
+
+        if script_plan.dialogue_audios:
+            from .forced_alignment import ForcedAlignmentPlan
+
+            audio_plan = await ainjector(
+                ForcedAlignmentPlan,
+                node=node,
+                script_plan=script_plan,
+            )
+
+        if node.preset is None:
+            return audio_plan
+
+        from .effects import PresetPlan
+
+        return await ainjector(
+            PresetPlan,
+            node=node,
+            audio_plan=audio_plan,
+            preset_name=node.preset,
+        )
+
     async def _parse_contents(self) -> list[DialogueContents]:
         contents: list[DialogueContents] = []
         pending_text: list[str] = []
@@ -308,7 +353,7 @@ class ScriptPlan(AudioPlan):
                 pending_text.append(child.text)
                 continue
             flush_pending_text()
-            contents.append(await child.plan(self.ainjector))
+            contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
         flush_pending_text()
         return contents
 

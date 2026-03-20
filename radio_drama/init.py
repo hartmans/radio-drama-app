@@ -5,6 +5,7 @@ import asyncio
 from carthage.dependency_injection import InjectionKey, Injector
 
 from .config import ProductionConfig
+from .forced_alignment import WhisperXResource
 from .resources import VibeVoiceResource
 
 
@@ -33,4 +34,6 @@ def radio_drama_injector(
         )
     if injector.injector_containing(VibeVoiceResource) is None:
         injector.add_provider(VibeVoiceResource)
+    if injector.injector_containing(WhisperXResource) is None:
+        injector.add_provider(WhisperXResource)
     return injector

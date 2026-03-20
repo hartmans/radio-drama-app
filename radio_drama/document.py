@@ -183,22 +183,9 @@ class ScriptNode(ElementNode):
         return normalized or None
 
     async def plan(self, ainjector):
-        if "preset" in self.attributes and self.preset is None:
-            raise self.error("<script> preset attribute cannot be empty")
         from .planning import ScriptPlan
 
-        script_plan = await ainjector(ScriptPlan, node=self)
-        if self.preset is None:
-            return script_plan
-
-        from .effects import PresetPlan
-
-        return await ainjector(
-            PresetPlan,
-            node=self,
-            audio_plan=script_plan,
-            preset_name=self.preset,
-        )
+        return await ScriptPlan.from_node(ainjector, self)
 
 
 @dataclass(slots=True)

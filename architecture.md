@@ -60,16 +60,21 @@ Current plan types:
 
 * `SpeakerMapPlan`: validates and resolves speaker names to voice references
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
-  `ScriptPlan.contents` preserves ordered script contents as `DialogueLine` objects plus future inline `AudioPlan` insertions
+  `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
+  `DialogueLine` holds spoken text
+  `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan`: current placeholder plan for `<sound>` elements; it renders silence today so script speech rendering stays unchanged while the planning structure grows
 * `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
+* `ForcedAlignmentPlan`: wraps a `ScriptPlan` when inline `DialogueAudio` items are present, keeps rendered audio unchanged, and fills `start_pos` on ordered `DialogueContents`
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready
 
 Planning rule for presets:
 
-* `ScriptNode.plan()` always creates a `ScriptPlan`
-* when `ScriptNode.preset` is present, planning wraps that script plan in a `PresetPlan`
+* `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
+* a plain script produces a `ScriptPlan`
+* if a script contains `DialogueAudio`, planning wraps the script in `ForcedAlignmentPlan`
+* if the same script also has a preset, `PresetPlan` wraps outside the forced-alignment wrapper so the preset covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.
