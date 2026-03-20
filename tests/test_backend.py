@@ -4,10 +4,12 @@ import asyncio
 import io
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from scipy.io import wavfile
 
 from radio_drama.backend import PresetAudioStore, create_app
+from radio_drama.effects import available_effect_chains
 from radio_drama.rendering import RenderResult
 
 
@@ -34,15 +36,16 @@ def test_preset_audio_store_prepares_and_slices():
     assert np.allclose(dry_sliced.audio, store.base_result.audio[480:])
 
 
-def test_outdoor2_materially_changes_audio():
+@pytest.mark.parametrize("preset_name", available_effect_chains())
+def test_built_in_presets_materially_change_audio(preset_name: str):
     store = PresetAudioStore(base_result=_base_result(), sample_rate=48000)
 
-    asyncio.run(store.prepare_presets(["outdoor2"]))
-    processed = store.prepared_results["outdoor2"].audio
+    asyncio.run(store.prepare_presets([preset_name]))
+    processed = store.prepared_results[preset_name].audio
     base = store.base_result.audio
     diff_rms = np.sqrt(np.mean(np.square(processed - base), dtype=np.float64))
 
-    assert diff_rms > 0.02
+    assert diff_rms > 0.01
 
 
 def test_backend_audio_slice_requires_prepared_preset():

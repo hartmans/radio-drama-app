@@ -356,33 +356,33 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=70.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=85.0),
             ),
             numpy_stage(
                 "leveling_compressor",
                 partial(
                     _compress_audio,
-                    threshold_db=-24.0,
-                    ratio=2.1,
-                    attack_ms=8.0,
-                    release_ms=180.0,
-                    makeup_db=1.0,
+                    threshold_db=-28.0,
+                    ratio=2.8,
+                    attack_ms=5.0,
+                    release_ms=240.0,
+                    makeup_db=2.2,
                 ),
             ),
             numpy_stage(
                 "center_focus",
-                partial(_mid_side_mix, mid_gain=1.08, side_gain=0.84),
+                partial(_mid_side_mix, mid_gain=1.18, side_gain=0.62),
             ),
             numpy_stage(
                 "presence_tilt",
-                partial(_tilt_tone, low_band_db=-0.8, high_band_db=0.8),
+                partial(_tilt_tone, low_band_db=-1.4, high_band_db=1.6),
             ),
             numpy_stage(
                 "cognitive_halo",
                 partial(
                     _early_reflections,
-                    taps=((7.0, 0.05, 0.08), (13.0, 0.04, 0.03)),
-                    dry_mix=0.98,
+                    taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
+                    dry_mix=0.96,
                 ),
             ),
         ),
@@ -392,33 +392,37 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=75.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=90.0),
             ),
             numpy_stage(
                 "produced_compressor",
                 partial(
                     _compress_audio,
-                    threshold_db=-26.0,
-                    ratio=2.6,
-                    attack_ms=6.0,
-                    release_ms=220.0,
-                    makeup_db=1.4,
+                    threshold_db=-30.0,
+                    ratio=3.2,
+                    attack_ms=4.0,
+                    release_ms=260.0,
+                    makeup_db=2.4,
                 ),
             ),
             numpy_stage(
                 "centered_stereo",
-                partial(_mid_side_mix, mid_gain=1.05, side_gain=0.92),
+                partial(_mid_side_mix, mid_gain=1.14, side_gain=0.72),
             ),
             numpy_stage(
                 "air_tilt",
-                partial(_tilt_tone, low_band_db=-1.0, high_band_db=1.1),
+                partial(_tilt_tone, low_band_db=-1.3, high_band_db=1.8),
             ),
             numpy_stage(
                 "wide_halo",
                 partial(
-                    _early_reflections,
-                    taps=((9.0, 0.03, 0.08), (17.0, 0.07, 0.03)),
-                    dry_mix=0.97,
+                    _feedback_reverb,
+                    delay_ms=44.0,
+                    stereo_offset_ms=7.0,
+                    feedback=0.58,
+                    repeats=4,
+                    wet_gain=0.08,
+                    dry_mix=0.96,
                 ),
             ),
         ),
@@ -428,22 +432,26 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=80.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=100.0),
             ),
             numpy_stage(
                 "light_presence",
-                partial(_tilt_tone, low_band_db=-0.3, high_band_db=0.5),
+                partial(_tilt_tone, low_band_db=-0.6, high_band_db=1.0),
             ),
             numpy_stage(
                 "open_width",
-                partial(_mid_side_mix, mid_gain=1.0, side_gain=1.08),
+                partial(_mid_side_mix, mid_gain=0.98, side_gain=1.18),
+            ),
+            numpy_stage(
+                "air_bed",
+                partial(_mix_white_noise, relative_db=-28.0),
             ),
             numpy_stage(
                 "air_reflection",
                 partial(
                     _early_reflections,
-                    taps=((18.0, 0.025, 0.03),),
-                    dry_mix=0.995,
+                    taps=((24.0, 0.04, 0.05), (46.0, 0.03, 0.025)),
+                    dry_mix=0.99,
                 ),
             ),
         ),
@@ -453,31 +461,31 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=95.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=115.0),
             ),
             numpy_stage(
                 "bright_open_width",
-                partial(_mid_side_mix, mid_gain=0.96, side_gain=1.18),
+                partial(_mid_side_mix, mid_gain=0.97, side_gain=1.12),
             ),
             numpy_stage(
                 "weather_noise",
-                partial(_mix_white_noise, relative_db=-16.0),
+                partial(_mix_white_noise, relative_db=-24.0),
             ),
             numpy_stage(
                 "outdoor_echo_tail",
                 partial(
                     _feedback_reverb,
-                    delay_ms=74.0,
-                    stereo_offset_ms=13.0,
-                    feedback=0.7,
-                    repeats=7,
-                    wet_gain=0.2,
-                    dry_mix=0.9,
+                    delay_ms=66.0,
+                    stereo_offset_ms=10.0,
+                    feedback=0.6,
+                    repeats=5,
+                    wet_gain=0.1,
+                    dry_mix=0.94,
                 ),
             ),
             numpy_stage(
                 "upper_air",
-                partial(_tilt_tone, low_band_db=-1.0, high_band_db=1.4),
+                partial(_tilt_tone, low_band_db=-0.8, high_band_db=1.2),
             ),
         ),
     ),
@@ -486,23 +494,27 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=70.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=80.0),
             ),
             numpy_stage(
                 "small_room",
                 partial(
                     _early_reflections,
-                    taps=((14.0, 0.08, 0.05), (23.0, 0.05, 0.08), (31.0, 0.03, 0.03)),
-                    dry_mix=0.96,
+                    taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)),
+                    dry_mix=0.93,
                 ),
             ),
             numpy_stage(
                 "slight_narrowing",
-                partial(_mid_side_mix, mid_gain=1.03, side_gain=0.88),
+                partial(_mid_side_mix, mid_gain=1.08, side_gain=0.74),
             ),
             numpy_stage(
                 "warm_room_tilt",
-                partial(_tilt_tone, low_band_db=0.5, high_band_db=-0.2),
+                partial(_tilt_tone, low_band_db=0.8, high_band_db=-0.6),
+            ),
+            scipy_signal_stage(
+                "ceiling_soften",
+                partial(_filter_audio, btype="lowpass", cutoff_hz=8200.0),
             ),
         ),
     ),
@@ -511,34 +523,34 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
-                partial(_filter_audio, btype="highpass", cutoff_hz=75.0),
+                partial(_filter_audio, btype="highpass", cutoff_hz=85.0),
             ),
             numpy_stage(
                 "room_leveling",
                 partial(
                     _compress_audio,
-                    threshold_db=-25.0,
-                    ratio=1.9,
-                    attack_ms=9.0,
-                    release_ms=170.0,
-                    makeup_db=0.8,
+                    threshold_db=-27.0,
+                    ratio=2.2,
+                    attack_ms=7.0,
+                    release_ms=200.0,
+                    makeup_db=1.2,
                 ),
             ),
             numpy_stage(
                 "tighter_room",
                 partial(
                     _early_reflections,
-                    taps=((17.0, 0.1, 0.06), (29.0, 0.06, 0.1), (44.0, 0.03, 0.03)),
-                    dry_mix=0.94,
+                    taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)),
+                    dry_mix=0.9,
                 ),
             ),
             numpy_stage(
                 "narrow_focus",
-                partial(_mid_side_mix, mid_gain=1.05, side_gain=0.82),
+                partial(_mid_side_mix, mid_gain=1.1, side_gain=0.66),
             ),
             scipy_signal_stage(
                 "ceiling_soften",
-                partial(_filter_audio, btype="lowpass", cutoff_hz=9000.0),
+                partial(_filter_audio, btype="lowpass", cutoff_hz=6500.0),
             ),
         ),
     ),
