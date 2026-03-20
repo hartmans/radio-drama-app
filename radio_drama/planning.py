@@ -11,7 +11,7 @@ import yaml
 from carthage.dependency_injection import AsyncInjectable, Injector, inject
 
 from .config import ProductionConfig
-from .document import DocumentNode, ProductionNode, ScriptNode, SpeakerMapNode
+from .document import DocumentNode, ProductionNode, ScriptNode, SoundNode, SpeakerMapNode, TextNode
 from .errors import DocumentError
 from .rendering import ProductionResult, RenderResult
 
@@ -143,6 +143,9 @@ class AudioPlan(PlanningNode):
         )
 
 
+type DialogueContents = AudioPlan | DialogueLine
+
+
 @inject(config=ProductionConfig)
 class SpeakerMapPlan(PlanningNode):
     """Validated speaker map with canonical lookup into resolved voice files."""
@@ -251,14 +254,14 @@ class ScriptPlan(AudioPlan):
 
     def __init__(self, node: ScriptNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
-        self.dialogue_lines: list[DialogueLine] = []
+        self.contents: list[DialogueContents] = []
         self.ordered_speakers: list[SpeakerVoiceReference] = []
         self.render_request: ScriptRenderRequest | None = None
         self._registered_request = None
 
     async def async_ready(self):
         """Normalize dialogue and register the request with the shared resource."""
-        self.dialogue_lines = self._parse_dialogue()
+        self.contents = await self._parse_contents()
         self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
         if len(self.ordered_speakers) > 4:
             raise self.document_error(
@@ -286,9 +289,33 @@ class ScriptPlan(AudioPlan):
     async def render_node(self) -> RenderResult:
         return self.with_plan_timing(await self._registered_request.render())
 
-    def _parse_dialogue(self) -> list[DialogueLine]:
+    @property
+    def dialogue_lines(self) -> list[DialogueLine]:
+        return [content for content in self.contents if isinstance(content, DialogueLine)]
+
+    async def _parse_contents(self) -> list[DialogueContents]:
+        contents: list[DialogueContents] = []
+        pending_text: list[str] = []
+
+        def flush_pending_text() -> None:
+            if not pending_text:
+                return
+            contents.extend(self._parse_dialogue_text("".join(pending_text)))
+            pending_text.clear()
+
+        for child in self.node.children:
+            if isinstance(child, TextNode):
+                pending_text.append(child.text)
+                continue
+            flush_pending_text()
+            contents.append(await child.plan(self.ainjector))
+        flush_pending_text()
+        return contents
+
+    def _parse_dialogue_text(self, text: str) -> list[DialogueLine]:
         """Parse speaker stanzas, allowing paragraph continuation lines."""
-        text = self.node.normalized_text_content
+        text = re.sub(r"^\s*\n", "", text)
+        text = re.sub(r"\n\s*$", "", text)
         if not text:
             return []
 
@@ -406,6 +433,17 @@ class ConcatAudioPlan(AudioPlan):
         if template.audio.ndim == 1:
             return np.zeros(frame_count, dtype=np.float32)
         return np.zeros((frame_count, template.audio.shape[1]), dtype=np.float32)
+
+
+@inject(config=ProductionConfig)
+class SoundPlan(AudioPlan):
+    """Placeholder sound plan that currently renders silence."""
+
+    def __init__(self, node: SoundNode, **kwargs) -> None:
+        super().__init__(node=node, **kwargs)
+
+    async def render_node(self) -> RenderResult:
+        return self.with_plan_timing(RenderResult.empty(channels=self.config.resolved_output_channels))
 
 
 @inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)

@@ -26,6 +26,8 @@ Current document contract:
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
 * `<script preset="...">` selects a named render-time effect preset
+* `<script>` may also contain inline `<sound>` elements
+* `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * a script may contain stanza continuation lines and paragraph breaks
 * an empty script is valid
 
@@ -34,6 +36,7 @@ The document layer is responsible for:
 * preserving source locations for user-facing errors
 * enforcing document structure
 * exposing semantic nodes that know how to plan themselves into planning objects
+* normalizing document-authored sound references even before sound planning exists
 
 The document layer is not responsible for model loading, batching, or resource ownership.
 
@@ -57,6 +60,8 @@ Current plan types:
 
 * `SpeakerMapPlan`: validates and resolves speaker names to voice references
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
+  `ScriptPlan.contents` preserves ordered script contents as `DialogueLine` objects plus future inline `AudioPlan` insertions
+* `SoundPlan`: current placeholder plan for `<sound>` elements; it renders silence today so script speech rendering stays unchanged while the planning structure grows
 * `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready

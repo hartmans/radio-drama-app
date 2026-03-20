@@ -13,7 +13,7 @@ from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ConcatAudioPlan, ScriptRenderRequest
+from radio_drama.planning import ConcatAudioPlan, ScriptRenderRequest, SoundPlan
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.testing import CachedRenderMetadata
@@ -138,6 +138,64 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
     assert render_request is None
     assert render_result.frame_count == 0
     assert render_result.channel_count == 2
+
+
+def test_script_plan_contents_preserve_dialogue_and_collect_sound_plans(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: anna.wav
+                  </speaker-map>
+                  <script>
+                    Anna: First line.
+                    <sound ref="door" />
+                    Ben: Response.
+                  </script>
+                </production>
+                """,
+                source_name="script-sound.xml",
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
+            script_plan = await root.script_nodes[0].plan(ainjector)
+            sound_plan = next(
+                content for content in script_plan.contents if isinstance(content, SoundPlan)
+            )
+            sound_result = await sound_plan.render()
+            return script_plan, sound_result
+        finally:
+            injector.close()
+
+    script_plan, sound_result = asyncio.run(runner())
+    assert [type(content).__name__ for content in script_plan.contents] == [
+        "DialogueLine",
+        "SoundPlan",
+        "DialogueLine",
+    ]
+    assert [line.spoken_text for line in script_plan.dialogue_lines] == ["First line.", "Response."]
+    assert script_plan.render_request.normalized_script == (
+        "Speaker 1: First line.\nSpeaker 2: Response."
+    )
+    assert sound_result.frame_count == 0
+    assert sound_result.channel_count == 2
 
 
 def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):

@@ -116,6 +116,10 @@ class ElementNode(DocumentNode):
     def normalized_text_content(self) -> str:
         return textwrap.dedent(self.text_content).strip()
 
+    def validate_document(self) -> None:
+        for child in self.element_children:
+            child.validate_document()
+
 
 @dataclass(slots=True)
 class SpeakerMapNode(ElementNode):
@@ -129,9 +133,46 @@ class SpeakerMapNode(ElementNode):
 
 
 @dataclass(slots=True)
+class SoundNode(ElementNode):
+    """Document node for an inline named sound reference."""
+    allow_text: bool = field(default=True, init=False)
+
+    @property
+    def ref(self) -> str:
+        attribute_ref = self.attributes.get("ref")
+        normalized_attribute_ref = attribute_ref.strip() if attribute_ref is not None else ""
+        normalized_text_ref = self.normalized_text_content
+
+        if attribute_ref is not None and not normalized_attribute_ref:
+            raise self.error("<sound> ref attribute cannot be empty")
+        if attribute_ref is not None and normalized_text_ref and normalized_text_ref != normalized_attribute_ref:
+            raise self.error("<sound> text content must match the ref attribute when both are present")
+        if normalized_attribute_ref:
+            return normalized_attribute_ref
+        if normalized_text_ref:
+            return normalized_text_ref
+        raise self.error("<sound> requires either a ref attribute or text content")
+
+    def validate_document(self) -> None:
+        self.ref
+        return ElementNode.validate_document(self)
+
+    async def plan(self, ainjector):
+        from .planning import SoundPlan
+
+        return await ainjector(SoundPlan, node=self)
+
+
+@dataclass(slots=True)
 class ScriptNode(ElementNode):
     """Document node for one ordered renderable script unit."""
     allow_text: bool = field(default=True, init=False)
+    allowed_child_tags: dict[str, type[ElementNode]] = field(
+        default_factory=lambda: {
+            "sound": SoundNode,
+        },
+        init=False,
+    )
 
     @property
     def preset(self) -> str | None:
@@ -175,6 +216,7 @@ class ProductionNode(ElementNode):
         """Validate the current production schema at the document level."""
         self.require_one_child("speaker-map")
         self.require_children("script")
+        return ElementNode.validate_document(self)
 
     @property
     def speaker_map_node(self) -> SpeakerMapNode:

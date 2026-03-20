@@ -47,6 +47,56 @@ def test_parse_production_collects_element_attributes():
     assert root.script_nodes[0].preset == "narrator1"
 
 
+def test_script_allows_sound_nodes_by_attribute_or_text():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script>
+            Anna: Open the door.
+            <sound ref="door" />
+            <sound>footsteps</sound>
+          </script>
+        </production>
+        """,
+        source_name="sound.xml",
+    )
+
+    sound_nodes = root.script_nodes[0].child_elements_named("sound")
+    assert len(sound_nodes) == 2
+    assert sound_nodes[0].ref == "door"
+    assert sound_nodes[1].ref == "footsteps"
+
+
+def test_sound_rejects_missing_ref():
+    with pytest.raises(DocumentError, match="<sound> requires either a ref attribute or text content"):
+        parse_production_string(
+            """
+            <production>
+              <speaker-map>anna: anna.wav</speaker-map>
+              <script><sound /></script>
+            </production>
+            """,
+            source_name="missing-sound.xml",
+        )
+
+
+def test_sound_rejects_mismatched_text_and_ref():
+    with pytest.raises(
+        DocumentError,
+        match="<sound> text content must match the ref attribute when both are present",
+    ):
+        parse_production_string(
+            """
+            <production>
+              <speaker-map>anna: anna.wav</speaker-map>
+              <script><sound ref="door">window</sound></script>
+            </production>
+            """,
+            source_name="mismatch-sound.xml",
+        )
+
+
 def test_parse_production_rejects_unknown_child():
     with pytest.raises(DocumentError, match="does not allow child element <scene>"):
         parse_production_string(
