@@ -156,20 +156,29 @@ Current testing contract:
 
 * live tests are marked `live` and run only with `pytest --run-live`
 * default test runs skip live tests
-* cache-aware testing sits at the `VibeVoiceResource` boundary
+* cache-aware testing sits at model/resource boundaries rather than inside plans
+* each live resource may have a cache-aware pytest substitute that preserves the same public contract
 * cache metadata is structural rather than waveform-based
+* plans and higher-level composition code should be testable against either the real resource or its cache-backed substitute without changing plan logic
 
 Current cache/live modes:
 
-* `live`: if metadata is missing, run the real model, persist structural metadata, and return synthetic audio with matching shape
+* `live`: if metadata is missing, run the real resource, persist structural metadata, and return either a synthetic structural replay or the real structural result, depending on the resource contract under test
 * `cache`: if metadata is missing, skip the test
 
-For the current implementation, cached metadata consists of:
+Current cache-backed resources follow the same broad pattern:
 
-* model-native sample rate
-* model-native frame count
+* `CachedVibeVoiceResource` sits at the `VibeVoiceResource` boundary
+  it persists enough metadata to replay the production-facing render contract without rerunning the speech model
+* `CachedWhisperXResource` sits at the `WhisperXResource` boundary
+  it persists enough metadata to replay filled `DialogueContents.start_pos` values without rerunning forced alignment
 
-This keeps tests focused on structural behavior such as batching, ordering, concatenation, and output-format conversion rather than exact waveform reproduction.
+For the current implementation, cached metadata is resource-specific:
+
+* VibeVoice cache metadata includes model-native sample rate and frame count
+* WhisperX cache metadata includes the ordered `start_pos` values written onto `DialogueContents`
+
+This keeps tests focused on structural behavior such as batching, ordering, output-format conversion, and alignment cut points rather than exact waveform reproduction.
 
 # Future plans
 
@@ -197,7 +206,7 @@ The current renderer concatenates clips in order and applies any per-script pres
 
 ## Testing growth
 
-The cache-backed resource tests are the basis for longer-term model-backed testing. Future cache metadata will likely grow to include structural outputs such as:
+The cache-backed resource tests are the basis for longer-term model-backed testing. Future resources should follow the same shape: keep the live implementation narrow, add a cache-aware substitute at the same boundary, and persist only the structural outputs that higher layers depend on. Future cache metadata will likely grow to include structural outputs such as:
 
 * margins and gaps
 * alignment points
