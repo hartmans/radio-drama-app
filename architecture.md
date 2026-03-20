@@ -65,9 +65,10 @@ Current plan types:
   `DialogueLine` holds spoken text
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan`: resolves one sound asset, starts cached normalization work during `async_ready()`, and renders the normalized production-format sound
+* `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and marker frames for inline insertions
+* `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
-* `ForcedAlignmentPlan`: wraps a `ScriptPlan` when inline `DialogueAudio` items are present, fills `start_pos` on ordered `DialogueContents`, then builds a splice plan from `SlicePlan` and inline audio plans through `ConcatAudioPlan`
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready
   the final production render is then wrapped in a top-level `PresetPlan("master")`
@@ -76,8 +77,9 @@ Planning rule for presets:
 
 * `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
 * a plain script produces a `ScriptPlan`
-* if a script contains `DialogueAudio`, planning wraps the script in `ForcedAlignmentPlan`
-* if the same script also has a preset, `PresetPlan` wraps outside the forced-alignment wrapper so the preset covers the full rendered result
+* if a script contains `DialogueAudio`, planning constructs one shared `AlignedScriptSource` plus a `ConcatAudioPlan` of alternating `ScriptSlice` plans and inline audio plans
+* marker indexes are assigned during `ScriptPlan.from_node()` and refer to insertion fenceposts in the original script contents rather than to absolute times
+* if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
 

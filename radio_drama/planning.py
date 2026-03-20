@@ -314,13 +314,7 @@ class ScriptPlan(AudioPlan):
         audio_plan: AudioPlan = script_plan
 
         if script_plan.dialogue_audios:
-            from .forced_alignment import ForcedAlignmentPlan
-
-            audio_plan = await ainjector(
-                ForcedAlignmentPlan,
-                node=node,
-                script_plan=script_plan,
-            )
+            audio_plan = await cls._build_inline_audio_plan(ainjector, node, script_plan)
 
         if node.preset is None:
             return audio_plan
@@ -332,6 +326,48 @@ class ScriptPlan(AudioPlan):
             node=node,
             audio_plan=audio_plan,
             preset_name=node.preset,
+        )
+
+    @classmethod
+    async def _build_inline_audio_plan(cls, ainjector, node: ScriptNode, script_plan: "ScriptPlan") -> AudioPlan:
+        from .forced_alignment import AlignedScriptSource, ScriptSlice
+
+        aligned_script_source = await ainjector(
+            AlignedScriptSource,
+            node=node,
+            script_plan=script_plan,
+        )
+        audio_plans: list[AudioPlan] = []
+        marker_index = 0
+
+        for content in script_plan.contents:
+            if not isinstance(content, DialogueAudio):
+                continue
+            audio_plans.append(
+                await ainjector(
+                    ScriptSlice,
+                    node=node,
+                    aligned_script_source=aligned_script_source,
+                    start_marker=marker_index,
+                    end_marker=marker_index + 1,
+                )
+            )
+            audio_plans.append(content.audio_plan)
+            marker_index += 1
+
+        audio_plans.append(
+            await ainjector(
+                ScriptSlice,
+                node=node,
+                aligned_script_source=aligned_script_source,
+                start_marker=marker_index,
+                end_marker=marker_index + 1,
+            )
+        )
+        return await ainjector(
+            ConcatAudioPlan,
+            node=node,
+            audio_plans=audio_plans,
         )
 
     async def _parse_contents(self) -> list[DialogueContents]:

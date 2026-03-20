@@ -13,12 +13,11 @@ from .audio import resample_audio
 from .config import ProductionConfig
 from .planning import (
     AudioPlan,
-    ConcatAudioPlan,
     DialogueAudio,
     DialogueContents,
     DialogueLine,
+    PlanningNode,
     ScriptPlan,
-    SlicePlan,
 )
 from .rendering import RenderResult
 
@@ -47,6 +46,15 @@ class AlignedClause:
 class AlignmentResult:
     words: tuple[AlignedWord, ...]
     clauses: tuple[AlignedClause, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AlignedScriptResult:
+    """Rendered dry script audio plus marker frames for inline insertions."""
+
+    render_result: RenderResult
+    marker_frames: tuple[int, ...]
+    contents: tuple[DialogueContents, ...]
 
 
 @inject(config=ProductionConfig)
@@ -116,8 +124,8 @@ class WhisperXResource(AsyncInjectable):
 
 
 @inject(config=ProductionConfig)
-class ForcedAlignmentPlan(AudioPlan):
-    """Wrapper that aligns inline audio and splices it into rendered dialogue."""
+class AlignedScriptSource(PlanningNode):
+    """Shared render/alignment source for script slices around inline audio."""
 
     def __init__(
         self,
@@ -125,68 +133,52 @@ class ForcedAlignmentPlan(AudioPlan):
         script_plan: ScriptPlan,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, **kwargs)
+        super().__init__(node=node, **kwargs)
         self.script_plan = script_plan
         self.contents: list[DialogueContents] = copy_dialogue_contents(script_plan.contents)
 
-    def leaf_audio_plans(self) -> list[AudioPlan]:
-        return self.script_plan.leaf_audio_plans()
+    async def render(self) -> AlignedScriptResult:
+        return await super().render()
 
-    async def render_node(self) -> RenderResult:
+    async def render_node(self) -> AlignedScriptResult:
         base_result = await self.script_plan.render()
         resource = await self.ainjector.get_instance_async(WhisperXResource)
         self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
-        if not any(isinstance(content, DialogueAudio) for content in self.contents):
-            return base_result
-
-        spliced_plan = await self._spliced_audio_plan(base_result)
-        spliced_result = await spliced_plan.render()
-        return RenderResult(
-            audio=spliced_result.audio,
-            pre_margin=base_result.pre_margin,
-            post_margin=base_result.post_margin,
-            pre_gap=base_result.pre_gap,
-            post_gap=base_result.post_gap,
+        return AlignedScriptResult(
+            render_result=base_result,
+            marker_frames=_marker_frames_from_contents(
+                self.contents,
+                frame_count=base_result.frame_count,
+                sample_rate=self.config.resolved_output_sample_rate,
+            ),
+            contents=tuple(self.contents),
         )
 
-    async def _spliced_audio_plan(self, base_result: RenderResult) -> ConcatAudioPlan:
-        frame_rate = self.config.resolved_output_sample_rate
-        total_duration = _audio_duration(base_result.audio, frame_rate)
-        start_time = 0.0
-        audio_plans: list[AudioPlan] = []
 
-        for content in self.contents:
-            if not isinstance(content, DialogueAudio):
-                continue
-            cut_point = min(max(content.start_pos, start_time), total_duration)
-            if cut_point > start_time:
-                audio_plans.append(
-                    await self.ainjector(
-                        SlicePlan,
-                        result=base_result,
-                        start_time=start_time,
-                        end_time=cut_point,
-                    )
-                )
-            audio_plans.append(content.audio_plan)
-            start_time = cut_point
+@inject(config=ProductionConfig)
+class ScriptSlice(AudioPlan):
+    """Audio plan that slices an aligned script by marker index."""
 
-        if start_time < total_duration or not audio_plans:
-            audio_plans.append(
-                await self.ainjector(
-                    SlicePlan,
-                    result=base_result,
-                    start_time=start_time,
-                    end_time=total_duration,
-                )
-            )
+    def __init__(
+        self,
+        aligned_script_source: AlignedScriptSource,
+        *,
+        start_marker: int,
+        end_marker: int,
+        node=None,
+        **kwargs,
+    ) -> None:
+        super().__init__(node=node, set_gap=False, **kwargs)
+        self.aligned_script_source = aligned_script_source
+        self.start_marker = start_marker
+        self.end_marker = end_marker
 
-        return await self.ainjector(
-            ConcatAudioPlan,
-            node=self.node,
-            audio_plans=audio_plans,
-            set_gap=False,
-        )
+    async def render_node(self) -> RenderResult:
+        aligned_result = await self.aligned_script_source.render()
+        start_frame = aligned_result.marker_frames[self.start_marker]
+        end_frame = aligned_result.marker_frames[self.end_marker]
+        end_frame = max(start_frame, end_frame)
+        return RenderResult(audio=aligned_result.render_result.audio[start_frame:end_frame])
 
 
 def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[DialogueContents]:
@@ -225,6 +217,34 @@ def fill_start_positions_from_alignment(
             content.start_pos = _dialogue_audio_start_pos(copied_contents, line_spans, index)
 
     return copied_contents
+
+
+def _marker_frames_from_contents(
+    contents: Sequence[DialogueContents],
+    *,
+    frame_count: int,
+    sample_rate: int,
+) -> tuple[int, ...]:
+    total_duration = 0.0 if sample_rate <= 0 else float(frame_count) / sample_rate
+    marker_seconds: list[float] = [0.0]
+
+    for content in contents:
+        if not isinstance(content, DialogueAudio):
+            continue
+        marker_seconds.append(min(max(cast_float(content.start_pos), 0.0), total_duration))
+
+    marker_seconds.append(total_duration)
+    stabilized_seconds: list[float] = []
+    previous = 0.0
+    for second in marker_seconds:
+        stabilized = min(max(second, previous), total_duration)
+        stabilized_seconds.append(stabilized)
+        previous = stabilized
+
+    return tuple(
+        min(frame_count, max(0, int(round(second * sample_rate))))
+        for second in stabilized_seconds
+    )
 
 
 def _line_spans_from_alignment(

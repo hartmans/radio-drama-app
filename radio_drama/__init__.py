@@ -22,7 +22,7 @@ from .effects import (
     numpy_stage,
     scipy_signal_stage,
 )
-from .forced_alignment import ForcedAlignmentPlan, WhisperXResource
+from .forced_alignment import AlignedScriptResult, AlignedScriptSource, ScriptSlice, WhisperXResource
 from .init import radio_drama_injector
 from .planning import (
     AudioPlan,
@@ -57,7 +57,8 @@ __all__ = [
     "ElementNode",
     "EffectChain",
     "FFmpegFilterEffectStage",
-    "ForcedAlignmentPlan",
+    "AlignedScriptResult",
+    "AlignedScriptSource",
     "NormalizedSoundCache",
     "PedalboardEffectStage",
     "PlanningNode",
@@ -72,6 +73,7 @@ __all__ = [
     "ScriptNode",
     "ScriptPlan",
     "ScriptRenderRequest",
+    "ScriptSlice",
     "SlicePlan",
     "SoundNode",
     "SourceLocation",

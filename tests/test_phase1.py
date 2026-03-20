@@ -12,7 +12,7 @@ from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
-from radio_drama.forced_alignment import ForcedAlignmentPlan, WhisperXResource
+from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.init import radio_drama_injector
 from radio_drama.planning import ConcatAudioPlan, DialogueAudio, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
@@ -147,7 +147,7 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
     assert render_result.channel_count == 2
 
 
-def test_script_with_sound_wraps_in_forced_alignment_plan(tmp_path: Path):
+def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -200,9 +200,10 @@ def test_script_with_sound_wraps_in_forced_alignment_plan(tmp_path: Path):
             )
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
+            first_slice = audio_plan.audio_plans[0]
             dialogue_audio = next(
                 content
-                for content in audio_plan.script_plan.contents
+                for content in first_slice.aligned_script_source.script_plan.contents
                 if isinstance(content, DialogueAudio)
             )
             sound_result = await dialogue_audio.audio_plan.render()
@@ -211,17 +212,28 @@ def test_script_with_sound_wraps_in_forced_alignment_plan(tmp_path: Path):
             injector.close()
 
     audio_plan, sound_result = asyncio.run(runner())
-    assert isinstance(audio_plan, ForcedAlignmentPlan)
-    assert [type(content).__name__ for content in audio_plan.script_plan.contents] == [
+    assert isinstance(audio_plan, ConcatAudioPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == [
+        "ScriptSlice",
+        "SoundPlan",
+        "ScriptSlice",
+    ]
+    first_slice = audio_plan.audio_plans[0]
+    second_slice = audio_plan.audio_plans[2]
+    assert isinstance(first_slice, ScriptSlice)
+    assert isinstance(second_slice, ScriptSlice)
+    assert first_slice.aligned_script_source is second_slice.aligned_script_source
+    assert isinstance(first_slice.aligned_script_source, AlignedScriptSource)
+    assert [type(content).__name__ for content in first_slice.aligned_script_source.script_plan.contents] == [
         "DialogueLine",
         "DialogueAudio",
         "DialogueLine",
     ]
-    assert [line.spoken_text for line in audio_plan.script_plan.dialogue_lines] == [
+    assert [line.spoken_text for line in first_slice.aligned_script_source.script_plan.dialogue_lines] == [
         "First line.",
         "Response.",
     ]
-    assert audio_plan.script_plan.render_request.normalized_script == (
+    assert first_slice.aligned_script_source.script_plan.render_request.normalized_script == (
         "Speaker 1: First line.\nSpeaker 2: Response."
     )
     assert sound_result.frame_count == 0
@@ -406,7 +418,7 @@ def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):
     assert normalize_call_count == 1
 
 
-def test_forced_alignment_plan_render_keeps_audio_and_records_positions(tmp_path: Path):
+def test_aligned_script_source_render_keeps_audio_and_records_markers(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -471,17 +483,19 @@ def test_forced_alignment_plan_render_keeps_audio_and_records_positions(tmp_path
             )
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
-            return audio_plan, await audio_plan.render()
+            aligned_source = audio_plan.audio_plans[0].aligned_script_source
+            return aligned_source, await aligned_source.render()
         finally:
             injector.close()
 
-    audio_plan, result = asyncio.run(runner())
-    assert isinstance(audio_plan, ForcedAlignmentPlan)
-    assert result.audio.shape == (4, 2)
-    assert [content.start_pos for content in audio_plan.contents] == [0.0, 0.5, 2.0]
+    aligned_source, result = asyncio.run(runner())
+    assert isinstance(aligned_source, AlignedScriptSource)
+    assert result.render_result.audio.shape == (4, 2)
+    assert list(result.marker_frames) == [0, 2, 4]
+    assert [content.start_pos for content in aligned_source.contents] == [0.0, 0.5, 2.0]
 
 
-def test_forced_alignment_plan_splices_sound_audio(tmp_path: Path):
+def test_script_slice_and_concat_splice_sound_audio(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -543,11 +557,12 @@ def test_forced_alignment_plan_splices_sound_audio(tmp_path: Path):
             )
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
-            return await audio_plan.render()
+            return audio_plan, await audio_plan.render()
         finally:
             injector.close()
 
-    result = asyncio.run(runner())
+    audio_plan, result = asyncio.run(runner())
+    assert isinstance(audio_plan, ConcatAudioPlan)
     assert result.audio.tolist() == [1.0, 2.0, 8.0, 9.0, 3.0, 4.0]
 
 
