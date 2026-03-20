@@ -14,6 +14,14 @@ def radio_drama_injector(
     config: ProductionConfig | None = None,
     event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> Injector:
+    """Build a radio-drama injector with shared app-level resources.
+
+    The returned injector preserves caller-provided providers from
+    ``base_injector`` and installs the production config, event loop, and a
+    default ``VibeVoiceResource`` provider when one is not already present.
+    Library entry points and the CLI use the same helper so resource wiring is
+    consistent across direct and subprocess-driven execution.
+    """
     injector = Injector(parent_injector=base_injector)
     if config is not None:
         injector.add_provider(config)

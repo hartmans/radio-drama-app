@@ -7,6 +7,12 @@ import numpy as np
 
 @dataclass(slots=True)
 class RenderResult:
+    """Audio produced by rendering a plan.
+
+    ``audio`` is normalized to a contiguous ``float32`` numpy array. Current
+    plans produce audio in the configured production format, while the gap and
+    margin fields remain available for later composition features.
+    """
     audio: np.ndarray
     pre_margin: float = 0.0
     post_margin: float = 0.0
@@ -43,4 +49,4 @@ class RenderResult:
 
 
 class ProductionResult(RenderResult):
-    pass
+    """Top-level rendered production audio."""

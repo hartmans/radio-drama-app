@@ -28,6 +28,7 @@ _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 
 @dataclass(frozen=True, slots=True)
 class SpeakerVoiceReference:
+    """Resolved voice reference for one canonical speaker name."""
     authored_name: str
     voice_name: str
     resolved_path: Path
@@ -35,18 +36,27 @@ class SpeakerVoiceReference:
 
 @dataclass(frozen=True, slots=True)
 class DialogueLine:
+    """Normalized dialogue stanza belonging to one resolved speaker."""
     speaker: SpeakerVoiceReference
     spoken_text: str
 
 
 @dataclass(frozen=True, slots=True)
 class ScriptRenderRequest:
+    """Semantic render request sent to a speech resource."""
     normalized_script: str
     voice_samples: tuple[str, ...]
 
 
 @inject(injector=Injector)
 class PlanningNode(AsyncInjectable):
+    """Base class for injectable planning objects.
+
+    Planning nodes keep the source ``DocumentNode`` that produced them and
+    provide a memoized async ``render()`` entry point so downstream callers do
+    not need to coordinate duplicate work themselves.
+    """
+
     def __init__(self, node: DocumentNode | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.node = node
@@ -73,11 +83,14 @@ class PlanningNode(AsyncInjectable):
 
 @inject(config=ProductionConfig)
 class SpeakerMapPlan(PlanningNode):
+    """Validated speaker map with canonical lookup into resolved voice files."""
+
     def __init__(self, node: SpeakerMapNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
         self._voices_by_key: dict[str, SpeakerVoiceReference] = {}
 
     async def async_ready(self):
+        """Parse YAML, validate entries, and resolve voice references."""
         loaded = yaml.safe_load(self.node.normalized_text_content)
         if not isinstance(loaded, dict):
             raise self.document_error(
@@ -172,6 +185,8 @@ class SpeakerMapPlan(PlanningNode):
 
 @inject(speaker_map_plan=SpeakerMapPlan)
 class ScriptPlan(PlanningNode):
+    """Plan for one script element and its eventual speech render request."""
+
     def __init__(self, node: ScriptNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
         self.dialogue_lines: list[DialogueLine] = []
@@ -180,6 +195,7 @@ class ScriptPlan(PlanningNode):
         self._registered_request = None
 
     async def async_ready(self):
+        """Normalize dialogue and register the request with the shared resource."""
         self.dialogue_lines = self._parse_dialogue()
         self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
         if len(self.ordered_speakers) > 4:
@@ -209,6 +225,7 @@ class ScriptPlan(PlanningNode):
         return await self._registered_request.render()
 
     def _parse_dialogue(self) -> list[DialogueLine]:
+        """Parse speaker stanzas, allowing paragraph continuation lines."""
         text = self.node.normalized_text_content
         if not text:
             return []
@@ -274,6 +291,8 @@ class ScriptPlan(PlanningNode):
 
 @inject(speaker_map_plan=SpeakerMapPlan)
 class ProductionPlan(PlanningNode):
+    """Top-level production plan that preserves script order."""
+
     def __init__(
         self,
         node: ProductionNode,
@@ -284,6 +303,7 @@ class ProductionPlan(PlanningNode):
         self.script_plans = list(script_plans)
 
     async def render_node(self) -> ProductionResult:
+        """Render scripts in document order and concatenate their results."""
         await self.speaker_map_plan.render()
         script_results = [await script_plan.render() for script_plan in self.script_plans]
         combined = RenderResult.concatenate(script_results)

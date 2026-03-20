@@ -17,6 +17,7 @@ from .resources import RegisteredRenderRequest, VibeVoiceResource
 
 @dataclass(frozen=True, slots=True)
 class CachedRenderMetadata:
+    """Persisted structural metadata for one render request."""
     sample_rate: int
     frame_count: int
 
@@ -26,6 +27,8 @@ class MissingCachedRenderMetadata(RuntimeError):
 
 
 class CachedVibeVoiceDouble:
+    """Small non-injectable test double for unit tests above the resource layer."""
+
     def __init__(
         self,
         cache_directory: str | Path,
@@ -78,6 +81,13 @@ class CachedVibeVoiceDouble:
 
 
 class CachedVibeVoiceResource(VibeVoiceResource):
+    """Cache-aware ``VibeVoiceResource`` substitute for pytest.
+
+    In ``live`` mode, uncached requests call the real model, persist structural
+    metadata, and return synthetic production-format audio. In ``cache`` mode,
+    missing metadata causes the current test to skip.
+    """
+
     def __init__(
         self,
         cache_directory: str | Path,

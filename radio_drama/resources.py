@@ -20,6 +20,7 @@ from .rendering import RenderResult
 
 @dataclass(slots=True)
 class RegisteredRenderRequest:
+    """A queued render request whose result may be fulfilled by a later batch."""
     resource: "VibeVoiceResource"
     request: ScriptRenderRequest
     future: asyncio.Future
@@ -35,6 +36,13 @@ class _PendingRender:
 
 @inject(config=ProductionConfig)
 class VibeVoiceResource(AsyncInjectable):
+    """Shared VibeVoice model resource for script-level render requests.
+
+    Scripts register requests during planning. Rendering any registered request
+    allows the resource to drain the current queue in batches, load the model
+    lazily, and return production-format audio to each waiting plan.
+    """
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.device = self._normalize_device(self.config.resolved_device)
@@ -59,6 +67,11 @@ class VibeVoiceResource(AsyncInjectable):
         self,
         request: ScriptRenderRequest | None,
     ) -> RegisteredRenderRequest:
+        """Register work for later batched rendering.
+
+        ``None`` is treated as an empty render and resolved immediately so plans
+        for empty scripts still follow the same request lifecycle.
+        """
         loop = asyncio.get_running_loop()
         registration = RegisteredRenderRequest(
             resource=self,
@@ -76,6 +89,7 @@ class VibeVoiceResource(AsyncInjectable):
         self,
         registration: RegisteredRenderRequest,
     ) -> RenderResult:
+        """Render one registration, potentially flushing additional queued work."""
         if registration.future.done():
             return await registration.future
         async with self._pending_lock:
@@ -118,6 +132,7 @@ class VibeVoiceResource(AsyncInjectable):
         ]
 
     def _render_batch_native_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
+        """Return model-native mono audio for one batch before format conversion."""
         requests = [pending.registration.request for pending in batch]
         processor, model = self._ensure_loaded()
         inputs = processor(
@@ -153,6 +168,7 @@ class VibeVoiceResource(AsyncInjectable):
     def _ensure_loaded(
         self,
     ) -> tuple[VibeVoiceProcessor, VibeVoiceForConditionalGenerationInference]:
+        """Load and cache the processor/model pair on first use."""
         if self._processor is not None and self._model is not None:
             return self._processor, self._model
 

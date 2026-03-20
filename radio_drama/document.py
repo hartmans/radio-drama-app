@@ -12,6 +12,13 @@ from .errors import DocumentError, SourceLocation
 
 @dataclass(slots=True)
 class DocumentNode:
+    """Semantic node produced from the XML input document.
+
+    Document nodes are plain objects rather than injectables. They preserve
+    enough source context to produce user-facing document errors and to plan
+    into injectable planning objects later.
+    """
+
     location: SourceLocation
     end_location: SourceLocation | None = None
     parent: "ElementNode | None" = None
@@ -31,6 +38,7 @@ class DocumentNode:
 
 @dataclass(slots=True)
 class TextNode(DocumentNode):
+    """Literal text content inside an XML element."""
     text: str = ""
 
     @property
@@ -40,6 +48,7 @@ class TextNode(DocumentNode):
 
 @dataclass(slots=True)
 class ElementNode(DocumentNode):
+    """Base class for semantic XML elements with ordered child nodes."""
     tag_name: str = ""
     children: list[DocumentNode] = field(default_factory=list)
     allowed_child_tags: dict[str, type["ElementNode"]] = field(default_factory=dict, init=False)
@@ -54,6 +63,7 @@ class ElementNode(DocumentNode):
         self.children.append(child)
 
     def create_child_element(self, tag_name: str, location: SourceLocation) -> "ElementNode":
+        """Construct a permitted child element or raise a document error."""
         child_type = self.allowed_child_tags.get(tag_name)
         if child_type is None:
             raise DocumentError(
@@ -99,6 +109,7 @@ class ElementNode(DocumentNode):
 
 @dataclass(slots=True)
 class SpeakerMapNode(ElementNode):
+    """Document node for the YAML speaker-to-voice mapping."""
     allow_text: bool = field(default=True, init=False)
 
     async def plan(self, ainjector):
@@ -109,6 +120,7 @@ class SpeakerMapNode(ElementNode):
 
 @dataclass(slots=True)
 class ScriptNode(ElementNode):
+    """Document node for one ordered renderable script unit."""
     allow_text: bool = field(default=True, init=False)
 
     async def plan(self, ainjector):
@@ -119,6 +131,7 @@ class ScriptNode(ElementNode):
 
 @dataclass(slots=True)
 class ProductionNode(ElementNode):
+    """Root document node for one production."""
     allowed_child_tags: dict[str, type[ElementNode]] = field(
         default_factory=lambda: {
             "speaker-map": SpeakerMapNode,
@@ -127,7 +140,8 @@ class ProductionNode(ElementNode):
         init=False,
     )
 
-    def validate_phase1(self) -> None:
+    def validate_document(self) -> None:
+        """Validate the current production schema at the document level."""
         self.require_one_child("speaker-map")
         self.require_children("script")
 
@@ -140,6 +154,7 @@ class ProductionNode(ElementNode):
         return self.require_children("script")
 
     async def plan(self, ainjector):
+        """Plan the production in a child injector with shared production resources."""
         from carthage.dependency_injection import InjectionKey
 
         from .init import radio_drama_injector
@@ -165,6 +180,8 @@ class ProductionNode(ElementNode):
 
 
 class _ProductionContentHandler(xml.sax.handler.ContentHandler):
+    """SAX handler that builds the semantic document tree with source locations."""
+
     def __init__(self, source_name: str | None) -> None:
         super().__init__()
         self.source_name = source_name
@@ -228,6 +245,7 @@ class _ProductionContentHandler(xml.sax.handler.ContentHandler):
 
 
 def parse_production_string(xml_text: str, *, source_name: str | None = None) -> ProductionNode:
+    """Parse XML text into a validated ``ProductionNode`` tree."""
     handler = _ProductionContentHandler(source_name=source_name)
     try:
         xml.sax.parse(io.StringIO(xml_text), handler)
@@ -242,11 +260,12 @@ def parse_production_string(xml_text: str, *, source_name: str | None = None) ->
         ) from None
     if handler.root is None:
         raise DocumentError("The XML document did not produce a <production> root")
-    handler.root.validate_phase1()
+    handler.root.validate_document()
     return handler.root
 
 
 def parse_production_file(path: str | Path) -> ProductionNode:
+    """Read and parse a production XML file."""
     xml_path = Path(path)
     with xml_path.open("r", encoding="utf-8") as handle:
         return parse_production_string(handle.read(), source_name=str(xml_path))
