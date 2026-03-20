@@ -24,14 +24,14 @@ def test_preset_audio_store_prepares_and_slices():
     store = PresetAudioStore(base_result=_base_result(), sample_rate=48000)
 
     prepared_names = asyncio.run(
-        store.prepare_presets([" none ", " narrator1 ", "indoor1", "narrator1"])
+        store.prepare_presets([" none ", " narrator ", "indoor1", "narrator1"])
     )
-    sliced = store.slice_preset("narrator1", from_time=0.01)
+    sliced = store.slice_preset("narrator", from_time=0.01)
     dry_sliced = store.slice_preset("none", from_time=0.01)
 
-    assert prepared_names == ("none", "narrator1", "indoor1")
+    assert prepared_names == ("none", "narrator", "indoor1")
     assert sliced.audio.shape == (3616, 2)
-    assert np.shares_memory(sliced.audio, store.prepared_results["narrator1"].audio)
+    assert np.shares_memory(sliced.audio, store.prepared_results["narrator"].audio)
     assert np.shares_memory(dry_sliced.audio, store.base_result.audio)
     assert np.allclose(dry_sliced.audio, store.base_result.audio[480:])
 
@@ -54,7 +54,7 @@ def test_backend_audio_slice_requires_prepared_preset():
     with TestClient(app) as client:
         response = client.post(
             "/api/audio-slice",
-            json={"preset_name": "narrator1", "from_time": 0.0},
+            json={"preset_name": "narrator", "from_time": 0.0},
         )
 
     assert response.status_code == 409
@@ -68,7 +68,7 @@ def test_backend_prepare_and_slice_endpoints():
         available_response = client.get("/api/presets/available")
         prepare_response = client.post(
             "/api/presets/prepare",
-            json={"preset_names": ["none", "narrator1", "outdoor2"]},
+            json={"preset_names": ["none", "narrator", "outdoor2"]},
         )
         slice_response = client.post(
             "/api/audio-slice",
@@ -82,7 +82,7 @@ def test_backend_prepare_and_slice_endpoints():
     assert available_response.status_code == 200
     assert available_response.json()["preset_names"][0] == "none"
     assert prepare_response.status_code == 200
-    assert prepare_response.json()["preset_names"] == ["none", "narrator1", "outdoor2"]
+    assert prepare_response.json()["preset_names"] == ["none", "narrator", "outdoor2"]
     assert slice_response.status_code == 200
     assert dry_slice_response.status_code == 200
     assert slice_response.headers["content-type"] == "audio/wav"

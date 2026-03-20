@@ -18,12 +18,14 @@ from .effects import (
     PresetPlan,
     available_effect_chains,
     build_named_effect_chain,
+    normalize_effect_chain_name,
     numpy_stage,
     scipy_signal_stage,
 )
 from .init import radio_drama_injector
 from .planning import (
     AudioPlan,
+    ConcatAudioPlan,
     DialogueLine,
     PlanningNode,
     ProductionPlan,
@@ -39,6 +41,7 @@ __all__ = [
     "AudioPlan",
     "available_effect_chains",
     "build_named_effect_chain",
+    "ConcatAudioPlan",
     "convert_audio_format",
     "convert_channel_count",
     "DialogueLine",
@@ -66,6 +69,7 @@ __all__ = [
     "TextNode",
     "VibeVoiceResource",
     "numpy_stage",
+    "normalize_effect_chain_name",
     "parse_production_file",
     "parse_production_string",
     "resample_audio",

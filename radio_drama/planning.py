@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+import numpy as np
 import yaml
 from carthage.dependency_injection import AsyncInjectable, Injector, inject
 
@@ -84,6 +85,24 @@ class PlanningNode(AsyncInjectable):
 class AudioPlan(PlanningNode):
     """Planning node whose render path produces audio."""
 
+    def __init__(
+        self,
+        node: DocumentNode | None = None,
+        *,
+        set_gap: bool = True,
+        **kwargs,
+    ) -> None:
+        super().__init__(node=node, **kwargs)
+        self.pre_margin = 0.0
+        self.post_margin = 0.0
+        self.pre_gap = 0.0
+        self.post_gap = 0.0
+        if set_gap and node is not None:
+            self.pre_margin = self._timing_attribute_seconds("pre_margin")
+            self.post_margin = self._timing_attribute_seconds("post_margin")
+            self.pre_gap = self._timing_attribute_seconds("pre_gap")
+            self.post_gap = self._timing_attribute_seconds("post_gap")
+
     async def render(self) -> RenderResult:
         return cast(RenderResult, await super().render())
 
@@ -92,6 +111,36 @@ class AudioPlan(PlanningNode):
 
     def leaf_audio_plans(self) -> list["AudioPlan"]:
         return [self]
+
+    def _timing_attribute_seconds(self, attribute_name: str) -> float:
+        if self.node is None:
+            return 0.0
+        raw_value = self.node.attributes.get(attribute_name)
+        if raw_value is None:
+            return 0.0
+        normalized = raw_value.strip()
+        if not normalized:
+            raise self.document_error(f"{self.node.display_name} {attribute_name} cannot be empty")
+        try:
+            seconds = float(normalized)
+        except ValueError as exc:
+            raise self.document_error(
+                f"{self.node.display_name} {attribute_name} must be a number of seconds"
+            ) from exc
+        if seconds < 0:
+            raise self.document_error(
+                f"{self.node.display_name} {attribute_name} must be non-negative seconds"
+            )
+        return seconds
+
+    def with_plan_timing(self, result: RenderResult) -> RenderResult:
+        return RenderResult(
+            audio=result.audio,
+            pre_margin=self.pre_margin if self.pre_margin != 0.0 else result.pre_margin,
+            post_margin=self.post_margin if self.post_margin != 0.0 else result.post_margin,
+            pre_gap=self.pre_gap if self.pre_gap != 0.0 else result.pre_gap,
+            post_gap=self.post_gap if self.post_gap != 0.0 else result.post_gap,
+        )
 
 
 @inject(config=ProductionConfig)
@@ -196,7 +245,7 @@ class SpeakerMapPlan(PlanningNode):
         return None
 
 
-@inject(speaker_map_plan=SpeakerMapPlan)
+@inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)
 class ScriptPlan(AudioPlan):
     """Plan for one script element and its eventual speech render request."""
 
@@ -235,7 +284,7 @@ class ScriptPlan(AudioPlan):
         return await super().async_ready()
 
     async def render_node(self) -> RenderResult:
-        return await self._registered_request.render()
+        return self.with_plan_timing(await self._registered_request.render())
 
     def _parse_dialogue(self) -> list[DialogueLine]:
         """Parse speaker stanzas, allowing paragraph continuation lines."""
@@ -302,22 +351,18 @@ class ScriptPlan(AudioPlan):
         return ordered
 
 
-@inject(speaker_map_plan=SpeakerMapPlan)
-class ProductionPlan(AudioPlan):
-    """Top-level production plan that preserves script order."""
+@inject(config=ProductionConfig)
+class ConcatAudioPlan(AudioPlan):
+    """Audio plan that concatenates child render results and consumes child gaps."""
 
     def __init__(
         self,
-        node: ProductionNode,
+        node: DocumentNode,
         audio_plans: Sequence[AudioPlan],
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.audio_plans = list(audio_plans)
-
-    @property
-    def script_plans(self) -> list[AudioPlan]:
-        return self.leaf_audio_plans()
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         flattened: list[AudioPlan] = []
@@ -325,11 +370,56 @@ class ProductionPlan(AudioPlan):
             flattened.extend(audio_plan.leaf_audio_plans())
         return flattened
 
+    async def render_node(self) -> RenderResult:
+        rendered_results = [await audio_plan.render() for audio_plan in self.audio_plans]
+        return self.with_plan_timing(self._concatenate_results(rendered_results))
+
+    def _concatenate_results(self, results: Sequence[RenderResult]) -> RenderResult:
+        if not results:
+            return RenderResult.empty(channels=self.config.resolved_output_channels)
+
+        segments: list[np.ndarray] = []
+        for index, result in enumerate(results):
+            if index == 0 and result.pre_gap > 0:
+                segments.append(self._silence_audio(result, result.pre_gap))
+            elif index > 0:
+                gap_seconds = results[index - 1].post_gap + result.pre_gap
+                if gap_seconds > 0:
+                    segments.append(self._silence_audio(result, gap_seconds))
+            segments.append(result.audio)
+
+        final_result = results[-1]
+        if final_result.post_gap > 0:
+            segments.append(self._silence_audio(final_result, final_result.post_gap))
+
+        audio = np.concatenate(segments, axis=0) if segments else RenderResult.empty(
+            channels=self.config.resolved_output_channels
+        ).audio
+        return RenderResult(
+            audio=audio,
+            pre_margin=results[0].pre_margin,
+            post_margin=results[-1].post_margin,
+        )
+
+    def _silence_audio(self, template: RenderResult, seconds: float) -> np.ndarray:
+        frame_count = int(round(seconds * self.config.resolved_output_sample_rate))
+        if template.audio.ndim == 1:
+            return np.zeros(frame_count, dtype=np.float32)
+        return np.zeros((frame_count, template.audio.shape[1]), dtype=np.float32)
+
+
+@inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)
+class ProductionPlan(ConcatAudioPlan):
+    """Top-level production plan that preserves script order."""
+
+    @property
+    def script_plans(self) -> list[AudioPlan]:
+        return self.leaf_audio_plans()
+
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and concatenate their results."""
         await self.speaker_map_plan.render()
-        script_results = [await audio_plan.render() for audio_plan in self.audio_plans]
-        combined = RenderResult.concatenate(script_results)
+        combined = await super().render_node()
         return ProductionResult(
             audio=combined.audio,
             pre_margin=combined.pre_margin,

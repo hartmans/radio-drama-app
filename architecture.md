@@ -49,13 +49,17 @@ Current planning contract:
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
+* every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, and `post_gap`
+* by default an `AudioPlan` reads timing attributes of the same names from its source XML node
+* `set_gap=False` is used for wrapper plans whose timing must remain owned by an inner audio plan
 
 Current plan types:
 
 * `SpeakerMapPlan`: validates and resolves speaker names to voice references
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
+* `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
-* `ProductionPlan`: owns the ordered production `audio_plans` and concatenates their rendered audio
+* `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready
 
 Planning rule for presets:
 
@@ -91,6 +95,7 @@ Current rendering contract:
 * effect processing consumes and returns `RenderResult`, preserving those fields while replacing the audio buffer
 
 Current production behavior is ordered concatenation of rendered script results.
+Script-level `pre_gap` and `post_gap` values are measured in seconds and become actual silence when a `ConcatAudioPlan` joins adjacent child results.
 
 ## Effects and presets
 
@@ -106,7 +111,7 @@ Current effects contract:
 
 Current built-in presets:
 
-* `narrator1`, `narrator2`: inner-monologue or produced narration variants with center-focused stereo, light leveling, and subtle abstract ambience
+* `narrator`, `thoughts`: inner-monologue or produced narration variants with center-focused stereo, stronger leveling, and abstract ambience
 * `outdoor1`: a lighter open-air variant with extra width and sparse reflections
 * `outdoor2`: a deliberately obvious outdoor diagnostic variant with wider stereo, audible noise bed, and a strong echo tail
 * `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image

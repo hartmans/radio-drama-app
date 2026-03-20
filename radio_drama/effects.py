@@ -144,7 +144,7 @@ class PresetPlan(AudioPlan):
         preset_name: str,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, **kwargs)
+        super().__init__(node=node, set_gap=False, **kwargs)
         self.audio_plan = audio_plan
         self.preset_name = preset_name
 
@@ -193,8 +193,13 @@ def available_effect_chains() -> tuple[str, ...]:
     return tuple(sorted(_PRESET_CHAINS))
 
 
+def normalize_effect_chain_name(name: str) -> str:
+    normalized_name = name.strip().lower()
+    return _PRESET_ALIASES.get(normalized_name, normalized_name)
+
+
 def build_named_effect_chain(name: str) -> EffectChain:
-    return _PRESET_CHAINS[name.strip().lower()]
+    return _PRESET_CHAINS[normalize_effect_chain_name(name)]
 
 
 def _db_to_gain(decibels: float) -> float:
@@ -351,8 +356,8 @@ def _mix_white_noise(
 
 
 _PRESET_CHAINS: Mapping[str, EffectChain] = {
-    "narrator1": EffectChain(
-        name="narrator1",
+    "narrator": EffectChain(
+        name="narrator",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
@@ -387,8 +392,8 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
             ),
         ),
     ),
-    "narrator2": EffectChain(
-        name="narrator2",
+    "thoughts": EffectChain(
+        name="thoughts",
         stages=(
             scipy_signal_stage(
                 "highpass_cleanup",
@@ -554,4 +559,9 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
             ),
         ),
     ),
+}
+
+_PRESET_ALIASES = {
+    "narrator1": "narrator",
+    "narrator2": "thoughts",
 }

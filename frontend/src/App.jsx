@@ -5,8 +5,8 @@ const BACKEND_URL = (
 ).replace(/\/+$/, '')
 const PRESET_OPTIONS = [
   { key: '0', name: 'none', label: 'no preset' },
-  { key: '1', name: 'narrator1', label: 'narrator1' },
-  { key: '2', name: 'narrator2', label: 'narrator2' },
+  { key: '1', name: 'narrator', label: 'narrator' },
+  { key: '2', name: 'thoughts', label: 'thoughts' },
   { key: '3', name: 'outdoor1', label: 'outdoor1' },
   { key: '4', name: 'outdoor2', label: 'outdoor2' },
   { key: '5', name: 'indoor1', label: 'indoor1' },

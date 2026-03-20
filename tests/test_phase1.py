@@ -13,7 +13,7 @@ from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ScriptRenderRequest
+from radio_drama.planning import ConcatAudioPlan, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.testing import CachedRenderMetadata
@@ -276,6 +276,107 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
     assert result.audio.tolist() == [1.0, 2.0]
 
 
+def test_production_plan_applies_script_gaps(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    value = float(request.normalized_script[-1])
+                    return RenderResult(audio=np.array([value], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script post_gap="0.5">Anna: Line 1</script>
+                  <script pre_gap="0.25">Anna: Line 2</script>
+                </production>
+                """,
+                source_name="script-gaps.xml",
+            )
+            plan = await root.plan(ainjector)
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.tolist() == [1.0, 0.0, 0.0, 0.0, 2.0]
+
+
+def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=2)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    value = float(request.normalized_script[-1])
+                    return RenderResult(audio=np.full((16, 2), value, dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="narrator" post_gap="0.25">Anna: Line 1</script>
+                  <script>Anna: Line 2</script>
+                </production>
+                """,
+                source_name="preset-gap.xml",
+            )
+            plan = await root.plan(ainjector)
+            return plan, await plan.render()
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    assert isinstance(plan, ConcatAudioPlan)
+    assert result.audio.shape == (33, 2)
+    assert np.allclose(result.audio[16], 0.0)
+
+
+def test_script_gap_attribute_requires_numeric_seconds(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script post_gap="later">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="bad-gap.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<script> post_gap must be a number of seconds"):
+        asyncio.run(runner())
+
+
 def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -304,7 +405,7 @@ def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
                     Anna: anna.wav
                     Ben: anna.wav
                   </speaker-map>
-                  <script preset="narrator1">
+                  <script preset="narrator">
                     Anna: I can hear the thought.
                     Ben: Then say it out loud.
                   </script>
@@ -321,7 +422,7 @@ def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
 
     production_plan, audio_plan, rendered = asyncio.run(runner())
     assert isinstance(audio_plan, PresetPlan)
-    assert audio_plan.preset_name == "narrator1"
+    assert audio_plan.preset_name == "narrator"
     assert len(production_plan.leaf_audio_plans()) == 1
     assert rendered.audio.shape == (512, 2)
     assert not np.allclose(rendered.audio[:, 0], np.linspace(-0.2, 0.2, 512, dtype=np.float32))
@@ -398,12 +499,14 @@ def test_named_effect_chains_include_demo_presets():
     assert available_effect_chains() == (
         "indoor1",
         "indoor2",
-        "narrator1",
-        "narrator2",
+        "narrator",
         "outdoor1",
         "outdoor2",
+        "thoughts",
     )
-    assert build_named_effect_chain("Narrator1").name == "narrator1"
+    assert build_named_effect_chain("Narrator").name == "narrator"
+    assert build_named_effect_chain("Narrator1").name == "narrator"
+    assert build_named_effect_chain("Narrator2").name == "thoughts"
 
 
 def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):

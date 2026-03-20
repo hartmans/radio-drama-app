@@ -16,7 +16,11 @@ from scipy.io import wavfile
 
 from radio_drama.config import ProductionConfig
 from radio_drama.document import parse_production_file
-from radio_drama.effects import available_effect_chains, build_named_effect_chain
+from radio_drama.effects import (
+    available_effect_chains,
+    build_named_effect_chain,
+    normalize_effect_chain_name,
+)
 from radio_drama.init import radio_drama_injector
 from radio_drama.rendering import RenderResult
 
@@ -263,7 +267,9 @@ def _normalize_preset_name(preset_name: str) -> str:
     normalized_name = preset_name.strip().lower()
     if not normalized_name:
         raise ValueError("Preset names cannot be empty")
-    return normalized_name
+    if normalized_name == NO_PRESET_NAME:
+        return normalized_name
+    return normalize_effect_chain_name(normalized_name)
 
 
 def available_preview_presets() -> tuple[str, ...]:
