@@ -22,8 +22,10 @@ Current document contract:
 * the root is `<production>`
 * `<production>` contains exactly one `<speaker-map>`
 * `<production>` contains one or more `<script>` elements in document order
+* document nodes retain XML attributes in `DocumentNode.attributes`
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
+* `<script preset="...">` selects a named render-time effect preset
 * a script may contain stanza continuation lines and paragraph breaks
 * an empty script is valid
 
@@ -46,12 +48,20 @@ Current planning contract:
 * every plan has a `render()` path, even if rendering is a no-op
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
+* `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 
 Current plan types:
 
 * `SpeakerMapPlan`: validates and resolves speaker names to voice references
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
-* `ProductionPlan`: owns the ordered script plans for one production and concatenates their rendered audio
+* `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
+* `ProductionPlan`: owns the ordered production `audio_plans` and concatenates their rendered audio
+
+Planning rule for presets:
+
+* `ScriptNode.plan()` always creates a `ScriptPlan`
+* when `ScriptNode.preset` is present, planning wraps that script plan in a `PresetPlan`
+* higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.
 
@@ -78,8 +88,27 @@ Current rendering contract:
 * current internal render results are already in production format
 * `RenderResult` retains gap and margin fields for later composition work
 * `ProductionResult` is the top-level rendered output type
+* effect processing consumes and returns `RenderResult`, preserving those fields while replacing the audio buffer
 
 Current production behavior is ordered concatenation of rendered script results.
+
+## Effects and presets
+
+Preset support is intentionally narrow at the interface boundary and flexible in implementation.
+
+Current effects contract:
+
+* `EffectChain` is a named ordered sequence of stages
+* each stage receives production-format numpy audio plus the output sample rate
+* stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
+* preset names are resolved at render time, not baked into `ScriptPlan`
+* unknown preset names are document errors attached to the originating `<script>`
+
+Current built-in presets:
+
+* `narrator1`, `narrator2`: inner-monologue or produced narration variants with center-focused stereo, light leveling, and subtle abstract ambience
+* `outdoor1`, `outdoor2`: mostly dry open-air variants with light width and sparse reflections
+* `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image
 
 ## Testing architecture
 
@@ -120,12 +149,12 @@ The current resource layer is centered on VibeVoice. Future model integrations s
 
 ## Rendering growth
 
-The current renderer concatenates clips in order. Future rendering work is expected to make fuller use of `RenderResult` metadata and may add:
+The current renderer concatenates clips in order and applies any per-script presets before concatenation. Future rendering work is expected to make fuller use of `RenderResult` metadata and may add:
 
 * non-zero gap and margin handling
 * overlapping or mixed clips
 * scene transitions
-* effects and mastering passes
+* production-level effects and mastering passes
 * alignment-aware composition
 
 ## Testing growth

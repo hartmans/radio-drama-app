@@ -30,6 +30,23 @@ def test_parse_production_builds_phase1_tree():
     assert "Anna: First line." in root.script_nodes[0].normalized_text_content
 
 
+def test_parse_production_collects_element_attributes():
+    root = parse_production_string(
+        """
+        <production demo="presets">
+          <speaker-map source="inline">anna: anna.wav</speaker-map>
+          <script preset="narrator1" mood="internal">Anna: First line.</script>
+        </production>
+        """,
+        source_name="attrs.xml",
+    )
+
+    assert root.attributes == {"demo": "presets"}
+    assert root.speaker_map_node.attributes == {"source": "inline"}
+    assert root.script_nodes[0].attributes == {"preset": "narrator1", "mood": "internal"}
+    assert root.script_nodes[0].preset == "narrator1"
+
+
 def test_parse_production_rejects_unknown_child():
     with pytest.raises(DocumentError, match="does not allow child element <scene>"):
         parse_production_string(

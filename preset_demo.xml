@@ -1,0 +1,49 @@
+<production>
+  <speaker-map>
+    Alex: alice.wav
+    Blair: chandra.wav
+    Casey: david.wav
+  </speaker-map>
+
+  <script preset="narrator1">
+    Alex: I keep telling myself this corridor is ordinary, but the walls lean in every time I breathe.
+    Blair: Then stop narrating and open the door.
+    Alex: If I open it, the thought becomes a fact.
+    Blair: If you do not open it, the fear stays in charge.
+  </script>
+
+  <script preset="narrator2">
+    Casey: The city below them looked arranged, almost edited, every light in its assigned column of rain.
+    Alex: You make it sound like the storm filed a report before arriving.
+    Casey: It did, and the report said we were already late.
+    Alex: Then read me the rest before the rooftop gives up.
+  </script>
+
+  <script preset="outdoor1">
+    Blair: The trail bends by the river, so if they are ahead of us we should hear them before we see them.
+    Casey: I hear water, wind, and your backpack complaining.
+    Blair: The backpack is making a legal objection.
+    Casey: Good. Let it object quietly while we cross.
+  </script>
+
+  <script preset="outdoor2">
+    Alex: The market is three blocks away and somehow every vendor is already arguing with the weather.
+    Blair: That is how you know it is a real market.
+    Alex: If the rain gets louder, we may have to shout prices back at them.
+    Blair: Practice on me first. I only overpay under pressure.
+  </script>
+
+  <script preset="indoor1">
+    Casey: This kitchen always sounds fuller after midnight, like the tile remembers every conversation.
+    Alex: That explains why the room keeps repeating your bad ideas.
+    Casey: The room has excellent taste.
+    Alex: The room also needs tea before I accept its judgment.
+  </script>
+
+  <script preset="indoor2">
+    Blair: Close the office door and listen to that echo. Even the filing cabinets sound impatient.
+    Casey: They have heard this budget meeting four times already.
+    Blair: Then let us disappoint them quickly and go home.
+    Casey: Fine, but the stapler stays. It is the only one on our side.
+  </script>
+</production>

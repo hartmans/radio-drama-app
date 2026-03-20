@@ -22,6 +22,7 @@ class DocumentNode:
     location: SourceLocation
     end_location: SourceLocation | None = None
     parent: "ElementNode | None" = None
+    attributes: dict[str, str] = field(default_factory=dict)
 
     @property
     def display_name(self) -> str:
@@ -62,7 +63,12 @@ class ElementNode(DocumentNode):
         child.parent = self
         self.children.append(child)
 
-    def create_child_element(self, tag_name: str, location: SourceLocation) -> "ElementNode":
+    def create_child_element(
+        self,
+        tag_name: str,
+        location: SourceLocation,
+        attributes: dict[str, str] | None = None,
+    ) -> "ElementNode":
         """Construct a permitted child element or raise a document error."""
         child_type = self.allowed_child_tags.get(tag_name)
         if child_type is None:
@@ -71,7 +77,11 @@ class ElementNode(DocumentNode):
                 node=self,
                 location=location,
         )
-        return child_type(location=location, tag_name=tag_name)
+        return child_type(
+            location=location,
+            tag_name=tag_name,
+            attributes=dict(attributes or {}),
+        )
 
     def child_elements_named(self, tag_name: str) -> list["ElementNode"]:
         return [child for child in self.element_children if child.tag_name == tag_name]
@@ -123,10 +133,31 @@ class ScriptNode(ElementNode):
     """Document node for one ordered renderable script unit."""
     allow_text: bool = field(default=True, init=False)
 
+    @property
+    def preset(self) -> str | None:
+        preset_name = self.attributes.get("preset")
+        if preset_name is None:
+            return None
+        normalized = preset_name.strip()
+        return normalized or None
+
     async def plan(self, ainjector):
+        if "preset" in self.attributes and self.preset is None:
+            raise self.error("<script> preset attribute cannot be empty")
         from .planning import ScriptPlan
 
-        return await ainjector(ScriptPlan, node=self)
+        script_plan = await ainjector(ScriptPlan, node=self)
+        if self.preset is None:
+            return script_plan
+
+        from .effects import PresetPlan
+
+        return await ainjector(
+            PresetPlan,
+            node=self,
+            audio_plan=script_plan,
+            preset_name=self.preset,
+        )
 
 
 @dataclass(slots=True)
@@ -171,11 +202,11 @@ class ProductionNode(ElementNode):
             speaker_map_plan,
             close=False,
         )
-        script_plans = [await script_node.plan(production_ainjector) for script_node in self.script_nodes]
+        audio_plans = [await script_node.plan(production_ainjector) for script_node in self.script_nodes]
         return await production_ainjector(
             ProductionPlan,
             node=self,
-            script_plans=script_plans,
+            audio_plans=audio_plans,
         )
 
 
@@ -194,19 +225,20 @@ class _ProductionContentHandler(xml.sax.handler.ContentHandler):
 
     def startElement(self, name: str, attrs) -> None:  # noqa: N802
         location = self._current_location()
+        attributes = {str(key): str(value) for key, value in attrs.items()}
         if not self.stack:
             if name != "production":
                 raise DocumentError(
                     "The document root must be <production>",
                     location=location,
                 )
-            root = ProductionNode(location=location, tag_name=name)
+            root = ProductionNode(location=location, tag_name=name, attributes=attributes)
             self.root = root
             self.stack.append(root)
             return
 
         parent = self.stack[-1]
-        child = parent.create_child_element(name, location)
+        child = parent.create_child_element(name, location, attributes)
         parent.add_child(child)
         self.stack.append(child)
 

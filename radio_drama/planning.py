@@ -4,7 +4,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 import yaml
 from carthage.dependency_injection import AsyncInjectable, Injector, inject
@@ -79,6 +79,19 @@ class PlanningNode(AsyncInjectable):
 
     async def render_node(self):
         return None
+
+
+class AudioPlan(PlanningNode):
+    """Planning node whose render path produces audio."""
+
+    async def render(self) -> RenderResult:
+        return cast(RenderResult, await super().render())
+
+    async def render_node(self) -> RenderResult:
+        raise NotImplementedError
+
+    def leaf_audio_plans(self) -> list["AudioPlan"]:
+        return [self]
 
 
 @inject(config=ProductionConfig)
@@ -184,7 +197,7 @@ class SpeakerMapPlan(PlanningNode):
 
 
 @inject(speaker_map_plan=SpeakerMapPlan)
-class ScriptPlan(PlanningNode):
+class ScriptPlan(AudioPlan):
     """Plan for one script element and its eventual speech render request."""
 
     def __init__(self, node: ScriptNode, **kwargs) -> None:
@@ -290,22 +303,32 @@ class ScriptPlan(PlanningNode):
 
 
 @inject(speaker_map_plan=SpeakerMapPlan)
-class ProductionPlan(PlanningNode):
+class ProductionPlan(AudioPlan):
     """Top-level production plan that preserves script order."""
 
     def __init__(
         self,
         node: ProductionNode,
-        script_plans: Sequence[ScriptPlan],
+        audio_plans: Sequence[AudioPlan],
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
-        self.script_plans = list(script_plans)
+        self.audio_plans = list(audio_plans)
+
+    @property
+    def script_plans(self) -> list[AudioPlan]:
+        return self.leaf_audio_plans()
+
+    def leaf_audio_plans(self) -> list[AudioPlan]:
+        flattened: list[AudioPlan] = []
+        for audio_plan in self.audio_plans:
+            flattened.extend(audio_plan.leaf_audio_plans())
+        return flattened
 
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and concatenate their results."""
         await self.speaker_map_plan.render()
-        script_results = [await script_plan.render() for script_plan in self.script_plans]
+        script_results = [await audio_plan.render() for audio_plan in self.audio_plans]
         combined = RenderResult.concatenate(script_results)
         return ProductionResult(
             audio=combined.audio,
