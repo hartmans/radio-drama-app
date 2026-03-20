@@ -11,6 +11,7 @@ from .document import (
     parse_production_string,
 )
 from .errors import DocumentError, SourceLocation
+from .init import radio_drama_injector
 from .planning import (
     DialogueLine,
     PlanningNode,
@@ -35,6 +36,7 @@ __all__ = [
     "ProductionNode",
     "ProductionPlan",
     "ProductionResult",
+    "radio_drama_injector",
     "RenderResult",
     "ScriptNode",
     "ScriptPlan",

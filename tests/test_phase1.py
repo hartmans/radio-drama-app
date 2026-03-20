@@ -11,6 +11,7 @@ from radio_drama.audio import convert_audio_format
 from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
+from radio_drama.init import radio_drama_injector
 from radio_drama.planning import ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
@@ -18,12 +19,9 @@ from radio_drama.testing import CachedRenderMetadata
 
 
 async def _make_async_injector(config: ProductionConfig) -> tuple[Injector, AsyncInjector]:
-    injector = Injector()
-    injector.add_provider(config)
-    injector.replace_provider(
-        InjectionKey(asyncio.AbstractEventLoop),
-        asyncio.get_running_loop(),
-        close=False,
+    injector = radio_drama_injector(
+        config=config,
+        event_loop=asyncio.get_running_loop(),
     )
     return injector, injector(AsyncInjector)
 
@@ -71,7 +69,7 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.add_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -115,7 +113,7 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.add_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -245,7 +243,7 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.add_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -264,6 +262,37 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
 
     result = asyncio.run(runner())
     assert result.audio.tolist() == [1.0, 2.0]
+
+
+def test_production_plan_installs_shared_vibevoice_resource(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>Anna: Line 1</script>
+                  <script>Anna: Line 2</script>
+                </production>
+                """,
+                source_name="shared-resource.xml",
+            )
+            plan = await root.plan(ainjector)
+            resource_ids = {
+                id(script_plan._registered_request.resource)
+                for script_plan in plan.script_plans
+            }
+            return resource_ids
+        finally:
+            injector.close()
+
+    resource_ids = asyncio.run(runner())
+    assert len(resource_ids) == 1
 
 
 def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):

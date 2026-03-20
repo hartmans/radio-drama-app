@@ -140,15 +140,14 @@ class ProductionNode(ElementNode):
         return self.require_children("script")
 
     async def plan(self, ainjector):
-        from carthage.dependency_injection import InjectionKey, Injector
+        from carthage.dependency_injection import InjectionKey
 
+        from .init import radio_drama_injector
         from .planning import ProductionPlan, SpeakerMapPlan
 
-        production_injector = Injector(parent_injector=ainjector.injector)
-        production_injector.replace_provider(
-            InjectionKey(asyncio.AbstractEventLoop),
-            asyncio.get_running_loop(),
-            close=False,
+        production_injector = radio_drama_injector(
+            ainjector.injector,
+            event_loop=asyncio.get_running_loop(),
         )
         production_ainjector = production_injector(type(ainjector))
         speaker_map_plan = await self.speaker_map_node.plan(production_ainjector)

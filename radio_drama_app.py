@@ -5,10 +5,11 @@ import asyncio
 from pathlib import Path
 
 import soundfile as sf
-from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector
+from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.config import ProductionConfig
 from radio_drama.document import parse_production_file
+from radio_drama.init import radio_drama_injector
 
 
 def _default_output_path(input_path: str) -> str:
@@ -56,12 +57,9 @@ def main() -> None:
 
     async def runner() -> None:
         production_node = parse_production_file(args.file)
-        injector = Injector()
-        injector.add_provider(config)
-        injector.replace_provider(
-            InjectionKey(asyncio.AbstractEventLoop),
-            asyncio.get_running_loop(),
-            close=False,
+        injector = radio_drama_injector(
+            config=config,
+            event_loop=asyncio.get_running_loop(),
         )
         try:
             ainjector = injector(AsyncInjector)
