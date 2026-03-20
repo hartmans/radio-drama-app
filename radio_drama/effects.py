@@ -304,6 +304,52 @@ def _early_reflections(
     return normalize_audio_array(rendered)
 
 
+def _feedback_reverb(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    delay_ms: float,
+    stereo_offset_ms: float,
+    feedback: float,
+    repeats: int,
+    wet_gain: float,
+    dry_mix: float,
+) -> np.ndarray:
+    normalized = normalize_audio_array(audio)
+    rendered = normalized * dry_mix
+    mono_source = normalized.mean(axis=1)
+    for repeat in range(1, repeats + 1):
+        base_delay_frames = max(1, int(round(sample_rate * delay_ms * repeat / 1000.0)))
+        stereo_delay_frames = max(
+            1,
+            int(round(sample_rate * (delay_ms + stereo_offset_ms) * repeat / 1000.0)),
+        )
+        gain = wet_gain * (feedback ** (repeat - 1))
+        left_delayed = np.pad(mono_source, (base_delay_frames, 0))[: mono_source.shape[0]]
+        right_delayed = np.pad(mono_source, (stereo_delay_frames, 0))[: mono_source.shape[0]]
+        rendered[:, 0] += left_delayed * gain
+        rendered[:, 1] += right_delayed * (gain * 0.92)
+    return normalize_audio_array(rendered)
+
+
+def _mix_white_noise(
+    audio: np.ndarray,
+    sample_rate: int,
+    *,
+    relative_db: float,
+    seed: int = 20260320,
+) -> np.ndarray:
+    del sample_rate
+    normalized = normalize_audio_array(audio)
+    rng = np.random.default_rng(seed)
+    noise = rng.standard_normal(normalized.shape).astype(np.float32)
+    noise_rms = float(np.sqrt(np.mean(np.square(noise), dtype=np.float64)))
+    signal_rms = float(np.sqrt(np.mean(np.square(normalized), dtype=np.float64)))
+    target_rms = max(signal_rms * _db_to_gain(relative_db), 1e-4)
+    scaled_noise = noise * (target_rms / max(noise_rms, 1e-6))
+    return normalize_audio_array(normalized + scaled_noise)
+
+
 _PRESET_CHAINS: Mapping[str, EffectChain] = {
     "narrator1": EffectChain(
         name="narrator1",
@@ -410,31 +456,28 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
                 partial(_filter_audio, btype="highpass", cutoff_hz=95.0),
             ),
             numpy_stage(
-                "light_compressor",
-                partial(
-                    _compress_audio,
-                    threshold_db=-23.0,
-                    ratio=1.7,
-                    attack_ms=10.0,
-                    release_ms=140.0,
-                    makeup_db=0.5,
-                ),
+                "bright_open_width",
+                partial(_mid_side_mix, mid_gain=0.96, side_gain=1.18),
             ),
             numpy_stage(
-                "bright_open_width",
-                partial(_mid_side_mix, mid_gain=0.98, side_gain=1.14),
+                "weather_noise",
+                partial(_mix_white_noise, relative_db=-16.0),
+            ),
+            numpy_stage(
+                "outdoor_echo_tail",
+                partial(
+                    _feedback_reverb,
+                    delay_ms=74.0,
+                    stereo_offset_ms=13.0,
+                    feedback=0.7,
+                    repeats=7,
+                    wet_gain=0.2,
+                    dry_mix=0.9,
+                ),
             ),
             numpy_stage(
                 "upper_air",
-                partial(_tilt_tone, low_band_db=-0.5, high_band_db=0.9),
-            ),
-            numpy_stage(
-                "far_surface_reflection",
-                partial(
-                    _early_reflections,
-                    taps=((26.0, 0.02, 0.03), (41.0, 0.018, 0.014)),
-                    dry_mix=0.992,
-                ),
+                partial(_tilt_tone, low_band_db=-1.0, high_band_db=1.4),
             ),
         ),
     ),

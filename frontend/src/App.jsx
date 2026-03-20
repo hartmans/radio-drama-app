@@ -3,13 +3,14 @@ import { useEffect, useRef, useState, useEffectEvent } from 'react'
 const BACKEND_URL = (
   import.meta.env.VITE_BACKEND_URL ?? 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '')
-const PRESETS = [
-  'narrator1',
-  'narrator2',
-  'outdoor1',
-  'outdoor2',
-  'indoor1',
-  'indoor2',
+const PRESET_OPTIONS = [
+  { key: '0', name: 'none', label: 'no preset' },
+  { key: '1', name: 'narrator1', label: 'narrator1' },
+  { key: '2', name: 'narrator2', label: 'narrator2' },
+  { key: '3', name: 'outdoor1', label: 'outdoor1' },
+  { key: '4', name: 'outdoor2', label: 'outdoor2' },
+  { key: '5', name: 'indoor1', label: 'indoor1' },
+  { key: '6', name: 'indoor2', label: 'indoor2' },
 ]
 
 function formatTime(seconds) {
@@ -30,7 +31,7 @@ export default function App() {
   const [status, setStatus] = useState('Preparing presets')
   const [isPlaying, setIsPlaying] = useState(false)
 
-  const selectedPreset = PRESETS[selectedPresetIndex]
+  const selectedPreset = PRESET_OPTIONS[selectedPresetIndex]
 
   const releaseObjectUrl = useEffectEvent(() => {
     if (objectUrlRef.current !== null) {
@@ -47,15 +48,15 @@ export default function App() {
     return playbackOffset + audioElement.currentTime
   })
 
-  const fetchSlice = useEffectEvent(async (presetName, fromTime, autoplay) => {
-    setStatus(`Loading ${presetName} from ${formatTime(fromTime)}`)
+  const fetchSlice = useEffectEvent(async (preset, fromTime, autoplay) => {
+    setStatus(`Loading ${preset.label} from ${formatTime(fromTime)}`)
     const response = await fetch(`${BACKEND_URL}/api/audio-slice`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        preset_name: presetName,
+        preset_name: preset.name,
         from_time: fromTime,
       }),
     })
@@ -80,16 +81,19 @@ export default function App() {
     if (autoplay) {
       await audioElement.play()
       setIsPlaying(true)
-      setStatus(`Playing ${presetName} from ${formatTime(fromTime)}`)
+      setStatus(`Playing ${preset.label} from ${formatTime(fromTime)}`)
       return
     }
     setIsPlaying(false)
-    setStatus(`Ready on ${presetName} at ${formatTime(fromTime)}`)
+    setStatus(`Ready on ${preset.label} at ${formatTime(fromTime)}`)
   })
 
   const startPlayback = useEffectEvent(async () => {
-    const nextTime = absolutePlaybackTime()
-    await fetchSlice(selectedPreset, nextTime, true)
+    const audioElement = audioRef.current
+    if (audioElement !== null) {
+      audioElement.pause()
+    }
+    await fetchSlice(selectedPreset, 0, true)
   })
 
   const stopPlayback = useEffectEvent(() => {
@@ -105,7 +109,7 @@ export default function App() {
   })
 
   const selectPreset = useEffectEvent(async (presetIndex) => {
-    const presetName = PRESETS[presetIndex]
+    const preset = PRESET_OPTIONS[presetIndex]
     const nextTime = absolutePlaybackTime()
     const shouldAutoplay = isPlaying
     const audioElement = audioRef.current
@@ -113,7 +117,7 @@ export default function App() {
       audioElement.pause()
     }
     setSelectedPresetIndex(presetIndex)
-    await fetchSlice(presetName, nextTime, shouldAutoplay)
+    await fetchSlice(preset, nextTime, shouldAutoplay)
   })
 
   const handleKeydown = useEffectEvent(async (event) => {
@@ -132,9 +136,9 @@ export default function App() {
         stopPlayback()
         return
       }
-      if (event.key >= '1' && event.key <= '6') {
+      if (event.key >= '0' && event.key <= '6') {
         event.preventDefault()
-        await selectPreset(Number(event.key) - 1)
+        await selectPreset(Number(event.key))
       }
     } catch (error) {
       setIsPlaying(false)
@@ -172,7 +176,7 @@ export default function App() {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            preset_names: PRESETS,
+            preset_names: PRESET_OPTIONS.map((preset) => preset.name),
           }),
         })
         if (!response.ok) {
@@ -185,7 +189,7 @@ export default function App() {
         }
         setPreparedPresets(payload.preset_names)
         setDurationSeconds(payload.duration_seconds)
-        setStatus(`Ready on ${payload.preset_names[0]}`)
+        setStatus(`Ready on ${selectedPreset.label}`)
       } catch (error) {
         if (!active) {
           return
@@ -213,8 +217,8 @@ export default function App() {
         <p className="eyebrow">Preset Preview</p>
         <h1>Radio Drama Preset Switcher</h1>
         <p className="summary">
-          Keyboard only. Press p to play, s to stop, and 1 through 6 to swap presets
-          at the current production time.
+          Keyboard only. Press p to restart playback, s to stop, and 0 through 6 to
+          swap presets at the current production time.
         </p>
       </header>
 
@@ -227,7 +231,7 @@ export default function App() {
         <article className="card">
           <p className="card-label">Current Preset</p>
           <p className="card-value">
-            {selectedPresetIndex + 1}. {selectedPreset}
+            {selectedPreset.key}. {selectedPreset.label}
           </p>
         </article>
         <article className="card">
@@ -245,16 +249,16 @@ export default function App() {
       </section>
 
       <section className="preset-list" aria-label="Preset keyboard map">
-        {PRESETS.map((presetName, index) => {
-          const prepared = preparedPresets.includes(presetName)
+        {PRESET_OPTIONS.map((preset, index) => {
+          const prepared = preparedPresets.includes(preset.name)
           const active = index === selectedPresetIndex
           return (
             <div
-              key={presetName}
+              key={preset.name}
               className={`preset-row${active ? ' active' : ''}${prepared ? '' : ' pending'}`}
             >
-              <span className="preset-key">{index + 1}</span>
-              <span className="preset-name">{presetName}</span>
+              <span className="preset-key">{preset.key}</span>
+              <span className="preset-name">{preset.label}</span>
               <span className="preset-state">{prepared ? 'ready' : 'pending'}</span>
             </div>
           )

@@ -23,6 +23,7 @@ from radio_drama.rendering import RenderResult
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+NO_PRESET_NAME = "none"
 
 
 class PreparePresetsRequest(BaseModel):
@@ -55,6 +56,9 @@ class PresetAudioStore:
     prepared_results: dict[str, RenderResult] = field(default_factory=dict)
     _prepare_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        self.prepared_results.setdefault(NO_PRESET_NAME, self.base_result)
+
     @property
     def duration_seconds(self) -> float:
         if self.sample_rate <= 0:
@@ -82,7 +86,7 @@ class PresetAudioStore:
         try:
             result = self.prepared_results[normalized_name]
         except KeyError as exc:
-            if normalized_name not in set(available_effect_chains()):
+            if normalized_name not in set(available_preview_presets()):
                 raise UnknownPresetName(normalized_name) from exc
             raise PresetNotPrepared(normalized_name) from exc
         return result.from_time(from_time, sample_rate=self.sample_rate)
@@ -94,7 +98,7 @@ class PresetAudioStore:
     def _normalize_preset_names(self, preset_names: Sequence[str]) -> tuple[str, ...]:
         normalized_names: list[str] = []
         seen: set[str] = set()
-        available = set(available_effect_chains())
+        available = set(available_preview_presets())
         for preset_name in preset_names:
             normalized_name = _normalize_preset_name(preset_name)
             if normalized_name not in available:
@@ -120,7 +124,7 @@ def create_app(audio_store: PresetAudioStore) -> FastAPI:
 
     @app.get("/api/presets/available")
     async def available_presets() -> dict[str, list[str]]:
-        return {"preset_names": list(available_effect_chains())}
+        return {"preset_names": list(available_preview_presets())}
 
     @app.post("/api/presets/prepare", response_model=PreparePresetsResponse)
     async def prepare_presets(request: PreparePresetsRequest) -> PreparePresetsResponse:
@@ -129,7 +133,7 @@ def create_app(audio_store: PresetAudioStore) -> FastAPI:
         except UnknownPresetName as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"Unknown preset {exc}. Available presets: {', '.join(available_effect_chains())}",
+                detail=f"Unknown preset {exc}. Available presets: {', '.join(available_preview_presets())}",
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -149,7 +153,7 @@ def create_app(audio_store: PresetAudioStore) -> FastAPI:
         except UnknownPresetName as exc:
             raise HTTPException(
                 status_code=404,
-                detail=f"Unknown preset {exc}. Available presets: {', '.join(available_effect_chains())}",
+                detail=f"Unknown preset {exc}. Available presets: {', '.join(available_preview_presets())}",
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -260,3 +264,7 @@ def _normalize_preset_name(preset_name: str) -> str:
     if not normalized_name:
         raise ValueError("Preset names cannot be empty")
     return normalized_name
+
+
+def available_preview_presets() -> tuple[str, ...]:
+    return (NO_PRESET_NAME, *available_effect_chains())

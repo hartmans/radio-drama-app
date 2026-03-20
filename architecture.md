@@ -107,7 +107,8 @@ Current effects contract:
 Current built-in presets:
 
 * `narrator1`, `narrator2`: inner-monologue or produced narration variants with center-focused stereo, light leveling, and subtle abstract ambience
-* `outdoor1`, `outdoor2`: mostly dry open-air variants with light width and sparse reflections
+* `outdoor1`: a lighter open-air variant with extra width and sparse reflections
+* `outdoor2`: a deliberately obvious outdoor diagnostic variant with wider stereo, audible noise bed, and a strong echo tail
 * `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image
 
 ## Backend preview service
@@ -118,6 +119,7 @@ Current backend contract:
 
 * `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`
 * the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
+* the preview backend also exposes a dry `none` option that returns slices from the unprocessed base render
 * preset preparation runs concurrently and reuses the same `EffectChain` interface as document-driven render-time presets
 * audio slice requests address a prepared preset plus a playback time, and the backend responds with a WAV stream starting at that point in the production
 
