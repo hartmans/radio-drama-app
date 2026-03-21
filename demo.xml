@@ -1,0 +1,24 @@
+<production>
+  <speaker-map>
+    narrator: judge2
+    judge: judge2
+    prosecutor: lawyer1
+    defense: lawyer2
+  </speaker-map>
+
+  <script preset="narrator" post_gap="0.85">
+    narrator: By nine o'clock the courtroom had settled into that strained silence that comes just before everyone starts pretending they are calm.
+    narrator: The judge had not entered yet, but the prosecutor already looked victorious and the defense attorney already looked tired of correcting him.
+    narrator: Then the side door opened, the bailiff called for order, and every wooden surface in the room seemed to tense with the people inside it.
+  </script>
+
+  <script preset="indoor2" post_gap="0.5">
+    judge: Be seated. We are back on the record in the matter of the state versus Halden.
+    <sound ref="gavel" post_gap="-0.35" />
+    prosecutor: The state is ready, your honor. We ask to proceed with the first witness immediately.
+    defense: The defense is ready as well, but we renew our objection to the state's timeline and to its claim that urgency excuses preparation.
+    judge: Your objection is noted. You may preserve it for appeal after you let me finish this hearing.
+    prosecutor: Then let us begin with the events in the corridor outside the records room.
+    defense: Gladly. That corridor is where the state's neat theory starts coming apart.
+  </script>
+</production>

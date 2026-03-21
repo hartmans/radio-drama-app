@@ -168,8 +168,7 @@ class SoundPlan(AudioPlan):
                 f"Sound {self.node.ref!r} was not found as an absolute path"
             )
 
-        document_path = self._production_document_path()
-        sounds_root = document_path.parent / "sounds"
+        sounds_root = self._sounds_root()
         if not sounds_root.is_dir():
             raise self.document_error(f"Sound directory does not exist: {sounds_root}")
 
@@ -196,6 +195,12 @@ class SoundPlan(AudioPlan):
                 f"Sound {self.node.ref!r} matched multiple files under {sounds_root}: {relative_paths}"
             )
         return best_candidates[0]
+
+    def _sounds_root(self) -> Path:
+        if self.config.sounds_directory is not None:
+            return self.config.resolved_sounds_directory
+        document_path = self._production_document_path()
+        return document_path.parent / "sounds"
 
     def _production_document_path(self) -> Path:
         provider_injector = self.ainjector.injector.injector_containing(ProductionDocumentPath)

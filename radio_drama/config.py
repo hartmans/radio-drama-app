@@ -6,19 +6,21 @@ from pathlib import Path
 
 DEFAULT_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
+DEFAULT_SOUNDS_DIRECTORY = Path("./sounds")
 DEFAULT_OUTPUT_SAMPLE_RATE = 48000
 DEFAULT_OUTPUT_CHANNELS = 2
 DEFAULT_BATCH_SIZE = 10
 DEFAULT_DEVICE = "cuda"
-DEFAULT_CFG_SCALE = 1.3
+DEFAULT_CFG_SCALE = 1.2
 DEFAULT_DISABLE_PREFILL = False
-DEFAULT_DDPM_INFERENCE_STEPS = 5
+DEFAULT_DDPM_INFERENCE_STEPS = 8
 MODEL_NATIVE_SAMPLE_RATE = 24000
 
 
 @dataclass(slots=True)
 class ProductionConfig:
     voice_directory: Path | None = None
+    sounds_directory: Path | None = None
     model_name: str | None = None
     output_sample_rate: int | None = None
     output_channels: int | None = None
@@ -31,10 +33,16 @@ class ProductionConfig:
     def __post_init__(self) -> None:
         if self.voice_directory is not None:
             self.voice_directory = Path(self.voice_directory).expanduser()
+        if self.sounds_directory is not None:
+            self.sounds_directory = Path(self.sounds_directory).expanduser()
 
     @property
     def resolved_voice_directory(self) -> Path:
         return (self.voice_directory or DEFAULT_VOICE_DIRECTORY).expanduser()
+
+    @property
+    def resolved_sounds_directory(self) -> Path:
+        return (self.sounds_directory or DEFAULT_SOUNDS_DIRECTORY).expanduser()
 
     @property
     def resolved_model_name(self) -> str:

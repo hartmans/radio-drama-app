@@ -211,6 +211,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     parser.add_argument("--voice-dir", default=None, help="Directory containing reference voice files.")
+    parser.add_argument("--sounds-dir", default=None, help="Directory containing sound files for relative <sound> references.")
     parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output sample rate override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Maximum VibeVoice batch size override.")
@@ -235,6 +236,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def build_config(args: argparse.Namespace) -> ProductionConfig:
     return ProductionConfig(
         voice_directory=Path(args.voice_dir) if args.voice_dir is not None else None,
+        sounds_directory=Path(args.sounds_dir) if args.sounds_dir is not None else None,
         model_name=args.model_file,
         output_sample_rate=args.output_sample_rate,
         output_channels=2,

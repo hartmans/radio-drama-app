@@ -20,6 +20,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Render a Phase 1 radio-drama XML document to WAV.")
     parser.add_argument("file", help="Input XML file.")
     parser.add_argument("--voice-dir", default=None, help="Directory containing reference voice files.")
+    parser.add_argument("--sounds-dir", default=None, help="Directory containing sound files for relative <sound> references.")
     parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
     parser.add_argument("--output", default=None, help="Output WAV path. Defaults to the input path with a .wav extension.")
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output WAV sample rate override.")
@@ -45,6 +46,7 @@ def main() -> None:
     output_path = args.output or _default_output_path(args.file)
     config = ProductionConfig(
         voice_directory=Path(args.voice_dir) if args.voice_dir is not None else None,
+        sounds_directory=Path(args.sounds_dir) if args.sounds_dir is not None else None,
         model_name=args.model_file,
         output_sample_rate=args.output_sample_rate,
         output_channels=args.output_channels,

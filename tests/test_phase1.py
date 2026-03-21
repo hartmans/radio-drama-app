@@ -456,6 +456,53 @@ def test_sound_plan_follows_symlinked_sound_directories(tmp_path: Path):
     assert resolved_path.resolve() == external_file.resolve()
 
 
+def test_sound_plan_prefers_configured_sounds_directory(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    configured_sounds = tmp_path / "example_sounds"
+    configured_file = configured_sounds / "court" / "gavel.wav"
+    configured_file.parent.mkdir(parents=True, exist_ok=True)
+    configured_file.write_bytes(b"gavel")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        sounds_directory=configured_sounds,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == configured_file
+            return asyncio.create_task(asyncio.sleep(0, result=np.ones(1, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Order.
+                    <sound ref="court/gavel" />
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            sound_plan = await root.script_nodes[0].child_elements_named("sound")[0].plan(ainjector)
+            await sound_plan.render()
+            return sound_plan.resolved_path
+        finally:
+            injector.close()
+
+    resolved_path = asyncio.run(runner())
+    assert resolved_path == configured_file
+
+
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

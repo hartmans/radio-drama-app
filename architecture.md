@@ -29,7 +29,7 @@ Current document contract:
 * `<script preset="...">` selects a named render-time effect preset
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
-* relative `<sound>` references are resolved under a `sounds/` tree next to the source XML document
+* relative `<sound>` references are resolved under a configured sounds directory when one is supplied, otherwise under a `sounds/` tree next to the source XML document
 * a script may contain stanza continuation lines and paragraph breaks
 * an empty script is valid
 
@@ -102,6 +102,7 @@ Current resource contract:
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
+* `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 
 The important boundary is that plans create semantic requests and resources fulfill them. Higher-level planning code should not embed model-specific batching or loading mechanics.
 
