@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -1124,6 +1125,19 @@ def test_named_effect_chains_include_demo_presets():
     assert build_named_effect_chain("Narrator").name == "narrator"
     assert build_named_effect_chain("Narrator1").name == "narrator"
     assert build_named_effect_chain("Narrator2").name == "thoughts"
+
+
+def test_master_effect_chain_preserves_output_format():
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
+
+    chain = build_named_effect_chain("master")
+    audio = np.linspace(-0.2, 0.2, 1024, dtype=np.float32)
+    stereo_audio = np.column_stack([audio, audio])
+    result = chain.apply(RenderResult(audio=stereo_audio), sample_rate=48000)
+
+    assert result.audio.shape == stereo_audio.shape
+    assert result.audio.dtype == np.float32
 
 
 def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):

@@ -70,6 +70,7 @@ class FFmpegFilterEffectStage:
         from scipy.io import wavfile
 
         normalized = normalize_audio_array(audio)
+        output_channels = 1 if normalized.ndim == 1 else normalized.shape[1]
         with tempfile.TemporaryDirectory(prefix="radio-drama-ffmpeg-") as temp_dir:
             temp_path = Path(temp_dir)
             input_path = temp_path / "input.wav"
@@ -86,6 +87,10 @@ class FFmpegFilterEffectStage:
                 str(input_path),
                 "-af",
                 self.filter_graph,
+                "-ar",
+                str(sample_rate),
+                "-ac",
+                str(output_channels),
                 "-c:a",
                 "pcm_f32le",
                 str(output_path),
