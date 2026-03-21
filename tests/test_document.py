@@ -68,6 +68,40 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
+def test_production_allows_direct_sound_without_speaker_map():
+    root = parse_production_string(
+        """
+        <production>
+          <sound ref="door" />
+        </production>
+        """,
+        source_name="production-sound.xml",
+    )
+
+    sound_nodes = root.child_elements_named("sound")
+    assert len(sound_nodes) == 1
+    assert sound_nodes[0].ref == "door"
+
+
+def test_script_allows_nested_script():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script>
+            Anna: Outer line.
+            <script>Anna: Inner line.</script>
+          </script>
+        </production>
+        """,
+        source_name="nested-script.xml",
+    )
+
+    nested_scripts = root.script_nodes[0].child_elements_named("script")
+    assert len(nested_scripts) == 1
+    assert "Anna: Inner line." in nested_scripts[0].normalized_text_content
+
+
 def test_sound_rejects_missing_ref():
     with pytest.raises(DocumentError, match="<sound> requires either a ref attribute or text content"):
         parse_production_string(

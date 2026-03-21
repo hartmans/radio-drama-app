@@ -20,13 +20,14 @@ The XML document is parsed into a semantic tree of `DocumentNode` objects. These
 Current document contract:
 
 * the root is `<production>`
-* `<production>` contains exactly one `<speaker-map>`
-* `<production>` contains one or more `<script>` elements in document order
 * document nodes retain XML attributes in `DocumentNode.attributes`
+* concrete element classes declare a class-level `tag_name`
+* child placement is driven by class-level contexts rather than by per-instance child-tag dictionaries
+* `<production>` may contain zero or one `<speaker-map>` elements plus any element permitted in the audio-plan context
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
 * `<script preset="...">` selects a named render-time effect preset
-* `<script>` may also contain inline `<sound>` elements
+* `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * relative `<sound>` references are resolved under a `sounds/` tree next to the source XML document
 * a script may contain stanza continuation lines and paragraph breaks
@@ -38,6 +39,7 @@ The document layer is responsible for:
 * enforcing document structure
 * exposing semantic nodes that know how to plan themselves into planning objects
 * normalizing document-authored sound references even before sound planning exists
+* maintaining the context registry that turns “this node is permitted in audio-plan contexts” and “this node accepts audio-plan contexts” into `allowed_child_tags`
 
 The document layer is not responsible for model loading, batching, or resource ownership.
 
@@ -57,10 +59,12 @@ Current planning contract:
 * document nodes may set `pre_gap`, `post_gap`, or `length`, but not `pre_margin` or `post_margin`
 * `length` and `post_gap` are mutually exclusive on one document node
 * `set_gap=False` is used for wrapper plans whose timing must remain owned by an inner audio plan
+* productions are planned by walking element children in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
 
 Current plan types:
 
 * `SpeakerMapPlan`: validates and resolves speaker names to voice references
+  once ready, it registers itself in the production injector so later scripts can find it
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
   `DialogueLine` holds spoken text
@@ -71,7 +75,7 @@ Current plan types:
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan`: renders child `AudioPlan`s into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
-* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving script order after the shared speaker map is ready
+* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
   the final production render is then wrapped in a top-level `PresetPlan("master")`
 
 Planning rule for presets:
@@ -82,6 +86,7 @@ Planning rule for presets:
 * marker indexes are assigned during `ScriptPlan.from_node()` and refer to insertion fenceposts in the original script contents rather than to absolute times
 * if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
+* a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.

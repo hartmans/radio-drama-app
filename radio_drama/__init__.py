@@ -1,8 +1,10 @@
 from .audio import convert_audio_format, convert_channel_count, resample_audio
 from .config import ProductionConfig
 from .document import (
+    AudioPlanContext,
     DocumentNode,
     ElementNode,
+    ElementContext,
     ProductionNode,
     ScriptNode,
     SpeakerMapNode,
@@ -49,12 +51,14 @@ __all__ = [
     "ComposeAudioPlan",
     "DialogueAudio",
     "DialogueContents",
+    "AudioPlanContext",
     "convert_audio_format",
     "convert_channel_count",
     "DialogueLine",
     "DocumentError",
     "DocumentNode",
     "ElementNode",
+    "ElementContext",
     "EffectChain",
     "FFmpegFilterEffectStage",
     "AlignedScriptResult",

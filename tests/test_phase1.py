@@ -148,6 +148,92 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
     assert render_result.channel_count == 2
 
 
+def test_production_with_direct_sound_renders_without_speaker_map(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([1.0, 2.0], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            plan = await root.plan(ainjector)
+            return plan, await plan.audio_plan.render()
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    assert isinstance(plan, PresetPlan)
+    assert result.audio.tolist() == [1.0, 2.0]
+
+
+def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <script>Anna: Hello.</script>
+                </production>
+                """,
+                source_name="missing-speaker-map.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="requires a <speaker-map> to be planned before it"):
+        asyncio.run(runner())
+
+
+def test_production_plan_rejects_duplicate_speaker_maps(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <speaker-map>Ben: anna.wav</speaker-map>
+                </production>
+                """,
+                source_name="duplicate-speaker-map.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="may contain only one <speaker-map>"):
+        asyncio.run(runner())
+
+
 def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

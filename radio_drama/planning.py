@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import numpy as np
 import yaml
-from carthage.dependency_injection import AsyncInjectable, Injector, inject
+from carthage.dependency_injection import (
+    AsyncInjectable,
+    ExistingProvider,
+    InjectionKey,
+    Injector,
+    inject,
+)
 
 from .config import ProductionConfig
 from .errors import DocumentError
@@ -22,6 +28,7 @@ if TYPE_CHECKING:
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
+PRODUCTION_PLANNING_INJECTOR_KEY = InjectionKey("radio_drama.production_planning_injector")
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +227,19 @@ class SpeakerMapPlan(PlanningNode):
             )
 
         self._voices_by_key = voices_by_key
+        production_injector = self._production_injector()
+        if production_injector is not None:
+            try:
+                production_injector.add_provider(self)
+            except ExistingProvider as exc:
+                raise self.document_error("A <production> may contain only one <speaker-map>") from exc
         return await super().async_ready()
+
+    def _production_injector(self) -> Injector | None:
+        provider_injector = self.ainjector.injector.injector_containing(PRODUCTION_PLANNING_INJECTOR_KEY)
+        if provider_injector is None:
+            return None
+        return provider_injector.get_instance(PRODUCTION_PLANNING_INJECTOR_KEY)
 
     def lookup(self, speaker_name: str) -> SpeakerVoiceReference:
         return self._voices_by_key[speaker_name.strip().lower()]
@@ -280,12 +299,13 @@ class SpeakerMapPlan(PlanningNode):
         return None
 
 
-@inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)
+@inject(config=ProductionConfig)
 class ScriptPlan(AudioPlan):
     """Plan for one script element and its eventual speech render request."""
 
     def __init__(self, node: ScriptNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
+        self.speaker_map_plan: SpeakerMapPlan | None = None
         self.contents: list[DialogueContents] = []
         self.ordered_speakers: list[SpeakerVoiceReference] = []
         self.render_request: ScriptRenderRequest | None = None
@@ -293,6 +313,7 @@ class ScriptPlan(AudioPlan):
 
     async def async_ready(self):
         """Normalize dialogue and register the request with the shared resource."""
+        self.speaker_map_plan = self._require_speaker_map_plan()
         self.contents = await self._parse_contents()
         self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
         if len(self.ordered_speakers) > 4:
@@ -317,6 +338,14 @@ class ScriptPlan(AudioPlan):
         resource = await self.ainjector.get_instance_async(VibeVoiceResource)
         self._registered_request = await resource.register_request(self.render_request)
         return await super().async_ready()
+
+    def _require_speaker_map_plan(self) -> SpeakerMapPlan:
+        provider_injector = self.ainjector.injector.injector_containing(SpeakerMapPlan)
+        if provider_injector is None:
+            raise self.document_error(
+                "A <script> requires a <speaker-map> to be planned before it"
+            )
+        return provider_injector.get_instance(SpeakerMapPlan)
 
     async def render_node(self) -> RenderResult:
         return self.with_plan_timing(await self._registered_request.render())
@@ -594,7 +623,7 @@ class SlicePlan(AudioPlan):
         return RenderResult(audio=self.result.audio[start_frame:end_frame])
 
 
-@inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)
+@inject(config=ProductionConfig)
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
@@ -604,7 +633,6 @@ class ProductionPlan(ComposeAudioPlan):
 
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and clip to the production boundary."""
-        await self.speaker_map_plan.render()
         combined = await super().render_node()
         trimmed = self._trim_to_production_boundary(combined)
         return ProductionResult(

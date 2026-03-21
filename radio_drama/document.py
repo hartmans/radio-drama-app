@@ -6,6 +6,7 @@ import textwrap
 import xml.sax
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from .errors import DocumentError, SourceLocation
 
@@ -50,10 +51,31 @@ class TextNode(DocumentNode):
 @dataclass(slots=True)
 class ElementNode(DocumentNode):
     """Base class for semantic XML elements with ordered child nodes."""
-    tag_name: str = ""
+
+    tag_name: ClassVar[str] = ""
+    allowed_child_tags: ClassVar[dict[str, type["ElementNode"]]] = {}
+    permitted_in_contexts: ClassVar[tuple["ElementContext", ...]] = ()
+    accepts_contexts: ClassVar[tuple["ElementContext", ...]] = ()
+    allow_text: ClassVar[bool] = False
+
     children: list[DocumentNode] = field(default_factory=list)
-    allowed_child_tags: dict[str, type["ElementNode"]] = field(default_factory=dict, init=False)
-    allow_text: bool = field(default=False, init=False)
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        cls.allowed_child_tags = dict(getattr(cls, "allowed_child_tags", {}))
+        cls.permitted_in_contexts = tuple(getattr(cls, "permitted_in_contexts", ()))
+        cls.accepts_contexts = tuple(getattr(cls, "accepts_contexts", ()))
+
+        for context in cls.permitted_in_contexts:
+            _register_context_class(context.is_this_context, cls)
+        for context in cls.permitted_in_contexts:
+            for accepting_cls in tuple(context.accepts_this_context):
+                _register_allowed_child(accepting_cls, cls)
+
+        for context in cls.accepts_contexts:
+            _register_context_class(context.accepts_this_context, cls)
+        for context in cls.accepts_contexts:
+            for child_cls in tuple(context.is_this_context):
+                _register_allowed_child(cls, child_cls)
 
     @property
     def display_name(self) -> str:
@@ -79,7 +101,6 @@ class ElementNode(DocumentNode):
         )
         return child_type(
             location=location,
-            tag_name=tag_name,
             attributes=dict(attributes or {}),
         )
 
@@ -122,28 +143,66 @@ class ElementNode(DocumentNode):
 
 
 @dataclass(slots=True)
+class ElementContext:
+    """Registry describing which element classes accept or inhabit a context."""
+
+    accepts_this_context: list[type[ElementNode]] = field(default_factory=list)
+    is_this_context: list[type[ElementNode]] = field(default_factory=list)
+
+
+def _register_allowed_child(
+    parent_cls: type[ElementNode],
+    child_cls: type[ElementNode],
+) -> None:
+    if not child_cls.tag_name:
+        return
+    parent_cls.allowed_child_tags[child_cls.tag_name] = child_cls
+
+
+def _register_context_class(
+    classes: list[type[ElementNode]],
+    cls: type[ElementNode],
+) -> None:
+    for index, existing in enumerate(classes):
+        if existing is cls:
+            return
+        if _same_declared_class(existing, cls):
+            classes[index] = cls
+            return
+    classes.append(cls)
+
+
+def _same_declared_class(left: type[ElementNode], right: type[ElementNode]) -> bool:
+    return (
+        left.__module__ == right.__module__
+        and left.__qualname__ == right.__qualname__
+    )
+
+
+AudioPlanContext = ElementContext()
+
+
+@dataclass(slots=True)
 class SpeakerMapNode(ElementNode):
     """Document node for the YAML speaker-to-voice mapping."""
-    allow_text: bool = field(default=True, init=False)
+
+    tag_name: ClassVar[str] = "speaker-map"
+    allow_text: ClassVar[bool] = True
 
     async def plan(self, ainjector):
         from .planning import SpeakerMapPlan
 
         return await ainjector(SpeakerMapPlan, node=self)
 
-from .sound import SoundNode
-
 
 @dataclass(slots=True)
 class ScriptNode(ElementNode):
     """Document node for one ordered renderable script unit."""
-    allow_text: bool = field(default=True, init=False)
-    allowed_child_tags: dict[str, type[ElementNode]] = field(
-        default_factory=lambda: {
-            "sound": SoundNode,
-        },
-        init=False,
-    )
+
+    tag_name: ClassVar[str] = "script"
+    allow_text: ClassVar[bool] = True
+    permitted_in_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
+    accepts_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
     @property
     def preset(self) -> str | None:
@@ -162,18 +221,12 @@ class ScriptNode(ElementNode):
 @dataclass(slots=True)
 class ProductionNode(ElementNode):
     """Root document node for one production."""
-    allowed_child_tags: dict[str, type[ElementNode]] = field(
-        default_factory=lambda: {
-            "speaker-map": SpeakerMapNode,
-            "script": ScriptNode,
-        },
-        init=False,
-    )
+
+    tag_name: ClassVar[str] = "production"
+    allowed_child_tags: ClassVar[dict[str, type[ElementNode]]] = {"speaker-map": SpeakerMapNode}
+    accepts_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
     def validate_document(self) -> None:
-        """Validate the current production schema at the document level."""
-        self.require_one_child("speaker-map")
-        self.require_children("script")
         return ElementNode.validate_document(self)
 
     @property
@@ -182,14 +235,12 @@ class ProductionNode(ElementNode):
 
     @property
     def script_nodes(self) -> list[ScriptNode]:
-        return self.require_children("script")
+        return self.child_elements_named("script")
 
     async def plan(self, ainjector):
         """Plan the production in a child injector with shared production resources."""
-        from carthage.dependency_injection import InjectionKey
-
         from .init import radio_drama_injector
-        from .planning import ProductionPlan, SpeakerMapPlan
+        from .planning import PRODUCTION_PLANNING_INJECTOR_KEY, AudioPlan, ProductionPlan
         from .effects import PresetPlan
         from .sound import ProductionDocumentPath
 
@@ -201,19 +252,11 @@ class ProductionNode(ElementNode):
             production_injector.injector_containing(ProductionDocumentPath) is None
             and self.location.source is not None
         ):
-            production_injector.add_provider(
-                InjectionKey(ProductionDocumentPath),
-                ProductionDocumentPath(Path(self.location.source)),
-                close=False,
-            )
+            production_injector.add_provider(ProductionDocumentPath(Path(self.location.source)))
+        production_injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, production_injector)
         production_ainjector = production_injector(type(ainjector))
-        speaker_map_plan = await self.speaker_map_node.plan(production_ainjector)
-        production_injector.add_provider(
-            InjectionKey(SpeakerMapPlan),
-            speaker_map_plan,
-            close=False,
-        )
-        audio_plans = [await script_node.plan(production_ainjector) for script_node in self.script_nodes]
+        planned_children = [await child.plan(production_ainjector) for child in self.element_children]
+        audio_plans = [plan for plan in planned_children if isinstance(plan, AudioPlan)]
         production_plan = await production_ainjector(
             ProductionPlan,
             node=self,
@@ -249,7 +292,7 @@ class _ProductionContentHandler(xml.sax.handler.ContentHandler):
                     "The document root must be <production>",
                     location=location,
                 )
-            root = ProductionNode(location=location, tag_name=name, attributes=attributes)
+            root = ProductionNode(location=location, attributes=attributes)
             self.root = root
             self.stack.append(root)
             return
@@ -291,6 +334,9 @@ class _ProductionContentHandler(xml.sax.handler.ContentHandler):
             line if line >= 0 else None,
             column + 1 if column >= 0 else None,
         )
+
+
+from . import sound as _sound  # noqa: F401
 
 
 def parse_production_string(xml_text: str, *, source_name: str | None = None) -> ProductionNode:

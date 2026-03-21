@@ -33,7 +33,6 @@ def radio_drama_injector(
         injector.replace_provider(
             InjectionKey(ProductionDocumentPath),
             ProductionDocumentPath(Path(document_path)),
-            close=False,
         )
     if event_loop is not None:
         injector.replace_provider(

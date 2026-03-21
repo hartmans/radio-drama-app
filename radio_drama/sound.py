@@ -6,13 +6,14 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import ClassVar
 
 import soundfile as sf
 from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import SUPPORTED_AUDIO_EXTENSIONS, normalize_audio_array
 from .config import ProductionConfig
-from .document import ElementNode
+from .document import AudioPlanContext, ElementContext, ElementNode
 from .planning import AudioPlan
 from .rendering import RenderResult
 
@@ -100,7 +101,9 @@ class NormalizedSoundCache(AsyncInjectable):
 class SoundNode(ElementNode):
     """Document node for an inline named sound reference."""
 
-    allow_text: bool = field(default=True, init=False)
+    tag_name: ClassVar[str] = "sound"
+    allow_text: ClassVar[bool] = True
+    permitted_in_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
     @property
     def ref(self) -> str:
