@@ -14,7 +14,7 @@ from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ConcatAudioPlan, DialogueAudio, ScriptRenderRequest
+from radio_drama.planning import ComposeAudioPlan, DialogueAudio, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -212,7 +212,7 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
             injector.close()
 
     audio_plan, sound_result = asyncio.run(runner())
-    assert isinstance(audio_plan, ConcatAudioPlan)
+    assert isinstance(audio_plan, ComposeAudioPlan)
     assert [type(child).__name__ for child in audio_plan.audio_plans] == [
         "ScriptSlice",
         "SoundPlan",
@@ -562,7 +562,7 @@ def test_script_slice_and_concat_splice_sound_audio(tmp_path: Path):
             injector.close()
 
     audio_plan, result = asyncio.run(runner())
-    assert isinstance(audio_plan, ConcatAudioPlan)
+    assert isinstance(audio_plan, ComposeAudioPlan)
     assert result.audio.tolist() == [1.0, 2.0, 8.0, 9.0, 3.0, 4.0]
 
 
@@ -743,6 +743,116 @@ def test_production_plan_applies_script_gaps(tmp_path: Path):
     assert result.audio.tolist() == [1.0, 0.0, 0.0, 0.0, 2.0]
 
 
+def test_production_plan_mixes_overlapping_scripts(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    if request.normalized_script.endswith("1"):
+                        return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+                    return RenderResult(audio=np.array([10.0, 20.0], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script length="0">Anna: Line 1</script>
+                  <script>Anna: Line 2</script>
+                </production>
+                """,
+                source_name="overlap.xml",
+            )
+            plan = await root.plan(ainjector)
+            return plan, await plan.audio_plan.render()
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    assert isinstance(plan, PresetPlan)
+    assert isinstance(plan.audio_plan, ComposeAudioPlan)
+    assert result.audio.tolist() == [11.0, 22.0]
+
+
+def test_production_plan_trims_audio_before_zero(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script pre_gap="-0.25">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="trim-start.xml",
+            )
+            plan = await root.plan(ainjector)
+            return await plan.audio_plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.tolist() == [2.0]
+
+
+def test_production_plan_trims_audio_after_end(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script post_gap="-0.25">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="trim-end.xml",
+            )
+            plan = await root.plan(ainjector)
+            return await plan.audio_plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.tolist() == [1.0]
+
+
 def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -778,7 +888,7 @@ def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
 
     plan, result = asyncio.run(runner())
     assert isinstance(plan, PresetPlan)
-    assert isinstance(plan.audio_plan, ConcatAudioPlan)
+    assert isinstance(plan.audio_plan, ComposeAudioPlan)
     assert result.audio.shape == (33, 2)
     assert np.allclose(result.audio[16], 0.0)
 
@@ -805,6 +915,81 @@ def test_script_gap_attribute_requires_numeric_seconds(tmp_path: Path):
             injector.close()
 
     with pytest.raises(DocumentError, match="<script> post_gap must be a number of seconds"):
+        asyncio.run(runner())
+
+
+def test_script_length_and_post_gap_are_mutually_exclusive(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script length="1.0" post_gap="0.5">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="length-post-gap.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<script> may not specify both length and post_gap"):
+        asyncio.run(runner())
+
+
+def test_script_length_must_be_non_negative(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script length="-1.0">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="negative-length.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<script> length must be non-negative seconds"):
+        asyncio.run(runner())
+
+
+def test_script_margins_cannot_be_set_on_nodes(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script pre_margin="0.5">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="pre-margin.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<script> pre_margin cannot be set on document nodes"):
         asyncio.run(runner())
 
 

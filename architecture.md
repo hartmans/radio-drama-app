@@ -53,8 +53,9 @@ Current planning contract:
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
-* every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, and `post_gap`
-* by default an `AudioPlan` reads timing attributes of the same names from its source XML node
+* every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, `post_gap`, and optional `length`
+* document nodes may set `pre_gap`, `post_gap`, or `length`, but not `pre_margin` or `post_margin`
+* `length` and `post_gap` are mutually exclusive on one document node
 * `set_gap=False` is used for wrapper plans whose timing must remain owned by an inner audio plan
 
 Current plan types:
@@ -68,16 +69,16 @@ Current plan types:
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and marker frames for inline insertions
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
-* `ConcatAudioPlan`: renders child `AudioPlan`s in order, consumes each child result's `pre_gap` and `post_gap` into inserted silence, and concatenates the audio
+* `ComposeAudioPlan`: renders child `AudioPlan`s into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
-* `ProductionPlan`: the top-level `ConcatAudioPlan`, preserving script order after the shared speaker map is ready
+* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving script order after the shared speaker map is ready
   the final production render is then wrapped in a top-level `PresetPlan("master")`
 
 Planning rule for presets:
 
 * `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
 * a plain script produces a `ScriptPlan`
-* if a script contains `DialogueAudio`, planning constructs one shared `AlignedScriptSource` plus a `ConcatAudioPlan` of alternating `ScriptSlice` plans and inline audio plans
+* if a script contains `DialogueAudio`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of alternating `ScriptSlice` plans and inline audio plans
 * marker indexes are assigned during `ScriptPlan.from_node()` and refer to insertion fenceposts in the original script contents rather than to absolute times
 * if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
@@ -107,13 +108,14 @@ Current rendering contract:
 
 * `RenderResult.audio` is a contiguous `float32` numpy array
 * current internal render results are already in production format
-* `RenderResult` retains gap and margin fields for later composition work
+* `RenderResult` retains gap and margin fields for later composition work, but not explicit `length`
 * `ProductionResult` is the top-level rendered output type
 * effect processing consumes and returns `RenderResult`, preserving those fields while replacing the audio buffer
-* inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and concatenating the inserted sounds
+* inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and composing the inserted sounds into the same timeline
 
-Current production behavior is ordered concatenation of rendered script results.
-Script-level `pre_gap` and `post_gap` values are measured in seconds and become actual silence when a `ConcatAudioPlan` joins adjacent child results.
+Current production behavior is timeline composition of rendered script results.
+Script-level `pre_gap` and `post_gap` values are measured in seconds, may be negative, and affect either placement or trimming depending on where the composed result is consumed.
+`length` overrides the natural occupied span of one `AudioPlan` in its parent's composition timeline.
 The final production result is then passed through the `master` preset.
 
 ## Effects and presets

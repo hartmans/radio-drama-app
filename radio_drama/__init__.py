@@ -26,7 +26,7 @@ from .forced_alignment import AlignedScriptResult, AlignedScriptSource, ScriptSl
 from .init import radio_drama_injector
 from .planning import (
     AudioPlan,
-    ConcatAudioPlan,
+    ComposeAudioPlan,
     DialogueAudio,
     DialogueContents,
     DialogueLine,
@@ -46,7 +46,7 @@ __all__ = [
     "AudioPlan",
     "available_effect_chains",
     "build_named_effect_chain",
-    "ConcatAudioPlan",
+    "ComposeAudioPlan",
     "DialogueAudio",
     "DialogueContents",
     "convert_audio_format",

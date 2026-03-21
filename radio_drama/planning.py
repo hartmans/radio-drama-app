@@ -101,11 +101,16 @@ class AudioPlan(PlanningNode):
         self.post_margin = 0.0
         self.pre_gap = 0.0
         self.post_gap = 0.0
+        self.length: float | None = None
         if set_gap and node is not None:
-            self.pre_margin = self._timing_attribute_seconds("pre_margin")
-            self.post_margin = self._timing_attribute_seconds("post_margin")
-            self.pre_gap = self._timing_attribute_seconds("pre_gap")
-            self.post_gap = self._timing_attribute_seconds("post_gap")
+            self._validate_node_timing_attributes()
+            self.pre_gap = cast(float, self._timing_attribute_seconds("pre_gap", allow_negative=True))
+            self.post_gap = cast(float, self._timing_attribute_seconds("post_gap", allow_negative=True))
+            self.length = self._timing_attribute_seconds(
+                "length",
+                allow_negative=False,
+                allow_missing=True,
+            )
 
     async def render(self) -> RenderResult:
         return cast(RenderResult, await super().render())
@@ -116,12 +121,18 @@ class AudioPlan(PlanningNode):
     def leaf_audio_plans(self) -> list["AudioPlan"]:
         return [self]
 
-    def _timing_attribute_seconds(self, attribute_name: str) -> float:
+    def _timing_attribute_seconds(
+        self,
+        attribute_name: str,
+        *,
+        allow_negative: bool,
+        allow_missing: bool = False,
+    ) -> float | None:
         if self.node is None:
-            return 0.0
+            return None if allow_missing else 0.0
         raw_value = self.node.attributes.get(attribute_name)
         if raw_value is None:
-            return 0.0
+            return None if allow_missing else 0.0
         normalized = raw_value.strip()
         if not normalized:
             raise self.document_error(f"{self.node.display_name} {attribute_name} cannot be empty")
@@ -131,11 +142,24 @@ class AudioPlan(PlanningNode):
             raise self.document_error(
                 f"{self.node.display_name} {attribute_name} must be a number of seconds"
             ) from exc
-        if seconds < 0:
+        if not allow_negative and seconds < 0:
             raise self.document_error(
                 f"{self.node.display_name} {attribute_name} must be non-negative seconds"
             )
         return seconds
+
+    def _validate_node_timing_attributes(self) -> None:
+        if self.node is None:
+            return
+        for attribute_name in ("pre_margin", "post_margin"):
+            if attribute_name in self.node.attributes:
+                raise self.document_error(
+                    f"{self.node.display_name} {attribute_name} cannot be set on document nodes"
+                )
+        if "length" in self.node.attributes and "post_gap" in self.node.attributes:
+            raise self.document_error(
+                f"{self.node.display_name} may not specify both length and post_gap"
+            )
 
     def with_plan_timing(self, result: RenderResult) -> RenderResult:
         return RenderResult(
@@ -365,7 +389,7 @@ class ScriptPlan(AudioPlan):
             )
         )
         return await ainjector(
-            ConcatAudioPlan,
+            ComposeAudioPlan,
             node=node,
             audio_plans=audio_plans,
         )
@@ -458,8 +482,8 @@ class ScriptPlan(AudioPlan):
 
 
 @inject(config=ProductionConfig)
-class ConcatAudioPlan(AudioPlan):
-    """Audio plan that concatenates child render results and consumes child gaps."""
+class ComposeAudioPlan(AudioPlan):
+    """Audio plan that places child render results in one mixed timeline."""
 
     def __init__(
         self,
@@ -478,40 +502,69 @@ class ConcatAudioPlan(AudioPlan):
 
     async def render_node(self) -> RenderResult:
         rendered_results = [await audio_plan.render() for audio_plan in self.audio_plans]
-        return self.with_plan_timing(self._concatenate_results(rendered_results))
+        return self.with_plan_timing(self._compose_results(rendered_results))
 
-    def _concatenate_results(self, results: Sequence[RenderResult]) -> RenderResult:
+    def _compose_results(self, results: Sequence[RenderResult]) -> RenderResult:
         if not results:
             return RenderResult.empty(channels=self.config.resolved_output_channels)
+        placements: list[tuple[int, RenderResult]] = []
+        cursor_frame = 0
+        min_start_frame = 0
+        max_end_frame = 0
 
-        segments: list[np.ndarray] = []
-        for index, result in enumerate(results):
-            if index == 0 and result.pre_gap > 0:
-                segments.append(self._silence_audio(result, result.pre_gap))
-            elif index > 0:
-                gap_seconds = results[index - 1].post_gap + result.pre_gap
-                if gap_seconds > 0:
-                    segments.append(self._silence_audio(result, gap_seconds))
-            segments.append(result.audio)
+        for audio_plan, result in zip(self.audio_plans, results, strict=True):
+            pre_gap_frames = self._seconds_to_frames(result.pre_gap)
+            post_gap_frames = self._seconds_to_frames(result.post_gap)
+            start_frame = cursor_frame + pre_gap_frames
+            end_frame = start_frame + result.frame_count
+            placements.append((start_frame, result))
+            min_start_frame = min(min_start_frame, start_frame)
+            max_end_frame = max(max_end_frame, end_frame)
+            cursor_frame += self._occupied_length_frames(
+                audio_plan,
+                result,
+                pre_gap_frames=pre_gap_frames,
+                post_gap_frames=post_gap_frames,
+            )
 
-        final_result = results[-1]
-        if final_result.post_gap > 0:
-            segments.append(self._silence_audio(final_result, final_result.post_gap))
+        audio = self._empty_audio(max(0, max_end_frame - min_start_frame))
+        for start_frame, result in placements:
+            if result.frame_count == 0:
+                continue
+            write_start = start_frame - min_start_frame
+            write_end = write_start + result.frame_count
+            audio[write_start:write_end] += result.audio
 
-        audio = np.concatenate(segments, axis=0) if segments else RenderResult.empty(
-            channels=self.config.resolved_output_channels
-        ).audio
         return RenderResult(
             audio=audio,
             pre_margin=results[0].pre_margin,
             post_margin=results[-1].post_margin,
+            pre_gap=self._frames_to_seconds(min_start_frame),
+            post_gap=self._frames_to_seconds(cursor_frame - max_end_frame),
         )
 
-    def _silence_audio(self, template: RenderResult, seconds: float) -> np.ndarray:
-        frame_count = int(round(seconds * self.config.resolved_output_sample_rate))
-        if template.audio.ndim == 1:
+    def _occupied_length_frames(
+        self,
+        audio_plan: AudioPlan,
+        result: RenderResult,
+        *,
+        pre_gap_frames: int,
+        post_gap_frames: int,
+    ) -> int:
+        if audio_plan.length is not None:
+            return self._seconds_to_frames(audio_plan.length)
+        return pre_gap_frames + result.frame_count + post_gap_frames
+
+    def _seconds_to_frames(self, seconds: float) -> int:
+        return int(round(seconds * self.config.resolved_output_sample_rate))
+
+    def _frames_to_seconds(self, frame_count: int) -> float:
+        return float(frame_count) / self.config.resolved_output_sample_rate
+
+    def _empty_audio(self, frame_count: int) -> np.ndarray:
+        if self.config.resolved_output_channels == 1:
             return np.zeros(frame_count, dtype=np.float32)
-        return np.zeros((frame_count, template.audio.shape[1]), dtype=np.float32)
+        return np.zeros((frame_count, self.config.resolved_output_channels), dtype=np.float32)
 
 
 @inject(config=ProductionConfig)
@@ -542,7 +595,7 @@ class SlicePlan(AudioPlan):
 
 
 @inject(config=ProductionConfig, speaker_map_plan=SpeakerMapPlan)
-class ProductionPlan(ConcatAudioPlan):
+class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
     @property
@@ -550,13 +603,32 @@ class ProductionPlan(ConcatAudioPlan):
         return self.leaf_audio_plans()
 
     async def render_node(self) -> ProductionResult:
-        """Render scripts in document order and concatenate their results."""
+        """Render scripts in document order and clip to the production boundary."""
         await self.speaker_map_plan.render()
         combined = await super().render_node()
+        trimmed = self._trim_to_production_boundary(combined)
         return ProductionResult(
-            audio=combined.audio,
-            pre_margin=combined.pre_margin,
-            post_margin=combined.post_margin,
-            pre_gap=combined.pre_gap,
-            post_gap=combined.post_gap,
+            audio=trimmed.audio,
+            pre_margin=trimmed.pre_margin,
+            post_margin=trimmed.post_margin,
+            pre_gap=trimmed.pre_gap,
+            post_gap=trimmed.post_gap,
+        )
+
+    def _trim_to_production_boundary(self, result: RenderResult) -> RenderResult:
+        trim_start_frames = max(0, -self._seconds_to_frames(result.pre_gap))
+        trim_end_frames = max(0, -self._seconds_to_frames(result.post_gap))
+        end_frame = max(trim_start_frames, result.frame_count - trim_end_frames)
+        audio = result.audio[trim_start_frames:end_frame]
+
+        leading_frames = max(0, self._seconds_to_frames(result.pre_gap))
+        trailing_frames = max(0, self._seconds_to_frames(result.post_gap))
+        if leading_frames > 0:
+            audio = np.concatenate([self._empty_audio(leading_frames), audio], axis=0)
+        if trailing_frames > 0:
+            audio = np.concatenate([audio, self._empty_audio(trailing_frames)], axis=0)
+        return RenderResult(
+            audio=audio,
+            pre_margin=result.pre_margin,
+            post_margin=result.post_margin,
         )
