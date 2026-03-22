@@ -68,6 +68,23 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
+def test_production_allows_mark_nodes_by_attribute_or_text():
+    root = parse_production_string(
+        """
+        <production>
+          <mark id="intro" />
+          <mark>verdict</mark>
+        </production>
+        """,
+        source_name="mark.xml",
+    )
+
+    mark_nodes = root.child_elements_named("mark")
+    assert len(mark_nodes) == 2
+    assert mark_nodes[0].id == "intro"
+    assert mark_nodes[1].id == "verdict"
+
+
 def test_production_allows_direct_sound_without_speaker_map():
     root = parse_production_string(
         """

@@ -143,6 +143,47 @@ class ElementNode(DocumentNode):
 
 
 @dataclass(slots=True)
+class AttributeOrTextValueNode(ElementNode):
+    """Element whose semantic value may be authored as text or one attribute."""
+
+    value_attribute_name: ClassVar[str] = "value"
+
+    @property
+    def value_from_attribute_or_text(self) -> str:
+        attribute_value = self.attributes.get(self.value_attribute_name)
+        normalized_attribute_value = (
+            attribute_value.strip() if attribute_value is not None else ""
+        )
+        normalized_text_value = self.normalized_text_content
+
+        if attribute_value is not None and not normalized_attribute_value:
+            raise self.error(
+                f"{self.display_name} {self.value_attribute_name} attribute cannot be empty"
+            )
+        if (
+            attribute_value is not None
+            and normalized_text_value
+            and normalized_text_value != normalized_attribute_value
+        ):
+            raise self.error(
+                f"{self.display_name} text content must match the "
+                f"{self.value_attribute_name} attribute when both are present"
+            )
+        if normalized_attribute_value:
+            return normalized_attribute_value
+        if normalized_text_value:
+            return normalized_text_value
+        raise self.error(
+            f"{self.display_name} requires either a {self.value_attribute_name} "
+            "attribute or text content"
+        )
+
+    def validate_document(self) -> None:
+        self.value_from_attribute_or_text
+        return ElementNode.validate_document(self)
+
+
+@dataclass(slots=True)
 class ElementContext:
     """Registry describing which element classes accept or inhabit a context."""
 
@@ -216,6 +257,25 @@ class ScriptNode(ElementNode):
         from .planning import ScriptPlan
 
         return await ScriptPlan.from_node(ainjector, self)
+
+
+@dataclass(slots=True)
+class MarkNode(AttributeOrTextValueNode):
+    """Document node for a zero-length named audio mark."""
+
+    tag_name: ClassVar[str] = "mark"
+    allow_text: ClassVar[bool] = True
+    value_attribute_name: ClassVar[str] = "id"
+    permitted_in_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
+
+    @property
+    def id(self) -> str:
+        return self.value_from_attribute_or_text
+
+    async def plan(self, ainjector):
+        from .planning import MarkPlan
+
+        return await ainjector(MarkPlan, node=self, id=self.id)
 
 
 @dataclass(slots=True)

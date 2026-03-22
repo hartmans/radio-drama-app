@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="Output WAV path. Defaults to the input path with a .wav extension.")
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output WAV sample rate override.")
     parser.add_argument("--output-channels", type=int, default=None, help="Output WAV channel count override.")
+    parser.add_argument("--cut-before", default=None, help="Drop all production audio before the named <mark>.")
     parser.add_argument("--batch-size", type=int, default=None, help="Maximum VibeVoice batch size override.")
     parser.add_argument("--device", default=None, help="Preferred torch device override.")
     parser.add_argument("--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override.")
@@ -67,6 +68,8 @@ def main() -> None:
         try:
             ainjector = injector(AsyncInjector)
             production_plan = await production_node.plan(ainjector)
+            if args.cut_before is not None:
+                production_plan.cut_before_mark(args.cut_before)
             production_result = await production_plan.render()
         finally:
             injector.close()

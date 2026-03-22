@@ -8,14 +8,15 @@ import numpy as np
 import pytest
 from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector
 
+import radio_drama.effects as effects_module
 from radio_drama.audio import convert_audio_format
 from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
-from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
+from radio_drama.effects import EffectChain, PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ComposeAudioPlan, DialogueAudio, ScriptPlan, ScriptRenderRequest
+from radio_drama.planning import ComposeAudioPlan, DialogueAudio, MarkPlan, ScriptPlan, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -327,6 +328,68 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
     assert sound_result.channel_count == 2
 
 
+def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 1.0, 2.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated: list[DialogueAudio | object] = []
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.5))
+                else:
+                    updated.append(content)
+            return updated
+
+    monkeypatch.setattr(
+        effects_module,
+        "build_named_effect_chain",
+        lambda name: EffectChain(name=name, stages=()),
+    )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="narrator">
+                    Anna: First line.
+                    <mark id="cut" />
+                    Anna: Second line.
+                  </script>
+                </production>
+                """,
+                source_name="cut-mark.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            production_plan.cut_before_mark("cut")
+            return production_plan.audio_marks, await production_plan.render()
+        finally:
+            injector.close()
+
+    audio_marks, result = asyncio.run(runner())
+    assert audio_marks == ["cut"]
+    assert result.audio.tolist() == [2.0, 2.0]
+
+
 def test_sound_plan_prefers_shallowest_relative_match(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -501,6 +564,57 @@ def test_sound_plan_prefers_configured_sounds_directory(tmp_path: Path):
 
     resolved_path = asyncio.run(runner())
     assert resolved_path == configured_file
+
+
+def test_mark_plan_emits_zero_length_audio_and_one_mark(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <mark id="cut" />
+                </production>
+                """,
+                source_name="mark.xml",
+            )
+            mark_plan = await root.child_elements_named("mark")[0].plan(ainjector)
+            return mark_plan, await mark_plan.render()
+        finally:
+            injector.close()
+
+    mark_plan, result = asyncio.run(runner())
+    assert isinstance(mark_plan, MarkPlan)
+    assert mark_plan.audio_marks == ["cut"]
+    assert result.frame_count == 0
+
+
+def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <mark id="cut" />
+                  <mark>cut</mark>
+                </production>
+                """,
+                source_name="mark-ambiguity.xml",
+            )
+            audio_plans = [await child.plan(ainjector) for child in root.child_elements_named("mark")]
+            return await ainjector(ComposeAudioPlan, node=root, audio_plans=audio_plans)
+        finally:
+            injector.close()
+
+    compose_plan = asyncio.run(runner())
+    assert compose_plan.audio_marks == []
+    with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
+        compose_plan.cut_before_mark("cut")
 
 
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):

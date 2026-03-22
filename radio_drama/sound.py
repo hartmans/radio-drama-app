@@ -13,7 +13,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import SUPPORTED_AUDIO_EXTENSIONS, normalize_audio_array
 from .config import ProductionConfig
-from .document import AudioPlanContext, ElementContext, ElementNode
+from .document import AttributeOrTextValueNode, AudioPlanContext, ElementContext
 from .planning import AudioPlan
 from .rendering import RenderResult
 
@@ -98,32 +98,17 @@ class NormalizedSoundCache(AsyncInjectable):
 
 
 @dataclass(slots=True)
-class SoundNode(ElementNode):
+class SoundNode(AttributeOrTextValueNode):
     """Document node for an inline named sound reference."""
 
     tag_name: ClassVar[str] = "sound"
     allow_text: ClassVar[bool] = True
+    value_attribute_name: ClassVar[str] = "ref"
     permitted_in_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
     @property
     def ref(self) -> str:
-        attribute_ref = self.attributes.get("ref")
-        normalized_attribute_ref = attribute_ref.strip() if attribute_ref is not None else ""
-        normalized_text_ref = self.normalized_text_content
-
-        if attribute_ref is not None and not normalized_attribute_ref:
-            raise self.error("<sound> ref attribute cannot be empty")
-        if attribute_ref is not None and normalized_text_ref and normalized_text_ref != normalized_attribute_ref:
-            raise self.error("<sound> text content must match the ref attribute when both are present")
-        if normalized_attribute_ref:
-            return normalized_attribute_ref
-        if normalized_text_ref:
-            return normalized_text_ref
-        raise self.error("<sound> requires either a ref attribute or text content")
-
-    def validate_document(self) -> None:
-        self.ref
-        return ElementNode.validate_document(self)
+        return self.value_from_attribute_or_text
 
     async def plan(self, ainjector):
         return await ainjector(SoundPlan, node=self)

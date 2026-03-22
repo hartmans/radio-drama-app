@@ -24,7 +24,7 @@ from .audio import SUPPORTED_AUDIO_EXTENSIONS
 
 
 if TYPE_CHECKING:
-    from .document import DocumentNode, ProductionNode, ScriptNode, SpeakerMapNode, TextNode
+    from .document import DocumentNode, MarkNode, ProductionNode, ScriptNode, SpeakerMapNode, TextNode
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
@@ -109,6 +109,8 @@ class AudioPlan(PlanningNode):
         self.pre_gap = 0.0
         self.post_gap = 0.0
         self.length: float | None = None
+        self.audio_marks: list[str] = []
+        self._audio_mark_counts: dict[str, int] = {}
         if set_gap and node is not None:
             self._validate_node_timing_attributes()
             self.pre_gap = cast(float, self._timing_attribute_seconds("pre_gap", allow_negative=True))
@@ -127,6 +129,20 @@ class AudioPlan(PlanningNode):
 
     def leaf_audio_plans(self) -> list["AudioPlan"]:
         return [self]
+
+    def inner_plans(self, *audio_plans: "AudioPlan") -> None:
+        for audio_plan in audio_plans:
+            for audio_mark in audio_plan.audio_marks:
+                mark_count = self._audio_mark_counts.get(audio_mark, 0) + 1
+                self._audio_mark_counts[audio_mark] = mark_count
+                if mark_count == 1:
+                    self.audio_marks.append(audio_mark)
+                elif mark_count == 2:
+                    self.audio_marks.remove(audio_mark)
+
+    def cut_before_mark(self, audio_mark: str) -> None:
+        if audio_mark not in self.audio_marks:
+            raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     def _timing_attribute_seconds(
         self,
@@ -175,6 +191,27 @@ class AudioPlan(PlanningNode):
             post_margin=self.post_margin if self.post_margin != 0.0 else result.post_margin,
             pre_gap=self.pre_gap if self.pre_gap != 0.0 else result.pre_gap,
             post_gap=self.post_gap if self.post_gap != 0.0 else result.post_gap,
+        )
+
+    def _rebuild_audio_marks(self, audio_plans: Sequence["AudioPlan"]) -> None:
+        self.audio_marks.clear()
+        self._audio_mark_counts.clear()
+        self.inner_plans(*audio_plans)
+
+
+@inject(config=ProductionConfig)
+class MarkPlan(AudioPlan):
+    """Zero-length plan that introduces one named cut mark."""
+
+    def __init__(self, node: "MarkNode", id: str, **kwargs) -> None:
+        super().__init__(node=node, **kwargs)
+        self.id = id
+        self.audio_marks.append(id)
+        self._audio_mark_counts[id] = 1
+
+    async def render_node(self) -> RenderResult:
+        return self.with_plan_timing(
+            RenderResult.empty(channels=self.config.resolved_output_channels)
         )
 
 
@@ -522,12 +559,24 @@ class ComposeAudioPlan(AudioPlan):
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.audio_plans = list(audio_plans)
+        self.inner_plans(*self.audio_plans)
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         flattened: list[AudioPlan] = []
         for audio_plan in self.audio_plans:
             flattened.extend(audio_plan.leaf_audio_plans())
         return flattened
+
+    def cut_before_mark(self, audio_mark: str) -> None:
+        super().cut_before_mark(audio_mark)
+        for index, audio_plan in enumerate(self.audio_plans):
+            if audio_mark not in audio_plan.audio_marks:
+                continue
+            self.audio_plans = self.audio_plans[index:]
+            self.audio_plans[0].cut_before_mark(audio_mark)
+            self._rebuild_audio_marks(self.audio_plans)
+            return
+        raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     async def render_node(self) -> RenderResult:
         rendered_results = [await audio_plan.render() for audio_plan in self.audio_plans]

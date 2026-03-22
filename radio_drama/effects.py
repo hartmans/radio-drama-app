@@ -152,12 +152,18 @@ class PresetPlan(AudioPlan):
         super().__init__(node=node, set_gap=False, **kwargs)
         self.audio_plan = audio_plan
         self.preset_name = preset_name
+        self.inner_plans(audio_plan)
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         return self.audio_plan.leaf_audio_plans()
 
     def __getattr__(self, name: str):
         return getattr(self.audio_plan, name)
+
+    def cut_before_mark(self, audio_mark: str) -> None:
+        super().cut_before_mark(audio_mark)
+        self.audio_plan.cut_before_mark(audio_mark)
+        self._rebuild_audio_marks((self.audio_plan,))
 
     async def render_node(self) -> RenderResult:
         base_result = await self.audio_plan.render()

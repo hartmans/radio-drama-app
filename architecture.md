@@ -29,6 +29,7 @@ Current document contract:
 * `<script preset="...">` selects a named render-time effect preset
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
+* `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
 * relative `<sound>` references are resolved under a configured sounds directory when one is supplied, otherwise under a `sounds/` tree next to the source XML document
 * a script may contain stanza continuation lines and paragraph breaks
 * an empty script is valid
@@ -39,6 +40,7 @@ The document layer is responsible for:
 * enforcing document structure
 * exposing semantic nodes that know how to plan themselves into planning objects
 * normalizing document-authored sound references even before sound planning exists
+* normalizing element values that may be authored either in text content or in one distinguished attribute
 * maintaining the context registry that turns “this node is permitted in audio-plan contexts” and “this node accepts audio-plan contexts” into `allowed_child_tags`
 
 The document layer is not responsible for model loading, batching, or resource ownership.
@@ -70,6 +72,7 @@ Current plan types:
   `DialogueLine` holds spoken text
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan`: resolves one sound asset, starts cached normalization work during `async_ready()`, and renders the normalized production-format sound
+* `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and marker frames for inline insertions
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
@@ -77,6 +80,14 @@ Current plan types:
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
   the final production render is then wrapped in a top-level `PresetPlan("master")`
+
+Current mark/cut contract:
+
+* every `AudioPlan` exposes `audio_marks`, the set of unambiguous named cut points bubbled up from its immediate inner plans
+* `MarkPlan` is the only leaf plan that introduces a new mark
+* container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
+* `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
+* `PresetPlan` passes mark bubbling and cutting through to the wrapped audio plan, so top-level production cuts can target marks inside nested script composition
 
 Planning rule for presets:
 
