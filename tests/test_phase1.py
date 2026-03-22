@@ -14,9 +14,25 @@ from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import EffectChain, PresetPlan, available_effect_chains, build_named_effect_chain
-from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
+from radio_drama.forced_alignment import (
+    AlignedClause,
+    AlignedScriptSource,
+    AlignmentResult,
+    ScriptSlice,
+    WhisperXResource,
+    fill_start_positions_from_alignment,
+)
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import AudioPlan, ComposeAudioPlan, DialogueAudio, MarkPlan, ScriptPlan, ScriptRenderRequest
+from radio_drama.planning import (
+    AudioPlan,
+    ComposeAudioPlan,
+    DialogueAudio,
+    DialogueLine,
+    MarkPlan,
+    ScriptPlan,
+    ScriptRenderRequest,
+    SpeakerVoiceReference,
+)
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -733,6 +749,40 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
     log_text = config.debug_log_path.read_text(encoding="utf-8")
     assert "[forced_alignment] 0.000s 'First line for alignment logging.'" in log_text
     assert "[forced_alignment] 0.500s 'Second line for alignment logging.'" in log_text
+
+
+def test_forced_alignment_uses_exact_clause_boundaries_without_word_alignment():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="We will have order in this court."),
+        DialogueLine(
+            speaker=speaker,
+            spoken_text="Mr. Brennan, have you proved the elements necessary to invoke involuntary truth finding?",
+        ),
+    ]
+    alignment = AlignmentResult(
+        words=(),
+        clauses=(
+            AlignedClause(
+                text="We will have order in this court.",
+                start=12.0,
+                end=14.0,
+            ),
+            AlignedClause(
+                text="Mr. Brennan, have you proved the elements necessary to invoke involuntary truth finding?",
+                start=14.0,
+                end=19.5,
+            ),
+        ),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert [content.start_pos for content in filled] == [12.0, 14.0]
 
 
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):

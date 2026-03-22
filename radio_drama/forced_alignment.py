@@ -109,6 +109,10 @@ class WhisperXResource(AsyncInjectable):
             language=_WHISPERX_LANGUAGE,
         )
         transcription = model.transcribe(mono_audio, batch_size=1, language=_WHISPERX_LANGUAGE)
+        transcription_clauses = _clauses_from_segments(transcription["segments"])
+        transcript_lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+        if _line_spans_from_exact_clauses(transcript_lines, transcription_clauses) is not None:
+            return AlignmentResult(words=(), clauses=tuple(transcription_clauses))
         align_model, metadata = whisperx.load_align_model(
             language_code=_WHISPERX_LANGUAGE,
             device=device,
@@ -121,7 +125,10 @@ class WhisperXResource(AsyncInjectable):
             device,
             return_char_alignments=False,
         )
-        return _alignment_result_from_whisperx(aligned)
+        return _alignment_result_from_whisperx(
+            aligned,
+            clauses=transcription_clauses,
+        )
 
 
 @inject(config=ProductionConfig)
@@ -275,6 +282,13 @@ def _line_spans_from_alignment(
     if not dialogue_lines:
         return []
 
+    exact_clause_spans = _line_spans_from_exact_clauses(
+        [line.spoken_text for line in dialogue_lines],
+        alignment.clauses,
+    )
+    if exact_clause_spans is not None:
+        return _stabilize_line_spans(exact_clause_spans)
+
     clause_endings = _clause_endings_by_token_offset(alignment.clauses)
     word_index = 0
     cumulative_line_tokens = 0
@@ -363,18 +377,14 @@ def _dialogue_audio_start_pos(
     return 0.0
 
 
-def _alignment_result_from_whisperx(payload: dict) -> AlignmentResult:
+def _alignment_result_from_whisperx(
+    payload: dict,
+    *,
+    clauses: Sequence[AlignedClause] | None = None,
+) -> AlignmentResult:
     segments = payload.get("segments", [])
     words: list[AlignedWord] = []
-    clauses: list[AlignedClause] = []
     for segment in segments:
-        clauses.append(
-            AlignedClause(
-                text=str(segment.get("text", "")),
-                start=_optional_float(segment.get("start")),
-                end=_optional_float(segment.get("end")),
-            )
-        )
         for word in segment.get("words", []) or []:
             words.append(
                 AlignedWord(
@@ -383,6 +393,8 @@ def _alignment_result_from_whisperx(payload: dict) -> AlignmentResult:
                     end=_optional_float(word.get("end")),
                 )
             )
+    if clauses is None:
+        clauses = _clauses_from_segments(segments)
     return AlignmentResult(words=tuple(words), clauses=tuple(clauses))
 
 
@@ -416,6 +428,58 @@ def _clause_endings_by_token_offset(clauses: Sequence[AlignedClause]) -> dict[in
         token_offset += len(_normalized_tokens(clause.text))
         clause_endings[token_offset] = clause
     return clause_endings
+
+
+def _clauses_from_segments(segments: Sequence[dict]) -> list[AlignedClause]:
+    return [
+        AlignedClause(
+            text=str(segment.get("text", "")),
+            start=_optional_float(segment.get("start")),
+            end=_optional_float(segment.get("end")),
+        )
+        for segment in segments
+    ]
+
+
+def _line_spans_from_exact_clauses(
+    line_texts: Sequence[str],
+    clauses: Sequence[AlignedClause],
+) -> list[tuple[float | None, float | None]] | None:
+    if not line_texts:
+        return []
+
+    clause_index = 0
+    spans: list[tuple[float | None, float | None]] = []
+
+    for line_text in line_texts:
+        target_token_count = len(_normalized_tokens(line_text))
+        accumulated_tokens = 0
+        line_start: float | None = None
+        line_end: float | None = None
+
+        while accumulated_tokens < target_token_count and clause_index < len(clauses):
+            clause = clauses[clause_index]
+            clause_index += 1
+            clause_token_count = len(_normalized_tokens(clause.text))
+            if clause_token_count == 0:
+                continue
+            if line_start is None and clause.start is not None:
+                line_start = clause.start
+            if clause.end is not None:
+                line_end = clause.end
+            accumulated_tokens += clause_token_count
+
+        if accumulated_tokens != target_token_count:
+            return None
+        spans.append((line_start, line_end))
+
+    remaining_clause_tokens = sum(
+        len(_normalized_tokens(clause.text))
+        for clause in clauses[clause_index:]
+    )
+    if remaining_clause_tokens != 0:
+        return None
+    return spans
 
 
 def _normalized_tokens(text: str) -> list[str]:
