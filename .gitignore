@@ -1,3 +1,5 @@
 vibevoice_app.py
 frontend/dist/
 frontend/node_modules/
+
+.venv

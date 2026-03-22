@@ -4,22 +4,26 @@ This app renders a production XML document into a radio drama WAV file. It can a
 
 ## Quick Start
 
-The project assumes you are using the existing virtual environment at `~/ai/vibevoice/.venv` and that model dependencies are already installed there.
+```console
+python -mvenv .venv
+.venv/bin/python install -r requirements.txt
+```
+You will need a copy of the VibeVoice-Large model, which has been removed by microsoft from Huggingface. See [community pages](https://github.com/vibevoice-community/vibevoice) for download instructions. The license of the model is clearly open weight; if you can obtain a copy its legality is clear.
 
 Render the included demo:
 
 ```bash
-~/ai/vibevoice/.venv/bin/python radio_drama_app.py \
+.venv/bin/python radio_drama_app.py \
   demo.xml \
   --voice-dir example_voices \
   --sounds-dir example_sounds \
   --output demo.wav
 ```
 
-Launch the preset-preview backend against the same demo:
+You probably don't want the preset preview backend; it is mostly there for debugging effects chains. But you could launch it:
 
 ```bash
-~/ai/vibevoice/.venv/bin/python -m radio_drama.backend \
+.venv/bin/python -m radio_drama.backend \
   demo.xml \
   --voice-dir example_voices \
   --sounds-dir example_sounds
@@ -213,3 +217,13 @@ Render it with:
   --sounds-dir example_sounds \
   --output demo.wav
 ```
+
+## Voices
+
+Voices were produced using the VoiceDesign model from [Qwen TTS](https://github.com/QwenLLM/Qwen3-TTS)
+The example sounds are from freesound.org.
+* [gavel](https://freesound.org/people/Science_Witch/sounds/762733/)
+
+## Development Style
+
+This app was mostly vibe coded with Codex and GPT 5.4. There was initial architecture work as input to Codex, and significant code inspection and refactoring instruction to produce an extensible code base.
