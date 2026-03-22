@@ -627,10 +627,6 @@ class SlicePlan(AudioPlan):
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
-    @property
-    def script_plans(self) -> list[AudioPlan]:
-        return self.leaf_audio_plans()
-
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and clip to the production boundary."""
         combined = await super().render_node()

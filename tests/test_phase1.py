@@ -15,7 +15,7 @@ from radio_drama.errors import DocumentError
 from radio_drama.effects import PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ComposeAudioPlan, DialogueAudio, ScriptRenderRequest
+from radio_drama.planning import ComposeAudioPlan, DialogueAudio, ScriptPlan, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -1235,7 +1235,8 @@ def test_production_plan_installs_shared_vibevoice_resource(tmp_path: Path):
             plan = await root.plan(ainjector)
             resource_ids = {
                 id(script_plan._registered_request.resource)
-                for script_plan in plan.script_plans
+                for script_plan in plan.leaf_audio_plans()
+                if isinstance(script_plan, ScriptPlan)
             }
             return resource_ids
         finally:
