@@ -154,6 +154,9 @@ class PresetPlan(AudioPlan):
         self.preset_name = preset_name
         self.inner_plans(audio_plan)
 
+    def __repr__(self) -> str:
+        return f"PresetPlan(preset_name={self.preset_name!r})"
+
     def leaf_audio_plans(self) -> list[AudioPlan]:
         return self.audio_plan.leaf_audio_plans()
 

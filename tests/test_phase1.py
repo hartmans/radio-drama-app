@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector
+from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector, inject
 
 import radio_drama.effects as effects_module
 from radio_drama.audio import convert_audio_format
@@ -16,7 +16,7 @@ from radio_drama.errors import DocumentError
 from radio_drama.effects import EffectChain, PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import ComposeAudioPlan, DialogueAudio, MarkPlan, ScriptPlan, ScriptRenderRequest
+from radio_drama.planning import AudioPlan, ComposeAudioPlan, DialogueAudio, MarkPlan, ScriptPlan, ScriptRenderRequest
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.resources import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -615,6 +615,124 @@ def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
     assert compose_plan.audio_marks == []
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_before_mark("cut")
+
+
+def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
+    config = ProductionConfig(
+        output_sample_rate=4,
+        output_channels=1,
+        debug_log_path=tmp_path / "render.wav.log",
+        debug_categories=("compose_audio",),
+    )
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, label: str, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.label = label
+            self.result = result
+
+        def __repr__(self) -> str:
+            return f"FakeAudioPlan({self.label!r})"
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            first = await ainjector(
+                FakeAudioPlan,
+                label="first",
+                result=RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32)),
+            )
+            second = await ainjector(
+                FakeAudioPlan,
+                label="second",
+                result=RenderResult(audio=np.array([3.0], dtype=np.float32), pre_gap=0.25),
+            )
+            compose_plan = await ainjector(
+                ComposeAudioPlan,
+                node=parse_production_string("<production />", source_name="compose.xml"),
+                audio_plans=[first, second],
+            )
+            await compose_plan.render()
+        finally:
+            injector.close()
+
+    asyncio.run(runner())
+    log_text = config.debug_log_path.read_text(encoding="utf-8")
+    assert "FakeAudioPlan('first')" in log_text
+    assert "FakeAudioPlan('second')" in log_text
+    assert "0.000s to 0.500s" in log_text
+    assert "0.750s to 1.000s" in log_text
+
+
+def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+        debug_log_path=tmp_path / "render.wav.log",
+        debug_categories=("forced_alignment",),
+    )
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 1.0, 2.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            next_line_start = 0.0
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.5))
+                    continue
+                updated.append(
+                    type(content)(
+                        speaker=content.speaker,
+                        spoken_text=content.spoken_text,
+                        start_pos=next_line_start,
+                    )
+                )
+                next_line_start += 0.5
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First line for alignment logging.
+                    <mark id="cut" />
+                    Anna: Second line for alignment logging.
+                  </script>
+                </production>
+                """,
+                source_name="forced-alignment.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            aligned_source = production_plan.audio_plans[0].audio_plans[0].aligned_script_source
+            await aligned_source.render()
+        finally:
+            injector.close()
+
+    asyncio.run(runner())
+    log_text = config.debug_log_path.read_text(encoding="utf-8")
+    assert "[forced_alignment] 0.000s 'First line for alignment logging.'" in log_text
+    assert "[forced_alignment] 0.500s 'Second line for alignment logging.'" in log_text
 
 
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):

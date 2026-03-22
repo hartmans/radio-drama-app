@@ -114,6 +114,7 @@ Current resource contract:
 * resource output is returned in the configured production sample rate and channel layout
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
+* `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation
 
 The important boundary is that plans create semantic requests and resources fulfill them. Higher-level planning code should not embed model-specific batching or loading mechanics.
 
@@ -134,6 +135,11 @@ Current production behavior is timeline composition of rendered script results.
 Script-level `pre_gap` and `post_gap` values are measured in seconds, may be negative, and affect either placement or trimming depending on where the composed result is consumed.
 `length` overrides the natural occupied span of one `AudioPlan` in its parent's composition timeline.
 The final production result is then passed through the `master` preset.
+
+Current debug hooks:
+
+* `compose_audio` logs the time span where each child plan's samples are placed during composition
+* `forced_alignment` logs each aligned `DialogueLine` start position plus a short text preview
 
 ## Effects and presets
 

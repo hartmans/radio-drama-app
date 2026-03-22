@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+SUPPORTED_DEBUG_CATEGORIES = ("compose_audio", "forced_alignment")
 DEFAULT_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
 DEFAULT_SOUNDS_DIRECTORY = Path("./sounds")
@@ -21,6 +22,8 @@ MODEL_NATIVE_SAMPLE_RATE = 24000
 class ProductionConfig:
     voice_directory: Path | None = None
     sounds_directory: Path | None = None
+    debug_log_path: Path | None = None
+    debug_categories: tuple[str, ...] = ()
     model_name: str | None = None
     output_sample_rate: int | None = None
     output_channels: int | None = None
@@ -35,6 +38,9 @@ class ProductionConfig:
             self.voice_directory = Path(self.voice_directory).expanduser()
         if self.sounds_directory is not None:
             self.sounds_directory = Path(self.sounds_directory).expanduser()
+        if self.debug_log_path is not None:
+            self.debug_log_path = Path(self.debug_log_path).expanduser()
+        self.debug_categories = tuple(dict.fromkeys(self.debug_categories))
 
     @property
     def resolved_voice_directory(self) -> Path:
@@ -43,6 +49,9 @@ class ProductionConfig:
     @property
     def resolved_sounds_directory(self) -> Path:
         return (self.sounds_directory or DEFAULT_SOUNDS_DIRECTORY).expanduser()
+
+    def debug_enabled(self, category: str) -> bool:
+        return category in self.debug_categories
 
     @property
     def resolved_model_name(self) -> str:

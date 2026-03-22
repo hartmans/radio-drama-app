@@ -129,6 +129,10 @@ class SoundPlan(AudioPlan):
         self.resolved_path: Path | None = None
         self._normalized_audio_task: asyncio.Task | None = None
 
+    def __repr__(self) -> str:
+        sound_ref = self.node.ref if self.node is not None else None
+        return f"SoundPlan(ref={sound_ref!r})"
+
     async def async_ready(self):
         await self._ensure_normalized_audio_task()
         return await super().async_ready()

@@ -18,6 +18,7 @@ from carthage.dependency_injection import (
 )
 
 from .config import ProductionConfig
+from .debug import write_debug_message
 from .errors import DocumentError
 from .rendering import ProductionResult, RenderResult
 from .audio import SUPPORTED_AUDIO_EXTENSIONS
@@ -130,6 +131,9 @@ class AudioPlan(PlanningNode):
     def leaf_audio_plans(self) -> list["AudioPlan"]:
         return [self]
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
     def inner_plans(self, *audio_plans: "AudioPlan") -> None:
         for audio_plan in audio_plans:
             for audio_mark in audio_plan.audio_marks:
@@ -208,6 +212,9 @@ class MarkPlan(AudioPlan):
         self.id = id
         self.audio_marks.append(id)
         self._audio_mark_counts[id] = 1
+
+    def __repr__(self) -> str:
+        return f"MarkPlan(id={self.id!r})"
 
     async def render_node(self) -> RenderResult:
         return self.with_plan_timing(
@@ -348,6 +355,12 @@ class ScriptPlan(AudioPlan):
         self.render_request: ScriptRenderRequest | None = None
         self._registered_request = None
 
+    def __repr__(self) -> str:
+        line = self.node.location.line
+        if line is None:
+            return "ScriptPlan(line=unknown)"
+        return f"ScriptPlan(line={line})"
+
     async def async_ready(self):
         """Normalize dialogue and register the request with the shared resource."""
         self.speaker_map_plan = self._require_speaker_map_plan()
@@ -440,6 +453,7 @@ class ScriptPlan(AudioPlan):
                     aligned_script_source=aligned_script_source,
                     start_marker=marker_index,
                     end_marker=marker_index + 1,
+                    name=cls._script_slice_name(script_plan.contents, marker_index),
                 )
             )
             audio_plans.append(content.audio_plan)
@@ -452,6 +466,7 @@ class ScriptPlan(AudioPlan):
                 aligned_script_source=aligned_script_source,
                 start_marker=marker_index,
                 end_marker=marker_index + 1,
+                name=cls._script_slice_name(script_plan.contents, marker_index),
             )
         )
         return await ainjector(
@@ -459,6 +474,26 @@ class ScriptPlan(AudioPlan):
             node=node,
             audio_plans=audio_plans,
         )
+
+    @staticmethod
+    def _script_slice_name(
+        contents: Sequence[DialogueContents],
+        marker_index: int,
+    ) -> str:
+        dialogue_audio_index = 0
+        capture_next_dialogue_line = marker_index == 0
+
+        for content in contents:
+            if isinstance(content, DialogueAudio):
+                if dialogue_audio_index == marker_index:
+                    return repr(content.audio_plan)
+                dialogue_audio_index += 1
+                capture_next_dialogue_line = dialogue_audio_index == marker_index
+                continue
+            if capture_next_dialogue_line:
+                return content.spoken_text[:30]
+
+        return "script end"
 
     async def _parse_contents(self) -> list[DialogueContents]:
         from .document import TextNode
@@ -561,6 +596,9 @@ class ComposeAudioPlan(AudioPlan):
         self.audio_plans = list(audio_plans)
         self.inner_plans(*self.audio_plans)
 
+    def __repr__(self) -> str:
+        return f"ComposeAudioPlan(children={len(self.audio_plans)})"
+
     def leaf_audio_plans(self) -> list[AudioPlan]:
         flattened: list[AudioPlan] = []
         for audio_plan in self.audio_plans:
@@ -595,6 +633,15 @@ class ComposeAudioPlan(AudioPlan):
             post_gap_frames = self._seconds_to_frames(result.post_gap)
             start_frame = cursor_frame + pre_gap_frames
             end_frame = start_frame + result.frame_count
+            write_debug_message(
+                self.config,
+                "compose_audio",
+                (
+                    f"{self!r} places {audio_plan!r} from "
+                    f"{self._frames_to_seconds(start_frame):.3f}s to "
+                    f"{self._frames_to_seconds(end_frame):.3f}s"
+                ),
+            )
             placements.append((start_frame, result))
             min_start_frame = min(min_start_frame, start_frame)
             max_end_frame = max(max_end_frame, end_frame)
@@ -655,6 +702,7 @@ class SlicePlan(AudioPlan):
         *,
         start_time: float,
         end_time: float,
+        name: str | None = None,
         node=None,
         **kwargs,
     ) -> None:
@@ -662,6 +710,16 @@ class SlicePlan(AudioPlan):
         self.result = result
         self.start_time = start_time
         self.end_time = end_time
+        self.name = name
+
+    def __repr__(self) -> str:
+        if self.name is not None:
+            return f"SlicePlan(name={self.name!r})"
+        return (
+            "SlicePlan("
+            f"start_time={self.start_time:.3f}, "
+            f"end_time={self.end_time:.3f})"
+        )
 
     async def render_node(self) -> RenderResult:
         if self.end_time < self.start_time:

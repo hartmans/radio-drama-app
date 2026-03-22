@@ -11,6 +11,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import resample_audio
 from .config import ProductionConfig
+from .debug import write_debug_message
 from .planning import (
     AudioPlan,
     DialogueAudio,
@@ -144,6 +145,15 @@ class AlignedScriptSource(PlanningNode):
         base_result = await self.script_plan.render()
         resource = await self.ainjector.get_instance_async(WhisperXResource)
         self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
+        for content in self.contents:
+            if not isinstance(content, DialogueLine):
+                continue
+            preview = _debug_line_preview(content.spoken_text)
+            write_debug_message(
+                self.config,
+                "forced_alignment",
+                f"{content.start_pos:.3f}s {preview}",
+            )
         return AlignedScriptResult(
             render_result=base_result,
             marker_frames=_marker_frames_from_contents(
@@ -165,6 +175,7 @@ class ScriptSlice(AudioPlan):
         *,
         start_marker: int,
         end_marker: int,
+        name: str | None = None,
         node=None,
         **kwargs,
     ) -> None:
@@ -172,6 +183,16 @@ class ScriptSlice(AudioPlan):
         self.aligned_script_source = aligned_script_source
         self.start_marker = start_marker
         self.end_marker = end_marker
+        self.name = name
+
+    def __repr__(self) -> str:
+        if self.name is not None:
+            return f"ScriptSlice(name={self.name!r})"
+        return (
+            "ScriptSlice("
+            f"start_marker={self.start_marker}, "
+            f"end_marker={self.end_marker})"
+        )
 
     async def render_node(self) -> RenderResult:
         aligned_result = await self.aligned_script_source.render()
@@ -417,3 +438,10 @@ def cast_float(value: float | None) -> float:
     if value is None or math.isnan(value):
         return 0.0
     return float(value)
+
+
+def _debug_line_preview(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= 60:
+        return repr(normalized)
+    return f"{normalized[:30]!r} ... {normalized[-30:]!r}"
