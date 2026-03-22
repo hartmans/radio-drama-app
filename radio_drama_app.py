@@ -8,6 +8,7 @@ import soundfile as sf
 from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.config import ProductionConfig, SUPPORTED_DEBUG_CATEGORIES
+from radio_drama.debug import reset_debug_outputs
 from radio_drama.document import parse_production_file
 from radio_drama.init import radio_drama_injector
 
@@ -71,9 +72,7 @@ def main() -> None:
 
     async def runner() -> None:
         production_node = parse_production_file(args.file)
-        if config.debug_log_path is not None:
-            config.debug_log_path.parent.mkdir(parents=True, exist_ok=True)
-            config.debug_log_path.write_text("", encoding="utf-8")
+        reset_debug_outputs(config)
         injector = radio_drama_injector(
             config=config,
             event_loop=asyncio.get_running_loop(),

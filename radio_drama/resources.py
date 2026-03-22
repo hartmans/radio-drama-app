@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
+from threading import Lock
 from typing import Sequence
 
 import numpy as np
@@ -14,6 +16,7 @@ from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
 from .audio import convert_audio_format
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
+from .debug import write_debug_message, write_debug_wav
 from .planning import ScriptRenderRequest
 from .rendering import RenderResult
 
@@ -52,6 +55,8 @@ class VibeVoiceResource(AsyncInjectable):
         self._pending: list[_PendingRender] = []
         self._pending_lock = asyncio.Lock()
         self._drain_task: asyncio.Task | None = None
+        self._debug_output_index = 0
+        self._debug_output_lock = Lock()
 
     @property
     def sample_rate(self) -> int:
@@ -121,6 +126,7 @@ class VibeVoiceResource(AsyncInjectable):
 
     def _render_batch_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
         generated = self._render_batch_native_sync(batch)
+        self._write_vibevoice_debug_outputs(batch, generated)
         return [
             convert_audio_format(
                 audio,
@@ -258,3 +264,57 @@ class VibeVoiceResource(AsyncInjectable):
         if array.ndim != 1:
             raise ValueError(f"Expected mono audio after generation, got {array.shape!r}")
         return np.ascontiguousarray(array, dtype=np.float32)
+
+    def _write_vibevoice_debug_outputs(
+        self,
+        batch: Sequence[_PendingRender],
+        generated: Sequence[np.ndarray],
+    ) -> None:
+        if not self.config.debug_enabled("vibevoice_output"):
+            return
+
+        start_index = self._reserve_debug_output_indexes(len(generated))
+        for output_index, pending, audio in zip(
+            range(start_index, start_index + len(generated)),
+            batch,
+            generated,
+            strict=True,
+        ):
+            request = pending.registration.request
+            filename = (
+                f"{output_index:03d}-"
+                f"{self._sanitize_debug_label(self._debug_request_label(request))}.wav"
+            )
+            artifact_path = write_debug_wav(
+                self.config,
+                "vibevoice_output",
+                filename,
+                audio,
+                sample_rate=self.sample_rate,
+            )
+            if artifact_path is not None:
+                write_debug_message(
+                    self.config,
+                    "vibevoice_output",
+                    f"{artifact_path.name} sample_rate={self.sample_rate} frames={audio.shape[0]}",
+                )
+
+    def _reserve_debug_output_indexes(self, count: int) -> int:
+        with self._debug_output_lock:
+            start_index = self._debug_output_index
+            self._debug_output_index += count
+        return start_index
+
+    def _debug_request_label(self, request: ScriptRenderRequest) -> str:
+        first_line = next(
+            (line.strip() for line in request.normalized_script.splitlines() if line.strip()),
+            "empty-script",
+        )
+        if ":" in first_line:
+            _, first_line = first_line.split(":", 1)
+        label = " ".join(first_line.split()).strip()
+        return label[:40] or "empty-script"
+
+    def _sanitize_debug_label(self, text: str) -> str:
+        sanitized = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
+        return sanitized or "audio"

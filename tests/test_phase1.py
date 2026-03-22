@@ -3,19 +3,23 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import soundfile as sf
 from carthage.dependency_injection import AsyncInjector, InjectionKey, Injector, inject
 
 import radio_drama.effects as effects_module
 from radio_drama.audio import convert_audio_format
 from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
+from radio_drama.debug import debug_artifact_directory
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.effects import EffectChain, PresetPlan, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import (
     AlignedClause,
+    AlignedWord,
     AlignedScriptSource,
     AlignmentResult,
     ScriptSlice,
@@ -783,6 +787,115 @@ def test_forced_alignment_uses_exact_clause_boundaries_without_word_alignment():
     filled = fill_start_positions_from_alignment(contents, alignment)
 
     assert [content.start_pos for content in filled] == [12.0, 14.0]
+
+
+def test_forced_alignment_prefers_exact_clause_start_when_first_word_is_missing():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="Alpha."),
+        DialogueLine(speaker=speaker, spoken_text="Bravo Charlie."),
+    ]
+    alignment = AlignmentResult(
+        words=(
+            AlignedWord(text="Alpha", start=1.0, end=2.0),
+            AlignedWord(text="Charlie", start=2.5, end=3.0),
+        ),
+        clauses=(
+            AlignedClause(text="Alpha.", start=1.0, end=2.0),
+            AlignedClause(text="Bravo Charlie.", start=2.0, end=4.0),
+        ),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert [content.start_pos for content in filled] == [1.0, 2.0]
+
+
+def test_vibevoice_output_debug_writes_native_wavs(tmp_path: Path):
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        debug_log_path=tmp_path / "output.wav.log",
+        debug_categories=("vibevoice_output",),
+    )
+
+    class FakeDebugResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._sample_rate = MODEL_NATIVE_SAMPLE_RATE
+
+        def _render_batch_native_sync(self, batch):
+            return [np.array([0.25, -0.25], dtype=np.float32)]
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeDebugResource)
+            batch = [
+                SimpleNamespace(
+                    registration=SimpleNamespace(
+                        request=ScriptRenderRequest(
+                            normalized_script="Speaker 1: First line for debug output.",
+                            voice_samples=("anna.wav",),
+                        )
+                    )
+                )
+            ]
+            resource._render_batch_sync(batch)
+        finally:
+            injector.close()
+
+    asyncio.run(runner())
+    artifact_directory = debug_artifact_directory(config, "vibevoice_output")
+    assert artifact_directory is not None
+    artifact_files = sorted(artifact_directory.glob("*.wav"))
+    assert [path.name for path in artifact_files] == ["000-first_line_for_debug_output.wav"]
+    audio, sample_rate = sf.read(artifact_files[0], dtype="float32")
+    assert sample_rate == MODEL_NATIVE_SAMPLE_RATE
+    assert audio.shape == (2,)
+
+
+def test_whisperx_debug_writes_segment_payload(tmp_path: Path):
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        debug_log_path=tmp_path / "output.wav.log",
+        debug_categories=("whisperx",),
+    )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(WhisperXResource)
+            resource._write_whisperx_debug_output(
+                transcript="First debug line.\nSecond debug line.",
+                transcription_segments=[
+                    {"text": "First debug line.", "start": 1.0, "end": 2.0},
+                ],
+                aligned_segments=[
+                    {
+                        "text": "First debug line.",
+                        "start": 1.0,
+                        "end": 2.0,
+                        "words": [{"word": "First", "start": 1.0, "end": 1.3}],
+                    },
+                ],
+                decision="aligned_word_matching",
+            )
+        finally:
+            injector.close()
+
+    asyncio.run(runner())
+    artifact_directory = debug_artifact_directory(config, "whisperx")
+    assert artifact_directory is not None
+    artifact_files = sorted(artifact_directory.glob("*.json"))
+    assert [path.name for path in artifact_files] == ["000-first_debug_line.json"]
+    payload = artifact_files[0].read_text(encoding="utf-8")
+    assert '"decision": "aligned_word_matching"' in payload
+    assert '"transcription_segments"' in payload
+    assert '"aligned_segments"' in payload
 
 
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):

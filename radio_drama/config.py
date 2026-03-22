@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-SUPPORTED_DEBUG_CATEGORIES = ("compose_audio", "forced_alignment")
+SUPPORTED_DEBUG_CATEGORIES = (
+    "compose_audio",
+    "forced_alignment",
+    "vibevoice_output",
+    "whisperx",
+)
 DEFAULT_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
 DEFAULT_SOUNDS_DIRECTORY = Path("./sounds")

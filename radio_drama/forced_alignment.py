@@ -4,6 +4,7 @@ import asyncio
 import math
 import re
 from dataclasses import dataclass
+from threading import Lock
 from typing import Sequence
 
 import numpy as np
@@ -11,7 +12,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import resample_audio
 from .config import ProductionConfig
-from .debug import write_debug_message
+from .debug import write_debug_json, write_debug_message
 from .planning import (
     AudioPlan,
     DialogueAudio,
@@ -61,6 +62,11 @@ class AlignedScriptResult:
 @inject(config=ProductionConfig)
 class WhisperXResource(AsyncInjectable):
     """Forced-alignment resource that prefers WhisperX and falls back heuristically."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._debug_output_index = 0
+        self._debug_output_lock = Lock()
 
     async def fill_start_positions(
         self,
@@ -112,6 +118,12 @@ class WhisperXResource(AsyncInjectable):
         transcription_clauses = _clauses_from_segments(transcription["segments"])
         transcript_lines = [line.strip() for line in transcript.splitlines() if line.strip()]
         if _line_spans_from_exact_clauses(transcript_lines, transcription_clauses) is not None:
+            self._write_whisperx_debug_output(
+                transcript=transcript,
+                transcription_segments=transcription["segments"],
+                aligned_segments=None,
+                decision="transcription_exact_clause_match",
+            )
             return AlignmentResult(words=(), clauses=tuple(transcription_clauses))
         align_model, metadata = whisperx.load_align_model(
             language_code=_WHISPERX_LANGUAGE,
@@ -125,10 +137,55 @@ class WhisperXResource(AsyncInjectable):
             device,
             return_char_alignments=False,
         )
+        self._write_whisperx_debug_output(
+            transcript=transcript,
+            transcription_segments=transcription["segments"],
+            aligned_segments=aligned.get("segments", []),
+            decision="aligned_word_matching",
+        )
         return _alignment_result_from_whisperx(
             aligned,
             clauses=transcription_clauses,
         )
+
+    def _write_whisperx_debug_output(
+        self,
+        *,
+        transcript: str,
+        transcription_segments: Sequence[dict],
+        aligned_segments: Sequence[dict] | None,
+        decision: str,
+    ) -> None:
+        if not self.config.debug_enabled("whisperx"):
+            return
+        output_index = self._reserve_debug_output_index()
+        filename = (
+            f"{output_index:03d}-"
+            f"{_sanitize_debug_label(_debug_transcript_label(transcript))}.json"
+        )
+        artifact_path = write_debug_json(
+            self.config,
+            "whisperx",
+            filename,
+            {
+                "decision": decision,
+                "transcript": transcript,
+                "transcription_segments": list(transcription_segments),
+                "aligned_segments": list(aligned_segments) if aligned_segments is not None else None,
+            },
+        )
+        if artifact_path is not None:
+            write_debug_message(
+                self.config,
+                "whisperx",
+                f"{artifact_path.name} decision={decision}",
+            )
+
+    def _reserve_debug_output_index(self) -> int:
+        with self._debug_output_lock:
+            output_index = self._debug_output_index
+            self._debug_output_index += 1
+        return output_index
 
 
 @inject(config=ProductionConfig)
@@ -289,6 +346,7 @@ def _line_spans_from_alignment(
     if exact_clause_spans is not None:
         return _stabilize_line_spans(exact_clause_spans)
 
+    clause_starts = _clause_starts_by_token_offset(alignment.clauses)
     clause_endings = _clause_endings_by_token_offset(alignment.clauses)
     word_index = 0
     cumulative_line_tokens = 0
@@ -296,6 +354,7 @@ def _line_spans_from_alignment(
 
     for line in dialogue_lines:
         line_tokens = _normalized_tokens(line.spoken_text)
+        line_start_offset = cumulative_line_tokens
         cumulative_line_tokens += len(line_tokens)
         start_time: float | None = None
         end_time: float | None = None
@@ -316,6 +375,9 @@ def _line_spans_from_alignment(
                 end_time = word.end
             token_index += 1
 
+        clause_start = clause_starts.get(line_start_offset)
+        if clause_start is not None and clause_start.start is not None:
+            start_time = clause_start.start
         clause_match = clause_endings.get(cumulative_line_tokens)
         if clause_match is not None:
             if start_time is None and clause_match.start is not None:
@@ -430,6 +492,18 @@ def _clause_endings_by_token_offset(clauses: Sequence[AlignedClause]) -> dict[in
     return clause_endings
 
 
+def _clause_starts_by_token_offset(clauses: Sequence[AlignedClause]) -> dict[int, AlignedClause]:
+    clause_starts: dict[int, AlignedClause] = {}
+    token_offset = 0
+    for clause in clauses:
+        token_count = len(_normalized_tokens(clause.text))
+        if token_count == 0:
+            continue
+        clause_starts[token_offset] = clause
+        token_offset += token_count
+    return clause_starts
+
+
 def _clauses_from_segments(segments: Sequence[dict]) -> list[AlignedClause]:
     return [
         AlignedClause(
@@ -509,3 +583,16 @@ def _debug_line_preview(text: str) -> str:
     if len(normalized) <= 60:
         return repr(normalized)
     return f"{normalized[:30]!r} ... {normalized[-30:]!r}"
+
+
+def _debug_transcript_label(transcript: str) -> str:
+    first_line = next(
+        (line.strip() for line in transcript.splitlines() if line.strip()),
+        "empty-script",
+    )
+    return first_line[:40] or "empty-script"
+
+
+def _sanitize_debug_label(text: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
+    return sanitized or "alignment"

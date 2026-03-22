@@ -140,6 +140,8 @@ Current debug hooks:
 
 * `compose_audio` logs the time span where each child plan's samples are placed during composition
 * `forced_alignment` logs each aligned `DialogueLine` start position plus a short text preview
+* `vibevoice_output` writes model-native WAV artifacts for each rendered script to `OUTPUT.wav.vibevoice/`
+* `whisperx` logs the alignment decision and writes the raw transcription/alignment segment payloads to `OUTPUT.wav.whisperx/`
 
 ## Effects and presets
 
