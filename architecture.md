@@ -112,6 +112,9 @@ Current resource contract:
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
+* `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
+* WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
+* WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 * `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation

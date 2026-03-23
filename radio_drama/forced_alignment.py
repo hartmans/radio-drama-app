@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import math
 import re
 from dataclasses import dataclass
-from threading import Lock
-from typing import Sequence
+from threading import Lock, RLock
+from typing import Any, Sequence
 
 import numpy as np
 from carthage.dependency_injection import AsyncInjectable, inject
@@ -28,6 +29,9 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 _WHISPERX_LANGUAGE = "en"
 _WHISPERX_MODEL = "large-v3"
 _WHISPERX_SAMPLE_RATE = 16000
+_WHISPERX_REQUEST_BATCH_SIZE = 10
+_WHISPERX_TRANSCRIBE_BATCH_SIZE = 10
+_WHISPERX_ALIGNMENT_THREADS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,12 +55,48 @@ class AlignmentResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ForcedAlignmentRequest:
+    audio: np.ndarray
+    sample_rate: int
+    transcript: str
+
+
+@dataclass(frozen=True, slots=True)
+class WhisperXResponse:
+    transcription_segments: tuple[dict[str, Any], ...]
+    aligned_segments: tuple[dict[str, Any], ...] | None
+    decision: str
+
+
+@dataclass(frozen=True, slots=True)
 class AlignedScriptResult:
     """Rendered dry script audio plus marker frames for inline insertions."""
 
     render_result: RenderResult
     marker_frames: tuple[int, ...]
     contents: tuple[DialogueContents, ...]
+
+
+@dataclass(slots=True)
+class RegisteredForcedAlignmentRequest:
+    resource: "WhisperXResource"
+    request: ForcedAlignmentRequest
+    future: asyncio.Future
+
+    async def align(self) -> WhisperXResponse | None:
+        return await self.resource.align_registered_request(self)
+
+
+@dataclass(slots=True)
+class _PendingForcedAlignment:
+    registration: RegisteredForcedAlignmentRequest
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedForcedAlignment:
+    request: ForcedAlignmentRequest
+    mono_audio: np.ndarray
+    transcription_segments: tuple[dict[str, Any], ...] | None
 
 
 @inject(config=ProductionConfig)
@@ -67,6 +107,18 @@ class WhisperXResource(AsyncInjectable):
         super().__init__(**kwargs)
         self._debug_output_index = 0
         self._debug_output_lock = Lock()
+        self._load_lock = RLock()
+        self._pending: list[_PendingForcedAlignment] = []
+        self._pending_lock = asyncio.Lock()
+        self._drain_task: asyncio.Task | None = None
+        self._alignment_executor = ThreadPoolExecutor(
+            max_workers=_WHISPERX_ALIGNMENT_THREADS,
+            thread_name_prefix="whisperx-align",
+        )
+        self._whisperx_module = None
+        self._asr_model = None
+        self._align_model = None
+        self._align_metadata: dict[str, Any] | None = None
 
     async def fill_start_positions(
         self,
@@ -79,13 +131,78 @@ class WhisperXResource(AsyncInjectable):
         transcript = "\n".join(
             content.spoken_text for content in contents if isinstance(content, DialogueLine)
         )
-        alignment = await asyncio.to_thread(
-            self._alignment_result_sync,
-            result.audio,
-            self.config.resolved_output_sample_rate,
+        registration = await self.register_request(
+            ForcedAlignmentRequest(
+                audio=result.audio,
+                sample_rate=self.config.resolved_output_sample_rate,
+                transcript=transcript,
+            )
+        )
+        whisperx_response = await registration.align()
+        alignment = _alignment_result_from_whisperx_response(
             transcript,
+            whisperx_response,
+            duration_seconds=_audio_duration(result.audio, self.config.resolved_output_sample_rate),
         )
         return fill_start_positions_from_alignment(contents, alignment)
+
+    async def register_request(
+        self,
+        request: ForcedAlignmentRequest,
+    ) -> RegisteredForcedAlignmentRequest:
+        loop = asyncio.get_running_loop()
+        registration = RegisteredForcedAlignmentRequest(
+            resource=self,
+            request=request,
+            future=loop.create_future(),
+        )
+        async with self._pending_lock:
+            self._pending.append(_PendingForcedAlignment(registration=registration))
+        return registration
+
+    async def align_registered_request(
+        self,
+        registration: RegisteredForcedAlignmentRequest,
+    ) -> WhisperXResponse | None:
+        if registration.future.done():
+            return await registration.future
+        async with self._pending_lock:
+            if self._drain_task is None or self._drain_task.done():
+                self._drain_task = asyncio.create_task(self._drain_pending())
+        return await registration.future
+
+    async def _drain_pending(self) -> None:
+        while True:
+            await asyncio.sleep(0)
+            async with self._pending_lock:
+                if not self._pending:
+                    self._drain_task = None
+                    return
+                batch = self._pending[:_WHISPERX_REQUEST_BATCH_SIZE]
+                del self._pending[:_WHISPERX_REQUEST_BATCH_SIZE]
+
+            try:
+                responses = await self._process_batch(batch)
+            except Exception as exc:
+                for pending in batch:
+                    if not pending.registration.future.done():
+                        pending.registration.future.set_exception(exc)
+                continue
+
+            for pending, response in zip(batch, responses, strict=True):
+                if not pending.registration.future.done():
+                    pending.registration.future.set_result(response)
+
+    async def _process_batch(
+        self,
+        batch: Sequence[_PendingForcedAlignment],
+    ) -> list[WhisperXResponse | None]:
+        prepared_batch = await asyncio.to_thread(self._prepare_batch_sync, batch)
+        tasks = [
+            self._resolve_prepared_alignment(prepared)
+            for prepared in prepared_batch
+        ]
+        return list(await asyncio.gather(*tasks))
 
     def _alignment_result_sync(
         self,
@@ -93,77 +210,114 @@ class WhisperXResource(AsyncInjectable):
         sample_rate: int,
         transcript: str,
     ) -> AlignmentResult:
-        try:
-            import whisperx  # type: ignore[import-not-found]
-        except ImportError:
-            return _fallback_alignment_result(transcript, duration_seconds=_audio_duration(audio, sample_rate))
-
-        mono_audio = np.asarray(audio, dtype=np.float32)
-        if mono_audio.ndim == 2:
-            mono_audio = mono_audio.mean(axis=1)
-        mono_audio = resample_audio(
-            mono_audio,
-            input_sample_rate=sample_rate,
-            output_sample_rate=_WHISPERX_SAMPLE_RATE,
+        request = ForcedAlignmentRequest(
+            audio=audio,
+            sample_rate=sample_rate,
+            transcript=transcript,
+        )
+        prepared = self._prepare_request_sync(request)
+        whisperx_response = self._resolve_prepared_alignment_sync(prepared)
+        return _alignment_result_from_whisperx_response(
+            transcript,
+            whisperx_response,
+            duration_seconds=_audio_duration(audio, sample_rate),
         )
 
-        device = self.config.resolved_device
-        model = whisperx.load_model(
-            _WHISPERX_MODEL,
-            device=device,
-            compute_type="default",
+    def _prepare_batch_sync(
+        self,
+        batch: Sequence[_PendingForcedAlignment],
+    ) -> list[_PreparedForcedAlignment]:
+        return [
+            self._prepare_request_sync(pending.registration.request)
+            for pending in batch
+        ]
+
+    def _prepare_request_sync(
+        self,
+        request: ForcedAlignmentRequest,
+    ) -> _PreparedForcedAlignment:
+        mono_audio = _whisperx_mono_audio(request.audio, request.sample_rate)
+        try:
+            model = self._ensure_asr_model()
+        except ImportError:
+            return _PreparedForcedAlignment(
+                request=request,
+                mono_audio=mono_audio,
+                transcription_segments=None,
+            )
+
+        transcription = model.transcribe(
+            mono_audio,
+            batch_size=_WHISPERX_TRANSCRIBE_BATCH_SIZE,
             language=_WHISPERX_LANGUAGE,
         )
-        transcription = model.transcribe(mono_audio, batch_size=1, language=_WHISPERX_LANGUAGE)
-        transcription_clauses = _clauses_from_segments(transcription["segments"])
-        transcript_lines = [line.strip() for line in transcript.splitlines() if line.strip()]
+        return _PreparedForcedAlignment(
+            request=request,
+            mono_audio=mono_audio,
+            transcription_segments=tuple(transcription["segments"]),
+        )
+
+    async def _resolve_prepared_alignment(
+        self,
+        prepared: _PreparedForcedAlignment,
+    ) -> WhisperXResponse | None:
+        return await asyncio.get_running_loop().run_in_executor(
+            self._alignment_executor,
+            self._resolve_prepared_alignment_sync,
+            prepared,
+        )
+
+    def _resolve_prepared_alignment_sync(
+        self,
+        prepared: _PreparedForcedAlignment,
+    ) -> WhisperXResponse | None:
+        if prepared.transcription_segments is None:
+            return None
+        transcript_lines = _transcript_lines(prepared.request.transcript)
+        transcription_clauses = _clauses_from_segments(prepared.transcription_segments)
         if _line_spans_from_exact_clauses(transcript_lines, transcription_clauses) is not None:
-            self._write_whisperx_debug_output(
-                transcript=transcript,
-                transcription_segments=transcription["segments"],
+            response = WhisperXResponse(
+                transcription_segments=prepared.transcription_segments,
                 aligned_segments=None,
                 decision="transcription_exact_clause_match",
             )
-            return AlignmentResult(words=(), clauses=tuple(transcription_clauses))
-        align_model, metadata = whisperx.load_align_model(
-            language_code=_WHISPERX_LANGUAGE,
-            device=device,
-        )
+            self._write_whisperx_debug_output(prepared.request.transcript, response)
+            return response
+
+        align_model, metadata = self._ensure_align_model()
+        whisperx = self._ensure_whisperx_module()
+        device = self.config.resolved_device
         aligned = whisperx.align(
-            transcription["segments"],
+            list(prepared.transcription_segments),
             align_model,
             metadata,
-            mono_audio,
+            prepared.mono_audio,
             device,
             return_char_alignments=False,
         )
-        aligned_clauses = _clauses_from_segments(aligned.get("segments", []))
+        aligned_segments = tuple(aligned.get("segments", []))
+        aligned_clauses = _clauses_from_segments(aligned_segments)
         if _line_spans_from_exact_clauses(transcript_lines, aligned_clauses) is not None:
-            self._write_whisperx_debug_output(
-                transcript=transcript,
-                transcription_segments=transcription["segments"],
-                aligned_segments=aligned.get("segments", []),
+            response = WhisperXResponse(
+                transcription_segments=prepared.transcription_segments,
+                aligned_segments=aligned_segments,
                 decision="aligned_exact_clause_match",
             )
-            return AlignmentResult(words=(), clauses=tuple(aligned_clauses))
-        self._write_whisperx_debug_output(
-            transcript=transcript,
-            transcription_segments=transcription["segments"],
-            aligned_segments=aligned.get("segments", []),
+            self._write_whisperx_debug_output(prepared.request.transcript, response)
+            return response
+
+        response = WhisperXResponse(
+            transcription_segments=prepared.transcription_segments,
+            aligned_segments=aligned_segments,
             decision="aligned_word_matching",
         )
-        return _alignment_result_from_whisperx(
-            aligned,
-            clauses=aligned_clauses,
-        )
+        self._write_whisperx_debug_output(prepared.request.transcript, response)
+        return response
 
     def _write_whisperx_debug_output(
         self,
-        *,
         transcript: str,
-        transcription_segments: Sequence[dict],
-        aligned_segments: Sequence[dict] | None,
-        decision: str,
+        response: WhisperXResponse,
     ) -> None:
         if not self.config.debug_enabled("whisperx"):
             return
@@ -177,17 +331,21 @@ class WhisperXResource(AsyncInjectable):
             "whisperx",
             filename,
             {
-                "decision": decision,
+                "decision": response.decision,
                 "transcript": transcript,
-                "transcription_segments": list(transcription_segments),
-                "aligned_segments": list(aligned_segments) if aligned_segments is not None else None,
+                "transcription_segments": list(response.transcription_segments),
+                "aligned_segments": (
+                    list(response.aligned_segments)
+                    if response.aligned_segments is not None
+                    else None
+                ),
             },
         )
         if artifact_path is not None:
             write_debug_message(
                 self.config,
                 "whisperx",
-                f"{artifact_path.name} decision={decision}",
+                f"{artifact_path.name} decision={response.decision}",
             )
 
     def _reserve_debug_output_index(self) -> int:
@@ -195,6 +353,42 @@ class WhisperXResource(AsyncInjectable):
             output_index = self._debug_output_index
             self._debug_output_index += 1
         return output_index
+
+    def _ensure_whisperx_module(self):
+        with self._load_lock:
+            if self._whisperx_module is None:
+                import whisperx  # type: ignore[import-not-found]
+
+                self._whisperx_module = whisperx
+            return self._whisperx_module
+
+    def _ensure_asr_model(self):
+        with self._load_lock:
+            if self._asr_model is not None:
+                return self._asr_model
+            whisperx = self._ensure_whisperx_module()
+            self._asr_model = whisperx.load_model(
+                _WHISPERX_MODEL,
+                self.config.resolved_device,
+                compute_type="default",
+                language=_WHISPERX_LANGUAGE,
+            )
+            return self._asr_model
+
+    def _ensure_align_model(self):
+        with self._load_lock:
+            if self._align_model is not None and self._align_metadata is not None:
+                return self._align_model, self._align_metadata
+            whisperx = self._ensure_whisperx_module()
+            self._align_model, self._align_metadata = whisperx.load_align_model(
+                language_code=_WHISPERX_LANGUAGE,
+                device=self.config.resolved_device,
+            )
+            return self._align_model, self._align_metadata
+
+    def close(self, canceled_futures: bool = True):
+        self._alignment_executor.shutdown(wait=True, cancel_futures=canceled_futures)
+        return super().close(canceled_futures=canceled_futures)
 
 
 @inject(config=ProductionConfig)
@@ -464,6 +658,29 @@ def _alignment_result_from_whisperx(
     return AlignmentResult(words=tuple(words), clauses=tuple(clauses))
 
 
+def _alignment_result_from_whisperx_response(
+    transcript: str,
+    response: WhisperXResponse | None,
+    *,
+    duration_seconds: float,
+) -> AlignmentResult:
+    if response is None:
+        return _fallback_alignment_result(transcript, duration_seconds=duration_seconds)
+    if response.decision == "transcription_exact_clause_match":
+        clauses = _clauses_from_segments(response.transcription_segments)
+        return AlignmentResult(words=(), clauses=tuple(clauses))
+    if response.decision == "aligned_exact_clause_match" and response.aligned_segments is not None:
+        clauses = _clauses_from_segments(response.aligned_segments)
+        return AlignmentResult(words=(), clauses=tuple(clauses))
+    if response.aligned_segments is None:
+        clauses = _clauses_from_segments(response.transcription_segments)
+        return AlignmentResult(words=(), clauses=tuple(clauses))
+    return _alignment_result_from_whisperx(
+        {"segments": list(response.aligned_segments)},
+        clauses=_clauses_from_segments(response.aligned_segments),
+    )
+
+
 def _fallback_alignment_result(transcript: str, *, duration_seconds: float) -> AlignmentResult:
     clauses: list[AlignedClause] = []
     words: list[AlignedWord] = []
@@ -639,6 +856,10 @@ def _normalized_tokens(text: str) -> list[str]:
     return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
+def _transcript_lines(transcript: str) -> list[str]:
+    return [line.strip() for line in transcript.splitlines() if line.strip()]
+
+
 def _optional_float(value) -> float | None:
     if value is None:
         return None
@@ -649,6 +870,17 @@ def _audio_duration(audio: np.ndarray, sample_rate: int) -> float:
     if sample_rate <= 0:
         return 0.0
     return float(audio.shape[0]) / sample_rate
+
+
+def _whisperx_mono_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+    mono_audio = np.asarray(audio, dtype=np.float32)
+    if mono_audio.ndim == 2:
+        mono_audio = mono_audio.mean(axis=1)
+    return resample_audio(
+        mono_audio,
+        input_sample_rate=sample_rate,
+        output_sample_rate=_WHISPERX_SAMPLE_RATE,
+    )
 
 
 def cast_float(value: float | None) -> float:

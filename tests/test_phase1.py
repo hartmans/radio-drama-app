@@ -24,7 +24,9 @@ from radio_drama.forced_alignment import (
     AlignedWord,
     AlignedScriptSource,
     AlignmentResult,
+    ForcedAlignmentRequest,
     ScriptSlice,
+    WhisperXResponse,
     WhisperXResource,
     fill_start_positions_from_alignment,
 )
@@ -1017,19 +1019,21 @@ def test_whisperx_debug_writes_segment_payload(tmp_path: Path):
         try:
             resource = await ainjector(WhisperXResource)
             resource._write_whisperx_debug_output(
-                transcript="First debug line.\nSecond debug line.",
-                transcription_segments=[
-                    {"text": "First debug line.", "start": 1.0, "end": 2.0},
-                ],
-                aligned_segments=[
-                    {
-                        "text": "First debug line.",
-                        "start": 1.0,
-                        "end": 2.0,
-                        "words": [{"word": "First", "start": 1.0, "end": 1.3}],
-                    },
-                ],
-                decision="aligned_word_matching",
+                "First debug line.\nSecond debug line.",
+                WhisperXResponse(
+                    transcription_segments=(
+                        {"text": "First debug line.", "start": 1.0, "end": 2.0},
+                    ),
+                    aligned_segments=(
+                        {
+                            "text": "First debug line.",
+                            "start": 1.0,
+                            "end": 2.0,
+                            "words": [{"word": "First", "start": 1.0, "end": 1.3}],
+                        },
+                    ),
+                    decision="aligned_word_matching",
+                ),
             )
         finally:
             injector.close()
@@ -1092,6 +1096,78 @@ def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):
 
     normalize_call_count = asyncio.run(runner())
     assert normalize_call_count == 1
+
+
+def test_whisperx_resource_batches_registered_requests_and_skips_align_when_not_needed(
+    tmp_path: Path,
+):
+    config = ProductionConfig(output_sample_rate=48000, output_channels=2)
+
+    class FakeQueuedWhisperXResource(WhisperXResource):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.batch_sizes: list[int] = []
+            self.align_model_requests = 0
+
+        def _prepare_batch_sync(self, batch):
+            self.batch_sizes.append(len(batch))
+            return [
+                self._prepare_request_sync(pending.registration.request)
+                for pending in batch
+            ]
+
+        def _prepare_request_sync(self, request):
+            return type(super()._prepare_request_sync(request))(
+                request=request,
+                mono_audio=np.zeros(16000, dtype=np.float32),
+                transcription_segments=(
+                    {
+                        "text": "First line.",
+                        "start": 1.0,
+                        "end": 2.0,
+                    },
+                    {
+                        "text": "Second line.",
+                        "start": 2.0,
+                        "end": 3.0,
+                    },
+                ),
+            )
+
+        def _ensure_align_model(self):
+            self.align_model_requests += 1
+            raise AssertionError("align model should not be loaded for exact transcription clauses")
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeQueuedWhisperXResource)
+            request1 = await resource.register_request(
+                ForcedAlignmentRequest(
+                    audio=np.zeros((48000, 2), dtype=np.float32),
+                    sample_rate=48000,
+                    transcript="First line.\nSecond line.",
+                )
+            )
+            request2 = await resource.register_request(
+                ForcedAlignmentRequest(
+                    audio=np.zeros((48000, 2), dtype=np.float32),
+                    sample_rate=48000,
+                    transcript="First line.\nSecond line.",
+                )
+            )
+            responses = await asyncio.gather(request1.align(), request2.align())
+            return resource.batch_sizes, resource.align_model_requests, responses
+        finally:
+            injector.close()
+
+    batch_sizes, align_model_requests, responses = asyncio.run(runner())
+    assert batch_sizes == [2]
+    assert align_model_requests == 0
+    assert [response.decision for response in responses] == [
+        "transcription_exact_clause_match",
+        "transcription_exact_clause_match",
+    ]
 
 
 def test_aligned_script_source_render_keeps_audio_and_records_markers(tmp_path: Path):
