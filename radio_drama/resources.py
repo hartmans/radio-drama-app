@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import weakref
 from dataclasses import dataclass
 from threading import Lock
 from typing import Sequence
@@ -21,7 +22,7 @@ from .planning import ScriptRenderRequest
 from .rendering import RenderResult
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class RegisteredRenderRequest:
     """A queued render request whose result may be fulfilled by a later batch."""
     resource: "VibeVoiceResource"
@@ -34,7 +35,10 @@ class RegisteredRenderRequest:
 
 @dataclass(slots=True)
 class _PendingRender:
-    registration: RegisteredRenderRequest
+    registration_ref: weakref.ReferenceType[RegisteredRenderRequest]
+
+    def registration(self) -> RegisteredRenderRequest | None:
+        return self.registration_ref()
 
 
 @inject(config=ProductionConfig)
@@ -87,7 +91,9 @@ class VibeVoiceResource(AsyncInjectable):
             if request is None:
                 registration.future.set_result(self.empty_result())
             else:
-                self._pending.append(_PendingRender(registration=registration))
+                self._pending.append(
+                    _PendingRender(registration_ref=weakref.ref(registration))
+                )
         return registration
 
     async def render_registered_request(
@@ -106,25 +112,27 @@ class VibeVoiceResource(AsyncInjectable):
         while True:
             await asyncio.sleep(0)
             async with self._pending_lock:
-                if not self._pending:
+                batch = self._pop_live_batch_locked()
+                if not batch:
                     self._drain_task = None
                     return
-                batch = self._pending[: self.config.resolved_batch_size]
-                del self._pending[: self.config.resolved_batch_size]
 
             try:
                 rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
             except Exception as exc:
-                for pending in batch:
-                    if not pending.registration.future.done():
-                        pending.registration.future.set_exception(exc)
+                for registration in batch:
+                    if not registration.future.done():
+                        registration.future.set_exception(exc)
                 continue
 
-            for pending, audio in zip(batch, rendered_audios, strict=True):
-                if not pending.registration.future.done():
-                    pending.registration.future.set_result(RenderResult(audio=audio))
+            for registration, audio in zip(batch, rendered_audios, strict=True):
+                if not registration.future.done():
+                    registration.future.set_result(RenderResult(audio=audio))
 
-    def _render_batch_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
+    def _render_batch_sync(
+        self,
+        batch: Sequence[RegisteredRenderRequest],
+    ) -> list[np.ndarray]:
         generated = self._render_batch_native_sync(batch)
         self._write_vibevoice_debug_outputs(batch, generated)
         return [
@@ -137,9 +145,12 @@ class VibeVoiceResource(AsyncInjectable):
             for audio in generated
         ]
 
-    def _render_batch_native_sync(self, batch: Sequence[_PendingRender]) -> list[np.ndarray]:
+    def _render_batch_native_sync(
+        self,
+        batch: Sequence[RegisteredRenderRequest],
+    ) -> list[np.ndarray]:
         """Return model-native mono audio for one batch before format conversion."""
-        requests = [pending.registration.request for pending in batch]
+        requests = [registration.request for registration in batch]
         processor, model = self._ensure_loaded()
         inputs = processor(
             text=[request.normalized_script for request in requests],
@@ -267,7 +278,7 @@ class VibeVoiceResource(AsyncInjectable):
 
     def _write_vibevoice_debug_outputs(
         self,
-        batch: Sequence[_PendingRender],
+        batch: Sequence[RegisteredRenderRequest],
         generated: Sequence[np.ndarray],
     ) -> None:
         if not self.config.debug_enabled("vibevoice_output"):
@@ -280,7 +291,7 @@ class VibeVoiceResource(AsyncInjectable):
             generated,
             strict=True,
         ):
-            request = pending.registration.request
+            request = pending.request
             filename = (
                 f"{output_index:03d}-"
                 f"{self._sanitize_debug_label(self._debug_request_label(request))}.wav"
@@ -304,6 +315,22 @@ class VibeVoiceResource(AsyncInjectable):
             start_index = self._debug_output_index
             self._debug_output_index += count
         return start_index
+
+    def _pop_live_batch_locked(self) -> list[RegisteredRenderRequest]:
+        live_batch: list[RegisteredRenderRequest] = []
+        remaining_pending: list[_PendingRender] = []
+
+        for pending in self._pending:
+            registration = pending.registration()
+            if registration is None:
+                continue
+            if len(live_batch) < self.config.resolved_batch_size:
+                live_batch.append(registration)
+            else:
+                remaining_pending.append(pending)
+
+        self._pending = remaining_pending
+        return live_batch
 
     def _debug_request_label(self, request: ScriptRenderRequest) -> str:
         first_line = next(

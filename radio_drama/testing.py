@@ -119,11 +119,10 @@ class CachedVibeVoiceResource(VibeVoiceResource):
         while True:
             await asyncio.sleep(0)
             async with self._pending_lock:
-                if not self._pending:
+                batch = self._pop_live_batch_locked()
+                if not batch:
                     self._drain_task = None
                     return
-                batch = self._pending[: self.config.resolved_batch_size]
-                del self._pending[: self.config.resolved_batch_size]
 
             try:
                 rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
@@ -131,26 +130,26 @@ class CachedVibeVoiceResource(VibeVoiceResource):
                 import pytest
 
                 skip_exc = pytest.skip.Exception(str(exc))
-                for pending in batch:
-                    if not pending.registration.future.done():
-                        pending.registration.future.set_exception(skip_exc)
+                for registration in batch:
+                    if not registration.future.done():
+                        registration.future.set_exception(skip_exc)
                 continue
             except Exception as exc:
-                for pending in batch:
-                    if not pending.registration.future.done():
-                        pending.registration.future.set_exception(exc)
+                for registration in batch:
+                    if not registration.future.done():
+                        registration.future.set_exception(exc)
                 continue
 
-            for pending, audio in zip(batch, rendered_audios, strict=True):
-                if not pending.registration.future.done():
-                    pending.registration.future.set_result(RenderResult(audio=audio))
+            for registration, audio in zip(batch, rendered_audios, strict=True):
+                if not registration.future.done():
+                    registration.future.set_result(RenderResult(audio=audio))
 
     def _render_batch_sync(self, batch: Sequence) -> list[np.ndarray]:
         metadata_by_index: dict[int, CachedRenderMetadata] = {}
         uncached_batch: list[tuple[int, object]] = []
 
-        for index, pending in enumerate(batch):
-            request = pending.registration.request
+        for index, registration in enumerate(batch):
+            request = registration.request
             metadata = self._load_cached_metadata(request)
             if metadata is not None:
                 metadata_by_index[index] = metadata
@@ -159,22 +158,22 @@ class CachedVibeVoiceResource(VibeVoiceResource):
                 raise MissingCachedRenderMetadata(
                     f"No cached metadata for request {self._cache_key(request)}"
                 )
-            uncached_batch.append((index, pending))
+            uncached_batch.append((index, registration))
 
         if uncached_batch:
             native_audios = self._render_batch_native_sync(
-                [pending for _, pending in uncached_batch]
+                [registration for _, registration in uncached_batch]
             )
-            for (index, pending), audio in zip(uncached_batch, native_audios, strict=True):
+            for (index, registration), audio in zip(uncached_batch, native_audios, strict=True):
                 metadata = CachedRenderMetadata(
                     sample_rate=self.sample_rate,
                     frame_count=int(audio.shape[0]),
                 )
-                self._store_cached_metadata(pending.registration.request, metadata)
+                self._store_cached_metadata(registration.request, metadata)
                 metadata_by_index[index] = metadata
 
         return [
-            self._render_synthetic_audio(batch[index].registration, metadata_by_index[index])
+            self._render_synthetic_audio(batch[index], metadata_by_index[index])
             for index in range(len(batch))
         ]
 

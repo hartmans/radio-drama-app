@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import sys
 import shutil
 from pathlib import Path
@@ -981,18 +982,16 @@ def test_vibevoice_output_debug_writes_native_wavs(tmp_path: Path):
     async def runner():
         injector, ainjector = await _make_async_injector(config)
         try:
-            resource = await ainjector(FakeDebugResource)
-            batch = [
-                SimpleNamespace(
-                    registration=SimpleNamespace(
+                resource = await ainjector(FakeDebugResource)
+                batch = [
+                    SimpleNamespace(
                         request=ScriptRenderRequest(
                             normalized_script="Speaker 1: First line for debug output.",
                             voice_samples=("anna.wav",),
                         )
                     )
-                )
-            ]
-            resource._render_batch_sync(batch)
+                ]
+                resource._render_batch_sync(batch)
         finally:
             injector.close()
 
@@ -1337,6 +1336,72 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
     batch_sizes, results = asyncio.run(runner())
     assert batch_sizes == [2]
     assert [result.audio.tolist() for result in results] == [[1.0], [2.0, 2.0]]
+
+
+def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_channels=1)
+
+    class FakeCutBatchingResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.rendered_scripts: list[str] = []
+
+        async def register_request(self, request: ScriptRenderRequest | None):
+            return await super().register_request(request)
+
+        def _render_batch_sync(self, batch):
+            self.rendered_scripts.extend(
+                registration.request.normalized_script for registration in batch
+            )
+            return [np.array([1.0], dtype=np.float32) for _ in batch]
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.0))
+                else:
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            start_pos=0.0,
+                        )
+                    )
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeCutBatchingResource)
+            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>Anna: Line 1</script>
+                  <script>
+                    <mark id="cut" />
+                    Anna: Line 2
+                  </script>
+                </production>
+                """,
+                source_name="cut-collect.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            production_plan.cut_before_mark("cut")
+            gc.collect()
+            await production_plan.render()
+            return resource.rendered_scripts
+        finally:
+            injector.close()
+
+    rendered_scripts = asyncio.run(runner())
+    assert rendered_scripts == ["Speaker 1: Line 2"]
 
 
 def test_production_plan_renders_scripts_in_order(tmp_path: Path):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 from pathlib import Path
 
 import soundfile as sf
@@ -83,6 +84,7 @@ def main() -> None:
             production_plan = await production_node.plan(ainjector)
             if args.cut_before is not None:
                 production_plan.cut_before_mark(args.cut_before)
+                gc.collect()
             production_result = await production_plan.render()
         finally:
             injector.close()
