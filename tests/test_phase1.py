@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -813,6 +814,123 @@ def test_forced_alignment_prefers_exact_clause_start_when_first_word_is_missing(
     filled = fill_start_positions_from_alignment(contents, alignment)
 
     assert [content.start_pos for content in filled] == [1.0, 2.0]
+
+
+def test_forced_alignment_does_not_infer_line_start_from_clause_end_boundary():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="Alpha Bravo."),
+        DialogueLine(speaker=speaker, spoken_text="Charlie Delta."),
+    ]
+    alignment = AlignmentResult(
+        words=(
+            AlignedWord(text="Alpha", start=10.0, end=10.4),
+            AlignedWord(text="Bravo", start=10.4, end=10.8),
+            AlignedWord(text="Delta", start=11.5, end=12.0),
+        ),
+        clauses=(
+            AlignedClause(text="Alpha.", start=10.0, end=10.4),
+            AlignedClause(text="Bravo Charlie Delta.", start=10.4, end=12.0),
+        ),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert filled[0].start_pos == 10.0
+    assert np.isnan(filled[1].start_pos)
+
+
+def test_whisperx_resource_prefers_exact_aligned_segments_over_coarse_transcription(
+    tmp_path: Path,
+    monkeypatch,
+):
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=48000,
+        output_channels=2,
+    )
+
+    class FakeModel:
+        def transcribe(self, audio, batch_size, language):
+            return {
+                "segments": [
+                    {
+                        "text": (
+                            "That is not true at all. "
+                            "I don't see you rushing to give up your soul. "
+                            "We will have order in this court."
+                        ),
+                        "start": 19.425,
+                        "end": 35.11,
+                    }
+                ]
+            }
+
+    fake_whisperx = SimpleNamespace(
+        load_model=lambda *args, **kwargs: FakeModel(),
+        load_align_model=lambda *args, **kwargs: ("align-model", {"meta": "data"}),
+        align=lambda *args, **kwargs: {
+            "segments": [
+                {
+                    "text": "That is not true at all.",
+                    "start": 19.425,
+                    "end": 20.605,
+                    "words": [
+                        {"word": "That", "start": 19.425, "end": 19.565},
+                        {"word": "is", "start": 19.645, "end": 19.745},
+                    ],
+                },
+                {
+                    "text": "I don't see you rushing to give up your soul.",
+                    "start": 31.449,
+                    "end": 33.409,
+                    "words": [
+                        {"word": "I", "start": 31.449, "end": 31.489},
+                        {"word": "don't", "start": 31.529, "end": 31.689},
+                    ],
+                },
+                {
+                    "text": "We will have order in this court.",
+                    "start": 33.77,
+                    "end": 35.11,
+                    "words": [
+                        {"word": "We", "start": 33.77, "end": 33.89},
+                        {"word": "will", "start": 33.93, "end": 34.07},
+                    ],
+                },
+            ]
+        },
+    )
+    monkeypatch.setitem(sys.modules, "whisperx", fake_whisperx)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(WhisperXResource)
+            return resource._alignment_result_sync(
+                np.zeros((48000, 2), dtype=np.float32),
+                48000,
+                (
+                    "That is not true at all.\n"
+                    "I don't see you rushing to give up your soul.\n"
+                    "We will have order in this court."
+                ),
+            )
+        finally:
+            injector.close()
+
+    alignment = asyncio.run(runner())
+
+    assert alignment.words == ()
+    assert [(clause.start, clause.end, clause.text) for clause in alignment.clauses] == [
+        (19.425, 20.605, "That is not true at all."),
+        (31.449, 33.409, "I don't see you rushing to give up your soul."),
+        (33.77, 35.11, "We will have order in this court."),
+    ]
 
 
 def test_vibevoice_output_debug_writes_native_wavs(tmp_path: Path):

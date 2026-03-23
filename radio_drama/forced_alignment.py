@@ -137,6 +137,15 @@ class WhisperXResource(AsyncInjectable):
             device,
             return_char_alignments=False,
         )
+        aligned_clauses = _clauses_from_segments(aligned.get("segments", []))
+        if _line_spans_from_exact_clauses(transcript_lines, aligned_clauses) is not None:
+            self._write_whisperx_debug_output(
+                transcript=transcript,
+                transcription_segments=transcription["segments"],
+                aligned_segments=aligned.get("segments", []),
+                decision="aligned_exact_clause_match",
+            )
+            return AlignmentResult(words=(), clauses=tuple(aligned_clauses))
         self._write_whisperx_debug_output(
             transcript=transcript,
             transcription_segments=transcription["segments"],
@@ -145,7 +154,7 @@ class WhisperXResource(AsyncInjectable):
         )
         return _alignment_result_from_whisperx(
             aligned,
-            clauses=transcription_clauses,
+            clauses=aligned_clauses,
         )
 
     def _write_whisperx_debug_output(
@@ -288,18 +297,19 @@ def fill_start_positions_from_alignment(
 ) -> list[DialogueContents]:
     copied_contents = copy_dialogue_contents(contents)
     dialogue_lines = [content for content in copied_contents if isinstance(content, DialogueLine)]
-    line_spans = _line_spans_from_alignment(dialogue_lines, alignment)
+    raw_line_spans = _line_spans_from_alignment(dialogue_lines, alignment)
+    stabilized_line_spans = _stabilize_line_spans(raw_line_spans)
 
     line_index = 0
     for content in copied_contents:
         if isinstance(content, DialogueLine):
-            start_pos, _ = line_spans[line_index]
-            content.start_pos = start_pos
+            start_pos, _ = raw_line_spans[line_index]
+            content.start_pos = cast_float(start_pos) if start_pos is not None else math.nan
             line_index += 1
 
     for index, content in enumerate(copied_contents):
         if isinstance(content, DialogueAudio):
-            content.start_pos = _dialogue_audio_start_pos(copied_contents, line_spans, index)
+            content.start_pos = _dialogue_audio_start_pos(copied_contents, stabilized_line_spans, index)
 
     return copied_contents
 
@@ -335,7 +345,7 @@ def _marker_frames_from_contents(
 def _line_spans_from_alignment(
     dialogue_lines: Sequence[DialogueLine],
     alignment: AlignmentResult,
-) -> list[tuple[float, float]]:
+) -> list[tuple[float | None, float | None]]:
     if not dialogue_lines:
         return []
 
@@ -344,7 +354,7 @@ def _line_spans_from_alignment(
         alignment.clauses,
     )
     if exact_clause_spans is not None:
-        return _stabilize_line_spans(exact_clause_spans)
+        return exact_clause_spans
 
     clause_starts = _clause_starts_by_token_offset(alignment.clauses)
     clause_endings = _clause_endings_by_token_offset(alignment.clauses)
@@ -380,13 +390,11 @@ def _line_spans_from_alignment(
             start_time = clause_start.start
         clause_match = clause_endings.get(cumulative_line_tokens)
         if clause_match is not None:
-            if start_time is None and clause_match.start is not None:
-                start_time = clause_match.start
             if clause_match.end is not None:
                 end_time = clause_match.end
         spans.append((start_time, end_time))
 
-    return _stabilize_line_spans(spans)
+    return spans
 
 
 def _stabilize_line_spans(
