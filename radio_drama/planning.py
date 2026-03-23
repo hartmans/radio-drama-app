@@ -617,7 +617,9 @@ class ComposeAudioPlan(AudioPlan):
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     async def render_node(self) -> RenderResult:
-        rendered_results = [await audio_plan.render() for audio_plan in self.audio_plans]
+        rendered_results = await asyncio.gather(
+            *(audio_plan.render() for audio_plan in self.audio_plans)
+        )
         return self.with_plan_timing(self._compose_results(rendered_results))
 
     def _compose_results(self, results: Sequence[RenderResult]) -> RenderResult:

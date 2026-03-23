@@ -134,7 +134,8 @@ class SoundPlan(AudioPlan):
         return f"SoundPlan(ref={sound_ref!r})"
 
     async def async_ready(self):
-        await self._ensure_normalized_audio_task()
+        if self.resolved_path is None:
+            self.resolved_path = self._resolve_sound_path()
         return await super().async_ready()
 
     async def render_node(self) -> RenderResult:
@@ -144,7 +145,8 @@ class SoundPlan(AudioPlan):
 
     async def _ensure_normalized_audio_task(self) -> asyncio.Task:
         if self._normalized_audio_task is None:
-            self.resolved_path = self._resolve_sound_path()
+            if self.resolved_path is None:
+                self.resolved_path = self._resolve_sound_path()
             self._normalized_audio_task = await self.sound_cache.preload(self.resolved_path)
         return self._normalized_audio_task
 

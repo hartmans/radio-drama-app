@@ -210,6 +210,49 @@ def test_production_with_direct_sound_renders_without_speaker_map(tmp_path: Path
     assert result.audio.tolist() == [1.0, 2.0]
 
 
+def test_sound_plan_defers_normalization_until_render(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        def __init__(self) -> None:
+            self.preloaded_paths: list[Path] = []
+
+        async def preload(self, sound_path: Path):
+            self.preloaded_paths.append(sound_path)
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([1.0, 2.0], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        sound_cache = FakeSoundCache()
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), sound_cache, close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            plan = await root.plan(ainjector)
+            preload_count_before_render = len(sound_cache.preloaded_paths)
+            await plan.audio_plan.render()
+            return preload_count_before_render, sound_cache.preloaded_paths
+        finally:
+            injector.close()
+
+    preload_count_before_render, preloaded_paths = asyncio.run(runner())
+    assert preload_count_before_render == 0
+    assert preloaded_paths == [sound_file]
+
+
 def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -1467,6 +1510,85 @@ def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: 
                 </production>
                 """,
                 source_name="cut-collect.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            production_plan.cut_before_mark("cut")
+            gc.collect()
+            await production_plan.render()
+            return resource.rendered_scripts
+        finally:
+            injector.close()
+
+    rendered_scripts = asyncio.run(runner())
+    assert rendered_scripts == ["Speaker 1: Line 2"]
+
+
+def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    production_path = tmp_path / "cut-sound.xml"
+    production_path.write_text("<production />", encoding="utf-8")
+    config = ProductionConfig(voice_directory=tmp_path, output_channels=1)
+
+    class FakeCutBatchingResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.rendered_scripts: list[str] = []
+
+        def _render_batch_sync(self, batch):
+            self.rendered_scripts.extend(
+                registration.request.normalized_script for registration in batch
+            )
+            return [np.array([1.0], dtype=np.float32) for _ in batch]
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([1.0], dtype=np.float32))
+            )
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.0))
+                else:
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            start_pos=0.0,
+                        )
+                    )
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=production_path)
+        try:
+            resource = await ainjector(FakeCutBatchingResource)
+            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+            injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Line 1
+                    <sound ref="door" />
+                  </script>
+                  <script>
+                    <mark id="cut" />
+                    Anna: Line 2
+                  </script>
+                </production>
+                """,
+                source_name=str(production_path),
             )
             production_plan = await root.plan(ainjector)
             production_plan.cut_before_mark("cut")

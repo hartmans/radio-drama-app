@@ -71,12 +71,12 @@ Current plan types:
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
   `DialogueLine` holds spoken text
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
-* `SoundPlan`: resolves one sound asset, starts cached normalization work during `async_ready()`, and renders the normalized production-format sound
+* `SoundPlan`: resolves one sound asset during planning and lazily starts cached normalization work during render so cut-away plans do not launch unused background sound work
 * `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and marker frames for inline insertions
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
-* `ComposeAudioPlan`: renders child `AudioPlan`s into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
+* `ComposeAudioPlan`: renders child `AudioPlan`s concurrently into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
   the final production render is then wrapped in a top-level `PresetPlan("master")`
