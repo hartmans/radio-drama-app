@@ -358,7 +358,8 @@ def _line_spans_from_alignment(
 
     clause_starts = _clause_starts_by_token_offset(alignment.clauses)
     clause_endings = _clause_endings_by_token_offset(alignment.clauses)
-    word_index = 0
+    aligned_tokens = _aligned_word_tokens(alignment.words)
+    word_search_index = 0
     cumulative_line_tokens = 0
     spans: list[tuple[float | None, float | None]] = []
 
@@ -368,28 +369,23 @@ def _line_spans_from_alignment(
         cumulative_line_tokens += len(line_tokens)
         start_time: float | None = None
         end_time: float | None = None
-        token_index = 0
-
-        while word_index < len(alignment.words) and token_index < len(line_tokens):
-            word = alignment.words[word_index]
-            word_index += 1
-            normalized_word = _normalized_tokens(word.text)
-            if not normalized_word:
-                continue
-            token = normalized_word[0]
-            if token != line_tokens[token_index]:
-                continue
-            if start_time is None and word.start is not None:
-                start_time = word.start
-            if word.end is not None:
-                end_time = word.end
-            token_index += 1
+        matched_word_span = _match_line_in_aligned_tokens(
+            line_tokens,
+            aligned_tokens,
+            start_index=word_search_index,
+        )
+        if matched_word_span is not None:
+            start_time, end_time, word_search_index = matched_word_span
 
         clause_start = clause_starts.get(line_start_offset)
-        if clause_start is not None and clause_start.start is not None:
+        if (
+            clause_start is not None
+            and clause_start.start is not None
+            and _line_begins_with_clause(line_tokens, clause_start)
+        ):
             start_time = clause_start.start
         clause_match = clause_endings.get(cumulative_line_tokens)
-        if clause_match is not None:
+        if clause_match is not None and _line_ends_with_clause(line_tokens, clause_match):
             if clause_match.end is not None:
                 end_time = clause_match.end
         spans.append((start_time, end_time))
@@ -562,6 +558,81 @@ def _line_spans_from_exact_clauses(
     if remaining_clause_tokens != 0:
         return None
     return spans
+
+
+def _aligned_word_tokens(
+    words: Sequence[AlignedWord],
+) -> list[tuple[str, float | None, float | None]]:
+    aligned_tokens: list[tuple[str, float | None, float | None]] = []
+    for word in words:
+        normalized_tokens = _normalized_tokens(word.text)
+        if not normalized_tokens:
+            continue
+        for token in normalized_tokens:
+            aligned_tokens.append((token, word.start, word.end))
+    return aligned_tokens
+
+
+def _match_line_in_aligned_tokens(
+    line_tokens: Sequence[str],
+    aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+    *,
+    start_index: int,
+) -> tuple[float | None, float | None, int] | None:
+    if not line_tokens:
+        return None
+
+    for candidate_index in range(start_index, len(aligned_tokens)):
+        if aligned_tokens[candidate_index][0] != line_tokens[0]:
+            continue
+
+        matched_end_index = _match_exact_token_run(
+            line_tokens,
+            aligned_tokens,
+            start_index=candidate_index,
+        )
+        if matched_end_index is None:
+            continue
+
+        start_time = aligned_tokens[candidate_index][1]
+        end_time = aligned_tokens[matched_end_index][2]
+        return start_time, end_time, matched_end_index + 1
+    return None
+
+
+def _match_exact_token_run(
+    line_tokens: Sequence[str],
+    aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+    *,
+    start_index: int,
+) -> int | None:
+    end_index = start_index + len(line_tokens)
+    if end_index > len(aligned_tokens):
+        return None
+    candidate_tokens = [token for token, _, _ in aligned_tokens[start_index:end_index]]
+    if list(line_tokens) != candidate_tokens:
+        return None
+    return end_index - 1
+
+
+def _line_begins_with_clause(
+    line_tokens: Sequence[str],
+    clause: AlignedClause,
+) -> bool:
+    clause_tokens = _normalized_tokens(clause.text)
+    if not clause_tokens or len(clause_tokens) > len(line_tokens):
+        return False
+    return list(line_tokens[: len(clause_tokens)]) == clause_tokens
+
+
+def _line_ends_with_clause(
+    line_tokens: Sequence[str],
+    clause: AlignedClause,
+) -> bool:
+    clause_tokens = _normalized_tokens(clause.text)
+    if not clause_tokens or len(clause_tokens) > len(line_tokens):
+        return False
+    return list(line_tokens[-len(clause_tokens) :]) == clause_tokens
 
 
 def _normalized_tokens(text: str) -> list[str]:

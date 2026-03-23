@@ -933,6 +933,36 @@ def test_whisperx_resource_prefers_exact_aligned_segments_over_coarse_transcript
     ]
 
 
+def test_forced_alignment_word_matcher_can_resynchronize_after_missed_line():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="Missing words here."),
+        DialogueLine(speaker=speaker, spoken_text="Charlie Delta."),
+        DialogueLine(speaker=speaker, spoken_text="Echo Foxtrot."),
+    ]
+    alignment = AlignmentResult(
+        words=(
+            AlignedWord(text="Charlie", start=2.0, end=2.3),
+            AlignedWord(text="Delta", start=2.3, end=2.6),
+            AlignedWord(text="Echo", start=3.0, end=3.3),
+            AlignedWord(text="Foxtrot", start=3.3, end=3.7),
+        ),
+        clauses=(
+            AlignedClause(text="Charlie Delta Echo Foxtrot.", start=2.0, end=3.7),
+        ),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert np.isnan(filled[0].start_pos)
+    assert filled[1].start_pos == 2.0
+    assert filled[2].start_pos == 3.0
+
+
 def test_vibevoice_output_debug_writes_native_wavs(tmp_path: Path):
     config = ProductionConfig(
         voice_directory=tmp_path,
