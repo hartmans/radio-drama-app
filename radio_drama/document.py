@@ -253,6 +253,16 @@ class ScriptNode(ElementNode):
         normalized = preset_name.strip()
         return normalized or None
 
+    @property
+    def tts(self) -> str:
+        tts_name = self.attributes.get("tts", "vibevoice")
+        normalized = tts_name.strip().lower()
+        if not normalized:
+            raise self.error("<script> tts attribute cannot be empty")
+        if normalized not in {"vibevoice", "qwen"}:
+            raise self.error("<script> tts must be either 'vibevoice' or 'qwen'")
+        return normalized
+
     async def plan(self, ainjector):
         from .planning import ScriptPlan
 

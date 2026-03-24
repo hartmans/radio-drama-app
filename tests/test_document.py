@@ -45,6 +45,23 @@ def test_parse_production_collects_element_attributes():
     assert root.speaker_map_node.attributes == {"source": "inline"}
     assert root.script_nodes[0].attributes == {"preset": "narrator1", "mood": "internal"}
     assert root.script_nodes[0].preset == "narrator1"
+    assert root.script_nodes[0].tts == "vibevoice"
+
+
+def test_script_node_tts_defaults_and_normalizes():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script tts="QWEN">Anna: First line.</script>
+          <script>Anna: Second line.</script>
+        </production>
+        """,
+        source_name="tts.xml",
+    )
+
+    assert root.script_nodes[0].tts == "qwen"
+    assert root.script_nodes[1].tts == "vibevoice"
 
 
 def test_script_allows_sound_nodes_by_attribute_or_text():

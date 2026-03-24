@@ -43,6 +43,7 @@ from .planning import (
     SpeakerMapPlan,
     SpeakerVoiceReference,
 )
+from .qwen_tts import QwenTtsResource
 from .rendering import ProductionResult, RenderResult
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
 from .vibevoice import VibeVoiceResource
@@ -78,6 +79,7 @@ __all__ = [
     "ProductionNode",
     "ProductionPlan",
     "ProductionResult",
+    "QwenTtsResource",
     "radio_drama_injector",
     "RenderResult",
     "ScriptNode",

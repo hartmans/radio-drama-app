@@ -7,6 +7,7 @@ from carthage.dependency_injection import InjectionKey, Injector
 
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
+from .qwen_tts import QwenTtsResource
 from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
 
@@ -22,7 +23,7 @@ def radio_drama_injector(
 
     The returned injector preserves caller-provided providers from
     ``base_injector`` and installs the production config, event loop, and a
-    default ``VibeVoiceResource`` provider when one is not already present.
+    default speech-resource providers when they are not already present.
     Library entry points and the CLI use the same helper so resource wiring is
     consistent across direct and subprocess-driven execution.
     """
@@ -42,6 +43,8 @@ def radio_drama_injector(
         )
     if injector.injector_containing(VibeVoiceResource) is None:
         injector.add_provider(VibeVoiceResource)
+    if injector.injector_containing(QwenTtsResource) is None:
+        injector.add_provider(QwenTtsResource)
     if injector.injector_containing(WhisperXResource) is None:
         injector.add_provider(WhisperXResource)
     if injector.injector_containing(NormalizedSoundCache) is None:

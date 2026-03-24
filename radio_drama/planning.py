@@ -366,10 +366,6 @@ class ScriptPlan(AudioPlan):
         self.speaker_map_plan = self._require_speaker_map_plan()
         self.contents = await self._parse_contents()
         self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
-        if len(self.ordered_speakers) > 4:
-            raise self.document_error(
-                f"A <script> uses {len(self.ordered_speakers)} speakers, but VibeVoice supports at most 4"
-            )
         if self.dialogue_lines:
             local_speaker_ids = {
                 speaker.authored_name.lower(): index + 1
@@ -383,11 +379,18 @@ class ScriptPlan(AudioPlan):
                 normalized_script=normalized_script,
                 voice_samples=tuple(str(ref.resolved_path) for ref in self.ordered_speakers),
             )
-        from .vibevoice import VibeVoiceResource
-
-        resource = await self.ainjector.get_instance_async(VibeVoiceResource)
+        resource = await self.ainjector.get_instance_async(self._tts_resource_type())
         self._registered_request = await resource.register_request(self.render_request)
         return await super().async_ready()
+
+    def _tts_resource_type(self):
+        if self.node.tts == "qwen":
+            from .qwen_tts import QwenTtsResource
+
+            return QwenTtsResource
+        from .vibevoice import VibeVoiceResource
+
+        return VibeVoiceResource
 
     def _require_speaker_map_plan(self) -> SpeakerMapPlan:
         provider_injector = self.ainjector.injector.injector_containing(SpeakerMapPlan)
@@ -412,6 +415,7 @@ class ScriptPlan(AudioPlan):
     async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
         if "preset" in node.attributes and node.preset is None:
             raise node.error("<script> preset attribute cannot be empty")
+        node.tts
 
         script_plan = await ainjector(cls, node=node)
         audio_plan: AudioPlan = script_plan

@@ -5,10 +5,12 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Lock, RLock
 from typing import Any, Sequence
 
 import numpy as np
+import soundfile as sf
 from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import resample_audio
@@ -145,6 +147,31 @@ class WhisperXResource(AsyncInjectable):
             duration_seconds=_audio_duration(result.audio, self.config.resolved_output_sample_rate),
         )
         return fill_start_positions_from_alignment(contents, alignment)
+
+    async def transcribe_audio_sample(
+        self,
+        audio: str | Path | np.ndarray,
+        sample_rate: int | None = None,
+    ) -> str:
+        return await asyncio.to_thread(
+            self.transcribe_audio_sample_sync,
+            audio,
+            sample_rate,
+        )
+
+    def transcribe_audio_sample_sync(
+        self,
+        audio: str | Path | np.ndarray,
+        sample_rate: int | None = None,
+    ) -> str:
+        mono_audio = _transcription_sample_audio(audio, sample_rate)
+        model = self._ensure_asr_model()
+        transcription = model.transcribe(
+            mono_audio,
+            batch_size=_WHISPERX_TRANSCRIBE_BATCH_SIZE,
+            language=_WHISPERX_LANGUAGE,
+        )
+        return _transcription_text_from_segments(tuple(transcription["segments"]))
 
     async def register_request(
         self,
@@ -870,6 +897,32 @@ def _audio_duration(audio: np.ndarray, sample_rate: int) -> float:
     if sample_rate <= 0:
         return 0.0
     return float(audio.shape[0]) / sample_rate
+
+
+def _transcription_sample_audio(
+    audio: str | Path | np.ndarray,
+    sample_rate: int | None,
+) -> np.ndarray:
+    if isinstance(audio, (str, Path)):
+        loaded_audio, loaded_sample_rate = sf.read(
+            str(Path(audio).expanduser()),
+            dtype="float32",
+            always_2d=False,
+        )
+        return _whisperx_mono_audio(np.asarray(loaded_audio, dtype=np.float32), loaded_sample_rate)
+    if sample_rate is None:
+        raise ValueError("sample_rate is required when transcribing numpy audio arrays")
+    return _whisperx_mono_audio(audio, sample_rate)
+
+
+def _transcription_text_from_segments(
+    segments: Sequence[dict[str, Any]],
+) -> str:
+    return " ".join(
+        segment.get("text", "").strip()
+        for segment in segments
+        if segment.get("text", "").strip()
+    )
 
 
 def _whisperx_mono_audio(audio: np.ndarray, sample_rate: int) -> np.ndarray:

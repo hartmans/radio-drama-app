@@ -98,6 +98,7 @@ Planning rule for presets:
 * if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
+* a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
 * the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.
@@ -110,11 +111,13 @@ Current resource contract:
 
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
+* `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each referenced speaker voice line-by-line before concatenating one script result
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
+* `WhisperXResource` also exposes direct single-sample ASR so other resources can derive metadata such as Qwen voice-clone prompt transcripts from reference voice files
 * WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
@@ -203,12 +206,15 @@ Current cache-backed resources follow the same broad pattern:
 
 * `CachedVibeVoiceResource` sits at the `VibeVoiceResource` boundary
   it persists enough metadata to replay the production-facing render contract without rerunning the speech model
+* `CachedQwenTtsResource` sits at the `QwenTtsResource` boundary
+  it persists enough metadata to replay the production-facing render contract without rerunning the Qwen speech model
 * `CachedWhisperXResource` sits at the `WhisperXResource` boundary
   it persists enough metadata to replay filled `DialogueContents.start_pos` values without rerunning forced alignment
 
 For the current implementation, cached metadata is resource-specific:
 
 * VibeVoice cache metadata includes model-native sample rate and frame count
+* Qwen TTS cache metadata includes model-native sample rate and frame count
 * WhisperX cache metadata includes the ordered `start_pos` values written onto `DialogueContents`
 
 This keeps tests focused on structural behavior such as batching, ordering, output-format conversion, and alignment cut points rather than exact waveform reproduction.

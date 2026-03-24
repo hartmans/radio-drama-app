@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import weakref
 from dataclasses import dataclass
@@ -219,10 +220,73 @@ class VibeVoiceResource(AsyncInjectable):
         model.set_ddpm_inference_steps(
             num_steps=self.config.resolved_ddpm_inference_steps
         )
+        self._patch_model_config_api(model)
+        self._patch_generation_cache_api(model)
 
         self._processor = processor
         self._model = model
         return processor, model
+
+    def _patch_model_config_api(
+        self,
+        model: VibeVoiceForConditionalGenerationInference,
+    ) -> None:
+        config = model.config
+        decoder_config = getattr(config, "decoder_config", None)
+        if decoder_config is None:
+            return
+        for field_name in (
+            "num_hidden_layers",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "hidden_size",
+            "head_dim",
+            "vocab_size",
+        ):
+            if hasattr(config, field_name):
+                continue
+            if hasattr(decoder_config, field_name):
+                setattr(config, field_name, getattr(decoder_config, field_name))
+
+    def _patch_generation_cache_api(
+        self,
+        model: VibeVoiceForConditionalGenerationInference,
+    ) -> None:
+        self._patch_dynamic_cache_api()
+        original = model._prepare_cache_for_generation
+        parameter_count = len(inspect.signature(original).parameters)
+        if parameter_count != 5:
+            return
+
+        def compat_prepare_cache_for_generation(
+            generation_config,
+            model_kwargs,
+            generation_mode,
+            batch_size,
+            max_cache_length,
+            device=None,
+        ):
+            return original(
+                generation_config,
+                model_kwargs,
+                generation_mode,
+                batch_size,
+                max_cache_length,
+            )
+
+        model._prepare_cache_for_generation = compat_prepare_cache_for_generation
+
+    def _patch_dynamic_cache_api(self) -> None:
+        from transformers.cache_utils import DynamicCache
+
+        if not hasattr(DynamicCache, "key_cache"):
+            DynamicCache.key_cache = property(
+                lambda self: [getattr(layer, "keys", None) for layer in self.layers]
+            )
+        if not hasattr(DynamicCache, "value_cache"):
+            DynamicCache.value_cache = property(
+                lambda self: [getattr(layer, "values", None) for layer in self.layers]
+            )
 
     def _load_model(
         self,

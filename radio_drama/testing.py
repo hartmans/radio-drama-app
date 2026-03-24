@@ -12,6 +12,7 @@ import numpy as np
 from .audio import convert_audio_format
 from .forced_alignment import WhisperXResource, copy_dialogue_contents
 from .planning import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
+from .qwen_tts import QwenTtsResource
 from .rendering import RenderResult
 from .vibevoice import RegisteredRenderRequest, VibeVoiceResource
 
@@ -99,6 +100,136 @@ class CachedVibeVoiceResource(VibeVoiceResource):
     metadata, and return synthetic production-format audio. In ``cache`` mode,
     missing metadata causes the current test to skip.
     """
+
+    def __init__(
+        self,
+        cache_directory: str | Path,
+        *,
+        mode: str = "cache",
+        seed: int = 0,
+        **kwargs,
+    ) -> None:
+        if mode not in {"cache", "live"}:
+            raise ValueError("mode must be 'cache' or 'live'")
+        super().__init__(**kwargs)
+        self.cache_directory = Path(cache_directory)
+        self.mode = mode
+        self.seed = seed
+
+    async def _drain_pending(self) -> None:
+        while True:
+            await asyncio.sleep(0)
+            async with self._pending_lock:
+                batch = self._pop_live_batch_locked()
+                if not batch:
+                    self._drain_task = None
+                    return
+
+            try:
+                rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
+            except MissingCachedRenderMetadata as exc:
+                import pytest
+
+                skip_exc = pytest.skip.Exception(str(exc))
+                for registration in batch:
+                    if not registration.future.done():
+                        registration.future.set_exception(skip_exc)
+                continue
+            except Exception as exc:
+                for registration in batch:
+                    if not registration.future.done():
+                        registration.future.set_exception(exc)
+                continue
+
+            for registration, audio in zip(batch, rendered_audios, strict=True):
+                if not registration.future.done():
+                    registration.future.set_result(RenderResult(audio=audio))
+
+    def _render_batch_sync(self, batch: Sequence) -> list[np.ndarray]:
+        metadata_by_index: dict[int, CachedRenderMetadata] = {}
+        uncached_batch: list[tuple[int, object]] = []
+
+        for index, registration in enumerate(batch):
+            request = registration.request
+            metadata = self._load_cached_metadata(request)
+            if metadata is not None:
+                metadata_by_index[index] = metadata
+                continue
+            if self.mode == "cache":
+                raise MissingCachedRenderMetadata(
+                    f"No cached metadata for request {self._cache_key(request)}"
+                )
+            uncached_batch.append((index, registration))
+
+        if uncached_batch:
+            native_audios = self._render_batch_native_sync(
+                [registration for _, registration in uncached_batch]
+            )
+            for (index, registration), audio in zip(uncached_batch, native_audios, strict=True):
+                metadata = CachedRenderMetadata(
+                    sample_rate=self.sample_rate,
+                    frame_count=int(audio.shape[0]),
+                )
+                self._store_cached_metadata(registration.request, metadata)
+                metadata_by_index[index] = metadata
+
+        return [
+            self._render_synthetic_audio(batch[index], metadata_by_index[index])
+            for index in range(len(batch))
+        ]
+
+    def _render_synthetic_audio(
+        self,
+        registration: RegisteredRenderRequest,
+        metadata: CachedRenderMetadata,
+    ) -> np.ndarray:
+        request = registration.request
+        seed_material = self._cache_key(request)[:16]
+        seed = self.seed ^ int(seed_material, 16)
+        rng = np.random.default_rng(seed)
+        native_audio = rng.standard_normal(metadata.frame_count, dtype=np.float32) * 1e-3
+        return convert_audio_format(
+            native_audio,
+            input_sample_rate=metadata.sample_rate,
+            output_sample_rate=self.config.resolved_output_sample_rate,
+            output_channels=self.config.resolved_output_channels,
+        )
+
+    def _load_cached_metadata(
+        self,
+        request: ScriptRenderRequest,
+    ) -> CachedRenderMetadata | None:
+        cache_path = self.cache_directory / f"{self._cache_key(request)}.json"
+        if not cache_path.is_file():
+            return None
+        return CachedRenderMetadata(**json.loads(cache_path.read_text(encoding="utf-8")))
+
+    def _store_cached_metadata(
+        self,
+        request: ScriptRenderRequest,
+        metadata: CachedRenderMetadata,
+    ) -> None:
+        cache_path = self.cache_directory / f"{self._cache_key(request)}.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(asdict(metadata), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _cache_key(self, request: ScriptRenderRequest) -> str:
+        payload = json.dumps(
+            {
+                "normalized_script": request.normalized_script,
+                "voice_samples": list(request.voice_samples),
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class CachedQwenTtsResource(QwenTtsResource):
+    """Cache-aware ``QwenTtsResource`` substitute for pytest."""
 
     def __init__(
         self,

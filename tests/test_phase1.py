@@ -41,6 +41,7 @@ from radio_drama.planning import (
     ScriptRenderRequest,
     SpeakerVoiceReference,
 )
+from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.vibevoice import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
@@ -130,6 +131,55 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
     assert script_plan.dialogue_lines[0].spoken_text == (
         "First sentence. Continued line. Another paragraph."
     )
+
+
+def test_script_plan_routes_qwen_scripts_to_qwen_resource(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            raise AssertionError("qwen scripts should not use VibeVoiceResource")
+
+    class FakeQwen:
+        def __init__(self):
+            self.requests = []
+
+        async def register_request(self, request: ScriptRenderRequest | None):
+            self.requests.append(request)
+
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        fake_qwen = FakeQwen()
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(QwenTtsResource), fake_qwen, close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script tts="qwen">Anna: Hello.</script>
+                </production>
+                """,
+                source_name="qwen-script.xml",
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
+            script_plan = await root.script_nodes[0].plan(ainjector)
+            return fake_qwen, script_plan
+        finally:
+            injector.close()
+
+    fake_qwen, script_plan = asyncio.run(runner())
+    assert len(fake_qwen.requests) == 1
+    assert script_plan.node.tts == "qwen"
 
 
 def test_script_plan_allows_empty_script(tmp_path: Path):
@@ -2052,6 +2102,38 @@ def test_production_plan_installs_shared_vibevoice_resource(tmp_path: Path):
     assert len(resource_ids) == 1
 
 
+def test_production_plan_installs_shared_qwen_resource(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script tts="qwen">Anna: Line 1</script>
+                  <script tts="qwen">Anna: Line 2</script>
+                </production>
+                """,
+                source_name="shared-qwen-resource.xml",
+            )
+            plan = await root.plan(ainjector)
+            resource_ids = {
+                id(script_plan._registered_request.resource)
+                for script_plan in plan.leaf_audio_plans()
+                if isinstance(script_plan, ScriptPlan)
+            }
+            return resource_ids
+        finally:
+            injector.close()
+
+    resource_ids = asyncio.run(runner())
+    assert len(resource_ids) == 1
+
+
 def test_named_effect_chains_include_demo_presets():
     assert available_effect_chains() == (
         "indoor1",
@@ -2126,6 +2208,45 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
                 ScriptRenderRequest(
                     normalized_script="Speaker 1: Hello",
                     voice_samples=("voice.wav",),
+                )
+            )
+            return await registration.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.shape == (4800, 2)
+    assert np.allclose(result.audio[:, 0], result.audio[:, 1])
+
+
+def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=48000, output_channels=2)
+
+    class FakeResource(QwenTtsResource):
+        def _ensure_loaded(self):
+            self._sample_rate = 24000
+            return object()
+
+        def _prompt_items_by_voice_sync(self, voice_paths):
+            return {voice_path: [object()] for voice_path in voice_paths}
+
+        def _generate_line_batch_native_sync(self, texts, prompt_items):
+            self._sample_rate = 24000
+            return [np.ones(1200, dtype=np.float32) for _ in texts]
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeResource)
+            registration = await resource.register_request(
+                ScriptRenderRequest(
+                    normalized_script="Speaker 1: Hello\nSpeaker 2: There",
+                    voice_samples=("voice1.wav", "voice2.wav"),
                 )
             )
             return await registration.render()

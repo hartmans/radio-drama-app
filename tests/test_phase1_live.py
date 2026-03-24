@@ -85,3 +85,58 @@ def test_live_end_to_end_two_scripts(tmp_path: Path):
     assert audio.ndim == 2
     assert audio.shape[1] == 2
     assert audio.shape[0] > 0
+
+
+@pytest.mark.live
+def test_live_end_to_end_qwen_script(tmp_path: Path):
+    xml_path = tmp_path / "live-qwen-production.xml"
+    wav_path = tmp_path / "live-qwen-production.wav"
+    xml_path.write_text(
+        """
+        <production>
+          <speaker-map>
+            Guide: chandra.wav
+            Builder: david.wav
+          </speaker-map>
+          <script tts="qwen">
+            Guide: We need a working Qwen render.
+
+            Builder: This should use voice cloning and still produce stereo output.
+          </script>
+        </production>
+        """,
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _pythonpath_for_subprocess()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(APP_PATH),
+            str(xml_path),
+            "--voice-dir",
+            str(VOICE_DIR),
+            "--output",
+            str(wav_path),
+            "--device",
+            "cuda",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, (
+        f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+    )
+    assert wav_path.is_file(), f"Expected output file {wav_path} to exist"
+
+    audio, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
+    assert sample_rate == 48000
+    assert audio.ndim == 2
+    assert audio.shape[1] == 2
+    assert audio.shape[0] > 0

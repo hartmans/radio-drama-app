@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from radio_drama.testing import (
+    CachedQwenTtsResource,
     CachedVibeVoiceDouble,
     CachedVibeVoiceResource,
     CachedWhisperXResource,
@@ -33,6 +34,19 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         help="directory for cached VibeVoice render metadata",
+    )
+    parser.addoption(
+        "--qwen-mode",
+        action="store",
+        default="cache",
+        choices=("cache", "live"),
+        help="mode for cache-backed Qwen TTS test resources",
+    )
+    parser.addoption(
+        "--qwen-cache-dir",
+        action="store",
+        default=None,
+        help="directory for cached Qwen TTS render metadata",
     )
     parser.addoption(
         "--forced-alignment-mode",
@@ -100,6 +114,42 @@ def cached_vibevoice_resource_factory(vibevoice_mode: str, vibevoice_cache_dir: 
             resource_type,
             cache_directory=directory,
             mode=mode or vibevoice_mode,
+            seed=seed,
+            **kwargs,
+        )
+
+    return factory
+
+
+@pytest.fixture
+def qwen_mode(pytestconfig):
+    return pytestconfig.getoption("--qwen-mode")
+
+
+@pytest.fixture
+def qwen_cache_dir(pytestconfig, tmp_path: Path):
+    configured = pytestconfig.getoption("--qwen-cache-dir")
+    if configured:
+        return Path(configured)
+    return tmp_path / "qwen-cache"
+
+
+@pytest.fixture
+def cached_qwen_resource_factory(qwen_mode: str, qwen_cache_dir: Path):
+    def factory(
+        ainjector,
+        *,
+        mode: str | None = None,
+        cache_dir: Path | None = None,
+        seed: int = 0,
+        resource_type=CachedQwenTtsResource,
+        **kwargs,
+    ):
+        directory = cache_dir or qwen_cache_dir
+        return ainjector(
+            resource_type,
+            cache_directory=directory,
+            mode=mode or qwen_mode,
             seed=seed,
             **kwargs,
         )
