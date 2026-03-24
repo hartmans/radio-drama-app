@@ -117,6 +117,7 @@ Current resource contract:
 * resource output is returned in the configured production sample rate and channel layout
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
+* heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
 * `WhisperXResource` also exposes direct single-sample ASR so other resources can derive metadata such as Qwen voice-clone prompt transcripts from reference voice files
 * WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path

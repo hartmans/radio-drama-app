@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -118,6 +119,67 @@ def test_live_end_to_end_qwen_script(tmp_path: Path):
             str(xml_path),
             "--voice-dir",
             str(VOICE_DIR),
+            "--output",
+            str(wav_path),
+            "--device",
+            "cuda",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, (
+        f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
+    )
+    assert wav_path.is_file(), f"Expected output file {wav_path} to exist"
+
+    audio, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
+    assert sample_rate == 48000
+    assert audio.ndim == 2
+    assert audio.shape[1] == 2
+    assert audio.shape[0] > 0
+
+
+@pytest.mark.live
+def test_live_end_to_end_mixed_tts_scripts(tmp_path: Path):
+    voice_dir = tmp_path / "voices"
+    voice_dir.mkdir()
+    shutil.copy2(VOICE_DIR / "chandra.wav", voice_dir / "guide-fresh.wav")
+    shutil.copy2(VOICE_DIR / "david.wav", voice_dir / "builder-fresh.wav")
+
+    xml_path = tmp_path / "live-mixed-production.xml"
+    wav_path = tmp_path / "live-mixed-production.wav"
+    xml_path.write_text(
+        """
+        <production>
+          <speaker-map>
+            Guide: guide-fresh.wav
+            Builder: builder-fresh.wav
+          </speaker-map>
+          <script tts="qwen">
+            Guide: The prompt path should load Qwen and WhisperX together.
+          </script>
+          <script>
+            Builder: VibeVoice should still load successfully in the same production render.
+          </script>
+        </production>
+        """,
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _pythonpath_for_subprocess()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(APP_PATH),
+            str(xml_path),
+            "--voice-dir",
+            str(voice_dir),
             "--output",
             str(wav_path),
             "--device",

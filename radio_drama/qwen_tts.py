@@ -15,6 +15,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import convert_audio_format
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
+from .model_loading import shared_model_load
 from .planning import ScriptRenderRequest
 from .rendering import RenderResult
 from .vibevoice import RegisteredRenderRequest
@@ -312,29 +313,33 @@ class QwenTtsResource(AsyncInjectable):
             if self._model is not None:
                 return self._model
 
-            os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
-            from qwen_tts import Qwen3TTSModel
+            with shared_model_load():
+                if self._model is not None:
+                    return self._model
 
-            load_dtype, attn_implementation = self._load_settings_for_device(self.device)
-            try:
-                model = Qwen3TTSModel.from_pretrained(
-                    _QWEN_MODEL_NAME,
-                    device_map=self._device_map_for_device(self.device),
-                    dtype=load_dtype,
-                    attn_implementation=attn_implementation,
-                )
-            except Exception:
-                if attn_implementation != "flash_attention_2":
-                    raise
-                model = Qwen3TTSModel.from_pretrained(
-                    _QWEN_MODEL_NAME,
-                    device_map=self._device_map_for_device(self.device),
-                    dtype=load_dtype,
-                    attn_implementation=None,
-                )
-            self._sample_rate = int(getattr(model.model.config, "sample_rate", 24000))
-            self._model = model
-            return model
+                os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
+                from qwen_tts import Qwen3TTSModel
+
+                load_dtype, attn_implementation = self._load_settings_for_device(self.device)
+                try:
+                    model = Qwen3TTSModel.from_pretrained(
+                        _QWEN_MODEL_NAME,
+                        device_map=self._device_map_for_device(self.device),
+                        dtype=load_dtype,
+                        attn_implementation=attn_implementation,
+                    )
+                except Exception:
+                    if attn_implementation != "flash_attention_2":
+                        raise
+                    model = Qwen3TTSModel.from_pretrained(
+                        _QWEN_MODEL_NAME,
+                        device_map=self._device_map_for_device(self.device),
+                        dtype=load_dtype,
+                        attn_implementation=None,
+                    )
+                self._sample_rate = int(getattr(model.model.config, "sample_rate", 24000))
+                self._model = model
+                return model
 
     def _prompt_cache_path(self, voice_path: Path) -> Path:
         voice_path = voice_path.expanduser().resolve()

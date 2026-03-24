@@ -16,6 +16,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import resample_audio
 from .config import ProductionConfig
 from .debug import write_debug_json, write_debug_message
+from .model_loading import shared_model_load
 from .planning import (
     AudioPlan,
     DialogueAudio,
@@ -393,25 +394,31 @@ class WhisperXResource(AsyncInjectable):
         with self._load_lock:
             if self._asr_model is not None:
                 return self._asr_model
-            whisperx = self._ensure_whisperx_module()
-            self._asr_model = whisperx.load_model(
-                _WHISPERX_MODEL,
-                self.config.resolved_device,
-                compute_type="default",
-                language=_WHISPERX_LANGUAGE,
-            )
-            return self._asr_model
+            with shared_model_load():
+                if self._asr_model is not None:
+                    return self._asr_model
+                whisperx = self._ensure_whisperx_module()
+                self._asr_model = whisperx.load_model(
+                    _WHISPERX_MODEL,
+                    self.config.resolved_device,
+                    compute_type="default",
+                    language=_WHISPERX_LANGUAGE,
+                )
+                return self._asr_model
 
     def _ensure_align_model(self):
         with self._load_lock:
             if self._align_model is not None and self._align_metadata is not None:
                 return self._align_model, self._align_metadata
-            whisperx = self._ensure_whisperx_module()
-            self._align_model, self._align_metadata = whisperx.load_align_model(
-                language_code=_WHISPERX_LANGUAGE,
-                device=self.config.resolved_device,
-            )
-            return self._align_model, self._align_metadata
+            with shared_model_load():
+                if self._align_model is not None and self._align_metadata is not None:
+                    return self._align_model, self._align_metadata
+                whisperx = self._ensure_whisperx_module()
+                self._align_model, self._align_metadata = whisperx.load_align_model(
+                    language_code=_WHISPERX_LANGUAGE,
+                    device=self.config.resolved_device,
+                )
+                return self._align_model, self._align_metadata
 
     def close(self, canceled_futures: bool = True):
         self._alignment_executor.shutdown(wait=True, cancel_futures=canceled_futures)

@@ -19,6 +19,7 @@ from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 from .audio import convert_audio_format
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
+from .model_loading import shared_model_load
 from .planning import ScriptRenderRequest
 from .rendering import RenderResult
 
@@ -191,41 +192,45 @@ class VibeVoiceResource(AsyncInjectable):
         if self._processor is not None and self._model is not None:
             return self._processor, self._model
 
-        processor = VibeVoiceProcessor.from_pretrained(self.config.resolved_model_name)
-        self._sample_rate = getattr(
-            processor.audio_processor,
-            "sampling_rate",
-            MODEL_NATIVE_SAMPLE_RATE,
-        )
+        with shared_model_load():
+            if self._processor is not None and self._model is not None:
+                return self._processor, self._model
 
-        load_dtype, attn_implementation = self._load_settings_for_device(self.device)
-        try:
-            model = self._load_model(
-                model_name=self.config.resolved_model_name,
-                device=self.device,
-                load_dtype=load_dtype,
-                attn_implementation=attn_implementation,
-            )
-        except Exception:
-            if attn_implementation != "flash_attention_2":
-                raise
-            model = self._load_model(
-                model_name=self.config.resolved_model_name,
-                device=self.device,
-                load_dtype=load_dtype,
-                attn_implementation="sdpa",
+            processor = VibeVoiceProcessor.from_pretrained(self.config.resolved_model_name)
+            self._sample_rate = getattr(
+                processor.audio_processor,
+                "sampling_rate",
+                MODEL_NATIVE_SAMPLE_RATE,
             )
 
-        model.eval()
-        model.set_ddpm_inference_steps(
-            num_steps=self.config.resolved_ddpm_inference_steps
-        )
-        self._patch_model_config_api(model)
-        self._patch_generation_cache_api(model)
+            load_dtype, attn_implementation = self._load_settings_for_device(self.device)
+            try:
+                model = self._load_model(
+                    model_name=self.config.resolved_model_name,
+                    device=self.device,
+                    load_dtype=load_dtype,
+                    attn_implementation=attn_implementation,
+                )
+            except Exception:
+                if attn_implementation != "flash_attention_2":
+                    raise
+                model = self._load_model(
+                    model_name=self.config.resolved_model_name,
+                    device=self.device,
+                    load_dtype=load_dtype,
+                    attn_implementation="sdpa",
+                )
 
-        self._processor = processor
-        self._model = model
-        return processor, model
+            model.eval()
+            model.set_ddpm_inference_steps(
+                num_steps=self.config.resolved_ddpm_inference_steps
+            )
+            self._patch_model_config_api(model)
+            self._patch_generation_cache_api(model)
+
+            self._processor = processor
+            self._model = model
+            return processor, model
 
     def _patch_model_config_api(
         self,
