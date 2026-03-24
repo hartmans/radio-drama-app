@@ -7,7 +7,7 @@ from carthage.dependency_injection import InjectionKey, Injector
 
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
-from .resources import VibeVoiceResource
+from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
 
 

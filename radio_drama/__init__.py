@@ -44,8 +44,8 @@ from .planning import (
     SpeakerVoiceReference,
 )
 from .rendering import ProductionResult, RenderResult
-from .resources import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
+from .vibevoice import VibeVoiceResource
 
 __all__ = [
     "AudioPlan",

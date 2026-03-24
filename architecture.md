@@ -109,6 +109,7 @@ Resources own model lifecycle, batching, and other shared external state.
 Current resource contract:
 
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
+* the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout

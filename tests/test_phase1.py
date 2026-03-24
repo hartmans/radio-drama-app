@@ -42,7 +42,7 @@ from radio_drama.planning import (
     SpeakerVoiceReference,
 )
 from radio_drama.rendering import ProductionResult, RenderResult
-from radio_drama.resources import VibeVoiceResource
+from radio_drama.vibevoice import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache
 from radio_drama.testing import CachedRenderMetadata
 

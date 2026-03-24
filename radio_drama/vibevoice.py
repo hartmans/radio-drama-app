@@ -25,6 +25,7 @@ from .rendering import RenderResult
 @dataclass(slots=True, weakref_slot=True)
 class RegisteredRenderRequest:
     """A queued render request whose result may be fulfilled by a later batch."""
+
     resource: "VibeVoiceResource"
     request: ScriptRenderRequest
     future: asyncio.Future
@@ -190,7 +191,11 @@ class VibeVoiceResource(AsyncInjectable):
             return self._processor, self._model
 
         processor = VibeVoiceProcessor.from_pretrained(self.config.resolved_model_name)
-        self._sample_rate = getattr(processor.audio_processor, "sampling_rate", MODEL_NATIVE_SAMPLE_RATE)
+        self._sample_rate = getattr(
+            processor.audio_processor,
+            "sampling_rate",
+            MODEL_NATIVE_SAMPLE_RATE,
+        )
 
         load_dtype, attn_implementation = self._load_settings_for_device(self.device)
         try:
@@ -211,7 +216,9 @@ class VibeVoiceResource(AsyncInjectable):
             )
 
         model.eval()
-        model.set_ddpm_inference_steps(num_steps=self.config.resolved_ddpm_inference_steps)
+        model.set_ddpm_inference_steps(
+            num_steps=self.config.resolved_ddpm_inference_steps
+        )
 
         self._processor = processor
         self._model = model
@@ -273,7 +280,9 @@ class VibeVoiceResource(AsyncInjectable):
             array = np.asarray(audio, dtype=np.float32)
         array = np.squeeze(array)
         if array.ndim != 1:
-            raise ValueError(f"Expected mono audio after generation, got {array.shape!r}")
+            raise ValueError(
+                f"Expected mono audio after generation, got {array.shape!r}"
+            )
         return np.ascontiguousarray(array, dtype=np.float32)
 
     def _write_vibevoice_debug_outputs(
@@ -334,7 +343,11 @@ class VibeVoiceResource(AsyncInjectable):
 
     def _debug_request_label(self, request: ScriptRenderRequest) -> str:
         first_line = next(
-            (line.strip() for line in request.normalized_script.splitlines() if line.strip()),
+            (
+                line.strip()
+                for line in request.normalized_script.splitlines()
+                if line.strip()
+            ),
             "empty-script",
         )
         if ":" in first_line:
@@ -345,3 +358,6 @@ class VibeVoiceResource(AsyncInjectable):
     def _sanitize_debug_label(self, text: str) -> str:
         sanitized = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
         return sanitized or "audio"
+
+
+__all__ = ["RegisteredRenderRequest", "VibeVoiceResource"]

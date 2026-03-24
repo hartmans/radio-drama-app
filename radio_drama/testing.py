@@ -13,7 +13,7 @@ from .audio import convert_audio_format
 from .forced_alignment import WhisperXResource, copy_dialogue_contents
 from .planning import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult
-from .resources import RegisteredRenderRequest, VibeVoiceResource
+from .vibevoice import RegisteredRenderRequest, VibeVoiceResource
 
 
 @dataclass(frozen=True, slots=True)

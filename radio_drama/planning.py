@@ -383,7 +383,7 @@ class ScriptPlan(AudioPlan):
                 normalized_script=normalized_script,
                 voice_samples=tuple(str(ref.resolved_path) for ref in self.ordered_speakers),
             )
-        from .resources import VibeVoiceResource
+        from .vibevoice import VibeVoiceResource
 
         resource = await self.ainjector.get_instance_async(VibeVoiceResource)
         self._registered_request = await resource.register_request(self.render_request)
