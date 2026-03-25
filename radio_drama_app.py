@@ -79,6 +79,7 @@ def main() -> None:
             config=config,
             event_loop=asyncio.get_running_loop(),
             document_path=Path(args.file),
+            output_path=Path(output_path),
         )
         try:
             ainjector = injector(AsyncInjector)

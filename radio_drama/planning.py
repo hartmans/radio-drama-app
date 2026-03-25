@@ -68,6 +68,7 @@ class ScriptRenderRequest:
     """Semantic render request sent to a speech resource."""
     normalized_script: str
     voice_samples: tuple[str, ...]
+    first_words: str = ""
 
 
 @inject(injector=Injector)
@@ -425,6 +426,7 @@ class ScriptPlan(AudioPlan):
                 speaker.authored_name.lower(): index + 1
                 for index, speaker in enumerate(self.ordered_speakers)
             }
+            first_words = self._render_request_first_words(self.dialogue_lines)
             normalized_script = "\n".join(
                 f"Speaker {local_speaker_ids[line.speaker.authored_name.lower()]}: {line.spoken_text}"
                 for line in self.dialogue_lines
@@ -432,6 +434,7 @@ class ScriptPlan(AudioPlan):
             self.render_request = ScriptRenderRequest(
                 normalized_script=normalized_script,
                 voice_samples=tuple(str(ref.resolved_path) for ref in self.ordered_speakers),
+                first_words=first_words,
             )
         resource = await self.ainjector.get_instance_async(self._tts_resource_type())
         self._registered_request = await resource.register_request(self.render_request)
@@ -689,6 +692,15 @@ class ScriptPlan(AudioPlan):
                 seen.add(key)
                 ordered.append(line.speaker)
         return ordered
+
+    @staticmethod
+    def _render_request_first_words(
+        dialogue_lines: Sequence[DialogueLine],
+    ) -> str:
+        if not dialogue_lines:
+            return "empty-script"
+        label = " ".join(dialogue_lines[0].spoken_text.split()).strip()
+        return label[:40] or "empty-script"
 
 
 @inject(config=ProductionConfig)

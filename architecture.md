@@ -104,7 +104,7 @@ Planning rule for presets:
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
 * the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
 
-`radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector.
+`radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path` and do not override `InjectionKey("cache_dir")`, it also provides a production-scoped VibeVoice cache directory derived from that output path.
 
 ## Resource layer
 
@@ -114,10 +114,12 @@ Current resource contract:
 
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
+* `ScriptRenderRequest` carries the normalized script, resolved voice samples, and a short leading-text label for cache/debug artifacts
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each referenced speaker voice line-by-line before concatenating one script result
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
+* when `InjectionKey("cache_dir")` is present, `VibeVoiceResource` persists model-native WAV output plus adjacent JSON metadata keyed by normalized script and voice references, and touches cache mtimes whenever cached output is reused
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
