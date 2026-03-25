@@ -57,6 +57,7 @@ Current planning contract:
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
+* every `AudioPlan` may apply a node-level `gain` in decibels during `post_render()`
 * every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, `post_gap`, and optional `length`
 * document nodes may set `pre_gap`, `post_gap`, or `length`, but not `pre_margin` or `post_margin`
 * `length` and `post_gap` are mutually exclusive on one document node
@@ -69,11 +70,11 @@ Current plan types:
   once ready, it registers itself in the production injector so later scripts can find it
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
-  `DialogueLine` holds spoken text
+  `DialogueLine` holds spoken text plus a handling mode such as `normal` or `ignore`
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan`: resolves one sound asset during planning and lazily starts cached normalization work during render so cut-away plans do not launch unused background sound work
 * `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
-* `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and marker frames for inline insertions
+* `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and content-boundary marker frames used by script-local slicing
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan`: renders child `AudioPlan`s concurrently into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
@@ -93,8 +94,9 @@ Planning rule for presets:
 
 * `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
 * a plain script produces a `ScriptPlan`
-* if a script contains `DialogueAudio`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of alternating `ScriptSlice` plans and inline audio plans
-* marker indexes are assigned during `ScriptPlan.from_node()` and refer to insertion fenceposts in the original script contents rather than to absolute times
+* if a script contains `DialogueAudio` or any non-`normal` `DialogueLine`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of `ScriptSlice` plans and any inline audio plans that survive script-local filtering
+* marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.contents`, not to absolute times
+* `<ignore>` content is rendered as part of the dry script request but omitted from the composed output by slicing around its content boundaries
 * if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned

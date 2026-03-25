@@ -5,7 +5,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence, cast
 
 import numpy as np
 import yaml
@@ -25,7 +25,15 @@ from .audio import SUPPORTED_AUDIO_EXTENSIONS
 
 
 if TYPE_CHECKING:
-    from .document import DocumentNode, MarkNode, ProductionNode, ScriptNode, SpeakerMapNode, TextNode
+    from .document import (
+        DocumentNode,
+        IgnoreNode,
+        MarkNode,
+        ProductionNode,
+        ScriptNode,
+        SpeakerMapNode,
+        TextNode,
+    )
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
@@ -52,6 +60,7 @@ class DialogueLine(DialogueContents):
     """Normalized dialogue stanza belonging to one resolved speaker."""
     speaker: SpeakerVoiceReference
     spoken_text: str
+    handling: Literal["normal", "ignore"] = "normal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +111,8 @@ class AudioPlan(PlanningNode):
         node: DocumentNode | None = None,
         *,
         set_gap: bool = True,
+        set_gain: bool = True,
+        gain_db: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
@@ -110,8 +121,11 @@ class AudioPlan(PlanningNode):
         self.pre_gap = 0.0
         self.post_gap = 0.0
         self.length: float | None = None
+        self.gain_db = gain_db if gain_db is not None else 0.0
         self.audio_marks: list[str] = []
         self._audio_mark_counts: dict[str, int] = {}
+        if set_gain and gain_db is None:
+            self.gain_db = self.gain_db_from_node(node)
         if set_gap and node is not None:
             self._validate_node_timing_attributes()
             self.pre_gap = cast(float, self._timing_attribute_seconds("pre_gap", allow_negative=True))
@@ -123,10 +137,28 @@ class AudioPlan(PlanningNode):
             )
 
     async def render(self) -> RenderResult:
-        return cast(RenderResult, await super().render())
+        if self._render_task is None:
+            self._render_task = asyncio.create_task(self._render_audio())
+        try:
+            return cast(RenderResult, await self._render_task)
+        except BaseException:
+            self._render_task = None
+            raise
 
     async def render_node(self) -> RenderResult:
         raise NotImplementedError
+
+    async def post_render(self, result: RenderResult) -> RenderResult:
+        if self.gain_db == 0.0:
+            return result
+        gain_multiplier = 10.0 ** (self.gain_db / 20.0)
+        return type(result)(
+            audio=np.asarray(result.audio, dtype=np.float32) * gain_multiplier,
+            pre_margin=result.pre_margin,
+            post_margin=result.post_margin,
+            pre_gap=result.pre_gap,
+            post_gap=result.post_gap,
+        )
 
     def leaf_audio_plans(self) -> list["AudioPlan"]:
         return [self]
@@ -147,6 +179,21 @@ class AudioPlan(PlanningNode):
     def cut_before_mark(self, audio_mark: str) -> None:
         if audio_mark not in self.audio_marks:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
+
+    @staticmethod
+    def gain_db_from_node(node: "DocumentNode | None") -> float:
+        if node is None:
+            return 0.0
+        raw_value = node.attributes.get("gain")
+        if raw_value is None:
+            return 0.0
+        normalized = raw_value.strip()
+        if not normalized:
+            raise node.error(f"{node.display_name} gain cannot be empty")
+        try:
+            return float(normalized)
+        except ValueError as exc:
+            raise node.error(f"{node.display_name} gain must be a number of decibels") from exc
 
     def _timing_attribute_seconds(
         self,
@@ -201,6 +248,9 @@ class AudioPlan(PlanningNode):
         self.audio_marks.clear()
         self._audio_mark_counts.clear()
         self.inner_plans(*audio_plans)
+
+    async def _render_audio(self) -> RenderResult:
+        return await self.post_render(await self.render_node())
 
 
 @inject(config=ProductionConfig)
@@ -417,13 +467,14 @@ class ScriptPlan(AudioPlan):
             raise node.error("<script> preset attribute cannot be empty")
         node.tts
 
-        script_plan = await ainjector(cls, node=node)
+        script_plan = await ainjector(cls, node=node, set_gain=False)
         audio_plan: AudioPlan = script_plan
 
-        if script_plan.dialogue_audios:
-            audio_plan = await cls._build_inline_audio_plan(ainjector, node, script_plan)
+        if script_plan.needs_forced_alignment():
+            audio_plan = await cls._build_aligned_audio_plan(ainjector, node, script_plan)
 
         if node.preset is None:
+            audio_plan.gain_db = AudioPlan.gain_db_from_node(node)
             return audio_plan
 
         from .effects import PresetPlan
@@ -436,7 +487,12 @@ class ScriptPlan(AudioPlan):
         )
 
     @classmethod
-    async def _build_inline_audio_plan(cls, ainjector, node: ScriptNode, script_plan: "ScriptPlan") -> AudioPlan:
+    async def _build_aligned_audio_plan(
+        cls,
+        ainjector,
+        node: ScriptNode,
+        script_plan: "ScriptPlan",
+    ) -> AudioPlan:
         from .forced_alignment import AlignedScriptSource, ScriptSlice
 
         aligned_script_source = await ainjector(
@@ -445,38 +501,46 @@ class ScriptPlan(AudioPlan):
             script_plan=script_plan,
         )
         audio_plans: list[AudioPlan] = []
-        marker_index = 0
+        content_index = 0
 
-        for content in script_plan.contents:
-            if not isinstance(content, DialogueAudio):
+        while content_index < len(script_plan.contents):
+            content = script_plan.contents[content_index]
+            if isinstance(content, DialogueAudio):
+                audio_plans.append(content.audio_plan)
+                content_index += 1
                 continue
+            if content.handling != "normal":
+                content_index += 1
+                continue
+            end_index = script_plan.advance_normal_dialogue_slice_end(content_index)
             audio_plans.append(
                 await ainjector(
                     ScriptSlice,
                     node=node,
                     aligned_script_source=aligned_script_source,
-                    start_marker=marker_index,
-                    end_marker=marker_index + 1,
-                    name=cls._script_slice_name(script_plan.contents, marker_index),
+                    start_marker=content_index,
+                    end_marker=end_index,
+                    name=cls._script_slice_name(script_plan.contents, content_index),
                 )
             )
-            audio_plans.append(content.audio_plan)
-            marker_index += 1
+            content_index = end_index
 
-        audio_plans.append(
-            await ainjector(
-                ScriptSlice,
-                node=node,
-                aligned_script_source=aligned_script_source,
-                start_marker=marker_index,
-                end_marker=marker_index + 1,
-                name=cls._script_slice_name(script_plan.contents, marker_index),
+        if not audio_plans:
+            audio_plans.append(
+                await ainjector(
+                    ScriptSlice,
+                    node=node,
+                    aligned_script_source=aligned_script_source,
+                    start_marker=len(script_plan.contents),
+                    end_marker=len(script_plan.contents),
+                    name="ignored script",
+                )
             )
-        )
         return await ainjector(
             ComposeAudioPlan,
             node=node,
             audio_plans=audio_plans,
+            set_gain=False,
         )
 
     @staticmethod
@@ -484,23 +548,17 @@ class ScriptPlan(AudioPlan):
         contents: Sequence[DialogueContents],
         marker_index: int,
     ) -> str:
-        dialogue_audio_index = 0
-        capture_next_dialogue_line = marker_index == 0
-
-        for content in contents:
-            if isinstance(content, DialogueAudio):
-                if dialogue_audio_index == marker_index:
-                    return repr(content.audio_plan)
-                dialogue_audio_index += 1
-                capture_next_dialogue_line = dialogue_audio_index == marker_index
-                continue
-            if capture_next_dialogue_line:
+        if marker_index >= len(contents):
+            return "script end"
+        for content in contents[marker_index:]:
+            if isinstance(content, DialogueLine) and content.handling == "normal":
                 return content.spoken_text[:30]
-
-        return "script end"
+            if isinstance(content, DialogueAudio):
+                return repr(content.audio_plan)
+        return "ignored script"
 
     async def _parse_contents(self) -> list[DialogueContents]:
-        from .document import TextNode
+        from .document import IgnoreNode, TextNode
 
         contents: list[DialogueContents] = []
         pending_text: list[str] = []
@@ -516,11 +574,24 @@ class ScriptPlan(AudioPlan):
                 pending_text.append(child.text)
                 continue
             flush_pending_text()
+            if isinstance(child, IgnoreNode):
+                contents.extend(
+                    self._parse_dialogue_text(
+                        child.text_content,
+                        handling="ignore",
+                    )
+                )
+                continue
             contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
         flush_pending_text()
         return contents
 
-    def _parse_dialogue_text(self, text: str) -> list[DialogueLine]:
+    def _parse_dialogue_text(
+        self,
+        text: str,
+        *,
+        handling: Literal["normal", "ignore"] = "normal",
+    ) -> list[DialogueLine]:
         """Parse speaker stanzas, allowing paragraph continuation lines."""
         text = re.sub(r"^\s*\n", "", text)
         text = re.sub(r"\n\s*$", "", text)
@@ -544,7 +615,13 @@ class ScriptPlan(AudioPlan):
             spoken_text = " ".join(paragraph for paragraph in current_paragraphs if paragraph).strip()
             current_paragraphs.clear()
             if spoken_text:
-                lines.append(DialogueLine(speaker=current_speaker, spoken_text=spoken_text))
+                lines.append(
+                    DialogueLine(
+                        speaker=current_speaker,
+                        spoken_text=spoken_text,
+                        handling=handling,
+                    )
+                )
 
         for raw_line in text.splitlines():
             stripped_line = raw_line.strip()
@@ -571,6 +648,30 @@ class ScriptPlan(AudioPlan):
 
         flush_stanza()
         return lines
+
+    def needs_forced_alignment(self) -> bool:
+        return any(
+            isinstance(content, DialogueAudio)
+            or (isinstance(content, DialogueLine) and content.handling != "normal")
+            for content in self.contents
+        )
+
+    def next_non_audio_index(self, start_index: int) -> int:
+        index = start_index
+        while index < len(self.contents) and isinstance(self.contents[index], DialogueAudio):
+            index += 1
+        return index
+
+    def advance_normal_dialogue_slice_end(self, start_index: int) -> int:
+        index = start_index
+        while index < len(self.contents):
+            content = self.contents[index]
+            if isinstance(content, DialogueAudio):
+                break
+            if not isinstance(content, DialogueLine) or content.handling != "normal":
+                break
+            index += 1
+        return index
 
     def _ordered_unique_speakers(
         self,
@@ -712,7 +813,7 @@ class SlicePlan(AudioPlan):
         node=None,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, **kwargs)
+        super().__init__(node=node, set_gap=False, set_gain=False, **kwargs)
         self.result = result
         self.start_time = start_time
         self.end_time = end_time

@@ -85,6 +85,25 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
+def test_script_allows_ignore_nodes():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script>
+            <ignore>Anna: Internal guidance.</ignore>
+            Anna: Spoken line.
+          </script>
+        </production>
+        """,
+        source_name="ignore.xml",
+    )
+
+    ignore_nodes = root.script_nodes[0].child_elements_named("ignore")
+    assert len(ignore_nodes) == 1
+    assert "Internal guidance." in ignore_nodes[0].normalized_text_content
+
+
 def test_production_allows_mark_nodes_by_attribute_or_text():
     root = parse_production_string(
         """

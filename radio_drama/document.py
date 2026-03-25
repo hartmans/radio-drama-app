@@ -270,6 +270,14 @@ class ScriptNode(ElementNode):
 
 
 @dataclass(slots=True)
+class IgnoreNode(ElementNode):
+    """Document node for dialogue guidance that is rendered and discarded."""
+
+    tag_name: ClassVar[str] = "ignore"
+    allow_text: ClassVar[bool] = True
+
+
+@dataclass(slots=True)
 class MarkNode(AttributeOrTextValueNode):
     """Document node for a zero-length named audio mark."""
 
@@ -286,6 +294,9 @@ class MarkNode(AttributeOrTextValueNode):
         from .planning import MarkPlan
 
         return await ainjector(MarkPlan, node=self, id=self.id)
+
+
+_register_allowed_child(ScriptNode, IgnoreNode)
 
 
 @dataclass(slots=True)
@@ -331,6 +342,7 @@ class ProductionNode(ElementNode):
             ProductionPlan,
             node=self,
             audio_plans=audio_plans,
+            set_gain=False,
         )
         return await production_ainjector(
             PresetPlan,

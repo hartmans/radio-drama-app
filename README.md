@@ -128,6 +128,7 @@ Voice references are resolved from `--voice-dir` when provided, or from the defa
 Supported attributes:
 
 * `preset="NAME"`: applies a named effect chain after the script is rendered
+* `gain="DB"`: applies a post-render gain adjustment in decibels
 * `pre_gap="SECONDS"`: time before the audio occupies space in its parent composition
 * `post_gap="SECONDS"`: time after the audio occupies space in its parent composition
 * `length="SECONDS"`: explicit occupied length in the parent composition
@@ -141,7 +142,8 @@ Current rules:
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty
-* a script may contain nested `<sound>` and `<script>` elements in document order
+* a script may contain nested `<sound>`, `<script>`, `<mark>`, and `<ignore>` elements in document order
+* `<ignore>` dialogue is included in the speech-model render request and then sliced back out of the final script audio
 
 Example:
 
@@ -150,6 +152,21 @@ Example:
   judge: Be seated.
   <sound ref="gavel" post_gap="-0.3" />
   prosecutor: The state is ready, your honor.
+</script>
+```
+
+### `<ignore>`
+
+`<ignore>` contains dialogue guidance that should influence speech generation but not appear in the final rendered script audio.
+
+Example:
+
+```xml
+<script preset="thoughts">
+  <ignore>
+    narrator: Keep this intimate and inward.
+  </ignore>
+  narrator: I knew the hallway was empty before I opened the door.
 </script>
 ```
 
@@ -167,6 +184,7 @@ Equivalent forms:
 Supported attributes:
 
 * `ref="NAME_OR_PATH"`: optional if the text content supplies the same value
+* `gain="DB"`
 * `pre_gap="SECONDS"`
 * `post_gap="SECONDS"`
 * `length="SECONDS"`
@@ -183,6 +201,19 @@ Current sound resolution rules:
 * references may include path separators, for example `court/gavel`
 
 At render time, sounds are normalized with FFmpeg `loudnorm` and converted into the production sample rate and channel layout.
+
+### `<mark>`
+
+`<mark>` inserts a zero-length named cut point into audio composition.
+
+Equivalent forms:
+
+```xml
+<mark id="verdict" />
+<mark>verdict</mark>
+```
+
+Marks bubble upward through enclosing audio plans when unambiguous, so `--cut-before verdict` can target a mark inside a nested script.
 
 ## Current Presets
 

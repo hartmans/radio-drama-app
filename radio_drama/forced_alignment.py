@@ -128,7 +128,7 @@ class WhisperXResource(AsyncInjectable):
         contents: Sequence[DialogueContents],
         result: RenderResult,
     ) -> list[DialogueContents]:
-        if not any(isinstance(content, DialogueAudio) for content in contents):
+        if not any(isinstance(content, DialogueLine) for content in contents):
             return copy_dialogue_contents(contents)
 
         transcript = "\n".join(
@@ -480,7 +480,7 @@ class ScriptSlice(AudioPlan):
         node=None,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, **kwargs)
+        super().__init__(node=node, set_gap=False, set_gain=False, **kwargs)
         self.aligned_script_source = aligned_script_source
         self.start_marker = start_marker
         self.end_marker = end_marker
@@ -511,6 +511,7 @@ def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[Dialogu
                 DialogueLine(
                     speaker=content.speaker,
                     spoken_text=content.spoken_text,
+                    handling=content.handling,
                     start_pos=content.start_pos,
                 )
             )
@@ -551,10 +552,11 @@ def _marker_frames_from_contents(
     total_duration = 0.0 if sample_rate <= 0 else float(frame_count) / sample_rate
     marker_seconds: list[float] = [0.0]
 
-    for content in contents:
-        if not isinstance(content, DialogueAudio):
-            continue
-        marker_seconds.append(min(max(cast_float(content.start_pos), 0.0), total_duration))
+    for index in range(1, len(contents)):
+        previous = contents[index - 1]
+        current = contents[index]
+        boundary_pos = previous.start_pos if isinstance(previous, DialogueAudio) else current.start_pos
+        marker_seconds.append(min(max(cast_float(boundary_pos), 0.0), total_duration))
 
     marker_seconds.append(total_duration)
     stabilized_seconds: list[float] = []
