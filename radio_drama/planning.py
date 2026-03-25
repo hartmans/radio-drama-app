@@ -412,8 +412,13 @@ class ScriptPlan(AudioPlan):
 
     def __repr__(self) -> str:
         line = self.node.location.line
+        first_words = self._preferred_first_words(self.dialogue_lines)
         if line is None:
+            if first_words:
+                return f"ScriptPlan(line=unknown, first_words={first_words!r})"
             return "ScriptPlan(line=unknown)"
+        if first_words:
+            return f"ScriptPlan(line={line}, first_words={first_words!r})"
         return f"ScriptPlan(line={line})"
 
     async def async_ready(self):
@@ -426,7 +431,7 @@ class ScriptPlan(AudioPlan):
                 speaker.authored_name.lower(): index + 1
                 for index, speaker in enumerate(self.ordered_speakers)
             }
-            first_words = self._render_request_first_words(self.dialogue_lines)
+            first_words = self._preferred_first_words(self.dialogue_lines)
             normalized_script = "\n".join(
                 f"Speaker {local_speaker_ids[line.speaker.authored_name.lower()]}: {line.spoken_text}"
                 for line in self.dialogue_lines
@@ -694,12 +699,25 @@ class ScriptPlan(AudioPlan):
         return ordered
 
     @staticmethod
-    def _render_request_first_words(
+    def _preferred_first_words(
         dialogue_lines: Sequence[DialogueLine],
     ) -> str:
-        if not dialogue_lines:
+        preferred_line = next(
+            (
+                line
+                for line in dialogue_lines
+                if line.handling == "normal" and line.spoken_text.strip()
+            ),
+            None,
+        )
+        if preferred_line is None:
+            preferred_line = next(
+                (line for line in dialogue_lines if line.spoken_text.strip()),
+                None,
+            )
+        if preferred_line is None:
             return "empty-script"
-        label = " ".join(dialogue_lines[0].spoken_text.split()).strip()
+        label = " ".join(preferred_line.spoken_text.split()).strip()
         return label[:40] or "empty-script"
 
 
