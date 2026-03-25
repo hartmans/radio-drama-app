@@ -88,6 +88,7 @@ Current mark/cut contract:
 * `MarkPlan` is the only leaf plan that introduces a new mark
 * container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
 * `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
+* `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules
 * `PresetPlan` passes mark bubbling and cutting through to the wrapped audio plan, so top-level production cuts can target marks inside nested script composition
 
 Planning rule for presets:

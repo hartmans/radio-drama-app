@@ -180,6 +180,10 @@ class AudioPlan(PlanningNode):
         if audio_mark not in self.audio_marks:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
+    def cut_after_mark(self, audio_mark: str) -> None:
+        if audio_mark not in self.audio_marks:
+            raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
+
     @staticmethod
     def gain_db_from_node(node: "DocumentNode | None") -> float:
         if node is None:
@@ -717,6 +721,17 @@ class ComposeAudioPlan(AudioPlan):
                 continue
             self.audio_plans = self.audio_plans[index:]
             self.audio_plans[0].cut_before_mark(audio_mark)
+            self._rebuild_audio_marks(self.audio_plans)
+            return
+        raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
+
+    def cut_after_mark(self, audio_mark: str) -> None:
+        super().cut_after_mark(audio_mark)
+        for index, audio_plan in enumerate(self.audio_plans):
+            if audio_mark not in audio_plan.audio_marks:
+                continue
+            self.audio_plans = self.audio_plans[: index + 1]
+            self.audio_plans[-1].cut_after_mark(audio_mark)
             self._rebuild_audio_marks(self.audio_plans)
             return
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")

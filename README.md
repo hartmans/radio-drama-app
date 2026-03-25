@@ -213,7 +213,7 @@ Equivalent forms:
 <mark>verdict</mark>
 ```
 
-Marks bubble upward through enclosing audio plans when unambiguous, so `--cut-before verdict` can target a mark inside a nested script.
+Marks bubble upward through enclosing audio plans when unambiguous, so `--cut-before verdict` or `--cut-after verdict` can target a mark inside a nested script.
 
 ## Current Presets
 

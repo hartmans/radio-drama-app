@@ -168,6 +168,11 @@ class PresetPlan(AudioPlan):
         self.audio_plan.cut_before_mark(audio_mark)
         self._rebuild_audio_marks((self.audio_plan,))
 
+    def cut_after_mark(self, audio_mark: str) -> None:
+        super().cut_after_mark(audio_mark)
+        self.audio_plan.cut_after_mark(audio_mark)
+        self._rebuild_audio_marks((self.audio_plan,))
+
     async def render_node(self) -> RenderResult:
         base_result = await self.audio_plan.render()
         try:

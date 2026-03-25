@@ -615,6 +615,68 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, m
     assert result.audio.tolist() == [2.0, 2.0]
 
 
+def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 1.0, 2.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated: list[DialogueAudio | object] = []
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.5))
+                else:
+                    updated.append(content)
+            return updated
+
+    monkeypatch.setattr(
+        effects_module,
+        "build_named_effect_chain",
+        lambda name: EffectChain(name=name, stages=()),
+    )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="narrator">
+                    Anna: First line.
+                    <mark id="cut" />
+                    Anna: Second line.
+                  </script>
+                </production>
+                """,
+                source_name="cut-after-mark.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            production_plan.cut_after_mark("cut")
+            return production_plan.audio_marks, await production_plan.render()
+        finally:
+            injector.close()
+
+    audio_marks, result = asyncio.run(runner())
+    assert audio_marks == ["cut"]
+    assert result.audio.tolist() == [1.0, 1.0]
+
+
 def test_sound_plan_prefers_shallowest_relative_match(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -840,6 +902,8 @@ def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
     assert compose_plan.audio_marks == []
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_before_mark("cut")
+    with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
+        compose_plan.cut_after_mark("cut")
 
 
 def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
@@ -1758,6 +1822,69 @@ def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(t
 
     rendered_scripts = asyncio.run(runner())
     assert rendered_scripts == ["Speaker 1: Line 2"]
+
+
+def test_cut_after_mark_drops_vibevoice_requests_after_mark(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_channels=1)
+
+    class FakeCutBatchingResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.rendered_scripts: list[str] = []
+
+        def _render_batch_sync(self, batch):
+            self.rendered_scripts.extend(
+                registration.request.normalized_script for registration in batch
+            )
+            return [np.array([1.0], dtype=np.float32) for _ in batch]
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueAudio):
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.0))
+                else:
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            start_pos=0.0,
+                        )
+                    )
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeCutBatchingResource)
+            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Line 1
+                    <mark id="cut" />
+                  </script>
+                  <script>Anna: Line 2</script>
+                </production>
+                """,
+                source_name="cut-after-collect.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            production_plan.cut_after_mark("cut")
+            gc.collect()
+            await production_plan.render()
+            return resource.rendered_scripts
+        finally:
+            injector.close()
+
+    rendered_scripts = asyncio.run(runner())
+    assert rendered_scripts == ["Speaker 1: Line 1"]
 
 
 def test_production_plan_renders_scripts_in_order(tmp_path: Path):

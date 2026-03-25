@@ -28,6 +28,7 @@ def main() -> None:
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output WAV sample rate override.")
     parser.add_argument("--output-channels", type=int, default=None, help="Output WAV channel count override.")
     parser.add_argument("--cut-before", default=None, help="Drop all production audio before the named <mark>.")
+    parser.add_argument("--cut-after", default=None, help="Drop all production audio after the named <mark>.")
     parser.add_argument(
         "--debug",
         action="append",
@@ -84,6 +85,9 @@ def main() -> None:
             production_plan = await production_node.plan(ainjector)
             if args.cut_before is not None:
                 production_plan.cut_before_mark(args.cut_before)
+                gc.collect()
+            if args.cut_after is not None:
+                production_plan.cut_after_mark(args.cut_after)
                 gc.collect()
             production_result = await production_plan.render()
         finally:
