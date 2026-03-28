@@ -604,7 +604,16 @@ class ScriptPlan(AudioPlan):
         *,
         handling: Literal["normal", "ignore"] = "normal",
     ) -> list[DialogueLine]:
-        """Parse speaker stanzas, allowing paragraph continuation lines."""
+        """Parse dialogue text into speaker-scoped lines.
+
+        A new ``DialogueLine`` starts only when the parser encounters a
+        non-empty line of the form ``speaker: ...`` and that speaker resolves
+        in the current ``SpeakerMapPlan``. Blank lines end only the current
+        paragraph, not the current ``DialogueLine``; continuation lines are
+        folded into the current speaker's text. The current ``DialogueLine``
+        is therefore finalized only by a new recognized speaker stanza or by
+        reaching the end of this text chunk.
+        """
         text = re.sub(r"^\s*\n", "", text)
         text = re.sub(r"\n\s*$", "", text)
         if not text:
