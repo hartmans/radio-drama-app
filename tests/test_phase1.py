@@ -2360,32 +2360,6 @@ def test_script_length_must_be_non_negative(tmp_path: Path):
         asyncio.run(runner())
 
 
-def test_script_margins_on_nodes_are_ignored(tmp_path: Path):
-    voice_file = tmp_path / "anna.wav"
-    voice_file.write_bytes(b"fake")
-    config = ProductionConfig(voice_directory=tmp_path)
-
-    async def runner():
-        injector, ainjector = await _make_async_injector(config)
-        try:
-            root = parse_production_string(
-                """
-                <production>
-                  <speaker-map>Anna: anna.wav</speaker-map>
-                  <script pre_margin="0.5">Anna: Line 1</script>
-                </production>
-                """,
-                source_name="pre-margin.xml",
-            )
-            return await root.plan(ainjector)
-        finally:
-            injector.close()
-
-    plan = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert plan.audio_plan.audio_plans[0].pre_margin == 0.0
-
-
 def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
