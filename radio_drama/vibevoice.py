@@ -552,9 +552,27 @@ class VibeVoiceResource(AsyncInjectable):
                 speaker_number = len(voice_samples) + 1
                 speaker_numbers[speaker_key] = speaker_number
                 voice_samples.append(str(line.speaker.resolved_path))
-            normalized_lines.append(f"Speaker {speaker_number}: {line.spoken_text}")
+            for paragraph in self._normalized_script_paragraphs(line.spoken_text):
+                normalized_lines.append(f"Speaker {speaker_number}: {paragraph}")
 
         return "\n".join(normalized_lines).replace("’", "'"), voice_samples
+
+    def _normalized_script_paragraphs(self, spoken_text: str) -> list[str]:
+        paragraphs: list[str] = []
+        current_paragraph: list[str] = []
+
+        for raw_line in spoken_text.splitlines():
+            stripped_line = raw_line.strip()
+            if not stripped_line:
+                if current_paragraph:
+                    paragraphs.append(" ".join(current_paragraph))
+                    current_paragraph.clear()
+                continue
+            current_paragraph.append(stripped_line)
+
+        if current_paragraph:
+            paragraphs.append(" ".join(current_paragraph))
+        return paragraphs or ([" ".join(spoken_text.split()).strip()] if spoken_text.strip() else [])
 
     def _serialize_request(self, request: ScriptRenderRequest) -> dict[str, object]:
         return {

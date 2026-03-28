@@ -2884,6 +2884,89 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
     assert np.allclose(result.audio[:, 0], result.audio[:, 1])
 
 
+def test_vibevoice_resource_prefixes_each_dialogue_paragraph_with_speaker(
+    monkeypatch,
+    tmp_path: Path,
+):
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+
+    class FakeProcessor:
+        def __init__(self):
+            self.audio_processor = type("AudioProcessor", (), {"sampling_rate": 24000})()
+            self.tokenizer = object()
+            self.calls: list[dict[str, object]] = []
+
+        def __call__(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"input_ids": np.array([1])}
+
+    class FakeModel:
+        def eval(self):
+            return None
+
+        def set_ddpm_inference_steps(self, num_steps: int):
+            return None
+
+        def generate(self, **kwargs):
+            return type(
+                "Outputs",
+                (),
+                {"speech_outputs": [np.ones(2400, dtype=np.float32)]},
+            )()
+
+    class FakeResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.fake_processor = FakeProcessor()
+
+        def _ensure_loaded(self):
+            self._sample_rate = 24000
+            return self.fake_processor, FakeModel()
+
+        def _normalize_audio_array(self, audio):
+            return np.asarray(audio, dtype=np.float32)
+
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=48000, output_channels=2)
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeResource)
+            registration = await resource.register_request(
+                ScriptRenderRequest(
+                    dialogue_lines=[
+                        DialogueLine(
+                            speaker=speaker,
+                            spoken_text=(
+                                "First paragraph line one.\n"
+                                "Continuation.\n\n"
+                                "Second paragraph."
+                            ),
+                        )
+                    ]
+                )
+            )
+            await registration.render()
+            return resource.fake_processor.calls[0]["text"]
+        finally:
+            injector.close()
+
+    text_inputs = asyncio.run(runner())
+    assert text_inputs == [
+        "Speaker 1: First paragraph line one. Continuation.\n"
+        "Speaker 1: Second paragraph."
+    ]
+
+
 def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=48000, output_channels=2)
 
