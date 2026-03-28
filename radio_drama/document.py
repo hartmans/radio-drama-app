@@ -37,6 +37,20 @@ class DocumentNode:
     ) -> DocumentError:
         return DocumentError(message, node=self, location=location)
 
+    def boolean_attribute(self, attribute_name: str, *, default: bool = False) -> bool:
+        raw_value = self.attributes.get(attribute_name)
+        if raw_value is None:
+            return default
+        normalized = raw_value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        raise self.error(
+            f"{self.display_name} {attribute_name} must be a boolean "
+            "('true'/'false', 'yes'/'no', 'on'/'off', or '1'/'0')"
+        )
+
 
 @dataclass(slots=True)
 class TextNode(DocumentNode):

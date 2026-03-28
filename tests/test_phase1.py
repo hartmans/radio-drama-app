@@ -2118,6 +2118,93 @@ def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
     assert np.allclose(result.audio[16], 0.0)
 
 
+def test_nested_script_preset_bubbles_out_of_outer_preset_by_default(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    return RenderResult(audio=np.array([value], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="indoor1">
+                    <script preset="narrator">Anna: Inner line.</script>
+                    Anna: Outer line.
+                  </script>
+                </production>
+                """,
+                source_name="nested-preset-bubble.xml",
+            )
+            return await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    production_plan = asyncio.run(runner())
+    outer_plan = production_plan.audio_plan.audio_plans[0]
+    assert isinstance(outer_plan, ComposeAudioPlan)
+    assert len(outer_plan.audio_plans) == 2
+    assert isinstance(outer_plan.audio_plans[0], PresetPlan)
+    assert outer_plan.audio_plans[0].preset_name == "narrator"
+    assert isinstance(outer_plan.audio_plans[1], PresetPlan)
+    assert outer_plan.audio_plans[1].preset_name == "indoor1"
+
+
+def test_nested_script_preset_stacks_when_stack_preset_is_true(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    return RenderResult(audio=np.array([value], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="indoor1">
+                    <script preset="narrator" stack_preset="true">Anna: Inner line.</script>
+                    Anna: Outer line.
+                  </script>
+                </production>
+                """,
+                source_name="nested-preset-stack.xml",
+            )
+            return await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    production_plan = asyncio.run(runner())
+    outer_plan = production_plan.audio_plan.audio_plans[0]
+    assert isinstance(outer_plan, PresetPlan)
+    assert outer_plan.preset_name == "indoor1"
+    assert isinstance(outer_plan.audio_plan, ComposeAudioPlan)
+    assert isinstance(outer_plan.audio_plan.audio_plans[0], PresetPlan)
+    assert outer_plan.audio_plan.audio_plans[0].preset_name == "narrator"
+
+
 def test_script_gap_attribute_requires_numeric_seconds(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

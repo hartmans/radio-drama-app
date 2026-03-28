@@ -79,6 +79,7 @@ Current plan types:
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan`: renders child `AudioPlan`s concurrently into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
+  when it wraps a plain `ComposeAudioPlan`, it may use `async_resolve()` to rewrite itself into a replacement plan graph before readiness so preset bubbling stays a planning concern rather than a render-time special case
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
   the final production render is then wrapped in a top-level `PresetPlan("master")`
 
@@ -99,6 +100,9 @@ Planning rule for presets:
 * marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.contents`, not to absolute times
 * `<ignore>` content is rendered as part of the dry script request but omitted from the composed output by slicing around its content boundaries
 * if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
+* if that composed audio plan already contains inner `PresetPlan` children from nested scripts, `PresetPlan.async_resolve()` splits the outer preset around only the inner presets whose document node does not set `stack_preset=true`
+* each replacement outer preset segment covers the largest contiguous slice available on its side of those non-stacking inner presets so DSP state is preserved across ordinary gaps and stacked presets
+* `stack_preset` is currently a document-authored boolean attribute interpreted on the inner preset node; missing means false
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`

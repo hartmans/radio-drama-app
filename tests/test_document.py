@@ -64,6 +64,39 @@ def test_script_node_tts_defaults_and_normalizes():
     assert root.script_nodes[1].tts == "vibevoice"
 
 
+def test_document_node_boolean_attribute_parses_common_values():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script preset="narrator" stack_preset="YES">Anna: First line.</script>
+          <script preset="narrator" stack_preset="0">Anna: Second line.</script>
+          <script preset="narrator">Anna: Third line.</script>
+        </production>
+        """,
+        source_name="bool-attrs.xml",
+    )
+
+    assert root.script_nodes[0].boolean_attribute("stack_preset") is True
+    assert root.script_nodes[1].boolean_attribute("stack_preset") is False
+    assert root.script_nodes[2].boolean_attribute("stack_preset") is False
+
+
+def test_document_node_boolean_attribute_rejects_invalid_values():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script stack_preset="maybe">Anna: First line.</script>
+        </production>
+        """,
+        source_name="bad-bool.xml",
+    )
+
+    with pytest.raises(DocumentError, match="<script> stack_preset must be a boolean"):
+        root.script_nodes[0].boolean_attribute("stack_preset")
+
+
 def test_script_allows_sound_nodes_by_attribute_or_text():
     root = parse_production_string(
         """

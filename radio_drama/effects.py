@@ -160,6 +160,12 @@ class PresetPlan(AudioPlan):
     def leaf_audio_plans(self) -> list[AudioPlan]:
         return self.audio_plan.leaf_audio_plans()
 
+    async def async_resolve(self):
+        replacement = await self._bubble_through_compose()
+        if replacement is not self:
+            return replacement
+        return self
+
     def __getattr__(self, name: str):
         return getattr(self.audio_plan, name)
 
@@ -185,6 +191,66 @@ class PresetPlan(AudioPlan):
         return await chain.render(
             base_result,
             sample_rate=self.config.resolved_output_sample_rate,
+        )
+
+    async def _bubble_through_compose(self) -> AudioPlan:
+        from .planning import ComposeAudioPlan
+
+        if type(self.audio_plan) is not ComposeAudioPlan:
+            return self
+
+        replacement_children: list[AudioPlan] = []
+        pending_segment: list[AudioPlan] = []
+        bubbled = False
+
+        for child_plan in self.audio_plan.audio_plans:
+            if not self._child_blocks_outer_preset(child_plan):
+                pending_segment.append(child_plan)
+                continue
+            bubbled = True
+            replacement_children.extend(await self._segment_with_outer_preset(pending_segment))
+            pending_segment.clear()
+            replacement_children.append(child_plan)
+
+        if not bubbled:
+            return self
+        replacement_children.extend(await self._segment_with_outer_preset(pending_segment))
+        return await self._compose_replacement(replacement_children)
+
+    def _child_blocks_outer_preset(self, child_plan: AudioPlan) -> bool:
+        if not isinstance(child_plan, PresetPlan):
+            return False
+        return not child_plan.node.boolean_attribute("stack_preset")
+
+    async def _segment_with_outer_preset(self, audio_plans: list[AudioPlan]) -> list[AudioPlan]:
+        if not audio_plans:
+            return []
+        if len(audio_plans) == 1:
+            wrapped_plan = audio_plans[0]
+        else:
+            wrapped_plan = await self.ainjector(
+                type(self.audio_plan),
+                node=self.audio_plan.node,
+                audio_plans=list(audio_plans),
+                set_gain=False,
+            )
+        return [
+            await self.ainjector(
+                type(self),
+                node=self.node,
+                audio_plan=wrapped_plan,
+                preset_name=self.preset_name,
+            )
+        ]
+
+    async def _compose_replacement(self, audio_plans: list[AudioPlan]) -> AudioPlan:
+        if len(audio_plans) == 1:
+            return audio_plans[0]
+        return await self.ainjector(
+            type(self.audio_plan),
+            node=self.audio_plan.node,
+            audio_plans=audio_plans,
+            set_gain=False,
         )
 
 
