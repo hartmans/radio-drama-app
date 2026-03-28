@@ -27,7 +27,7 @@ Current document contract:
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
 * `<line speaker="...">...</line>` may appear inside a script to author one explicit dialogue line without reparsing its text content as `speaker: ...`
-* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
+* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, and `preset`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
@@ -58,13 +58,14 @@ Current planning contract:
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
-* document-authored audio attributes are currently `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
+* document-authored audio attributes are currently `pre_gap`, `post_gap`, `length`, `gain`, `pan`, and `preset`
 * any element that plans into an `AudioPlan` may author those audio attributes
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `length` and `post_gap` on the same node
+* `pan` is validated as an expression at planning time but evaluated only at render time, because it may depend on render-time audio mark positions
 * `preset` is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `PresetPlan`
 * every document node's audio attributes must be consumed by the outermost `AudioPlan` produced from that node; inner plans produced from the same node therefore receive `attrs={}`
-* every `AudioPlan` may apply a node-level `gain` in decibels during `post_render()`
+* every `AudioPlan` may apply node-level `gain` and `pan` during `post_render()`
 * every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, `post_gap`, and optional `length`
 * `pre_margin` and `post_margin` remain render-time plan fields rather than document-authored attributes
 * productions are planned by walking element children in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
@@ -162,7 +163,23 @@ Current rendering contract:
 Current production behavior is timeline composition of rendered script results.
 Script-level `pre_gap` and `post_gap` values are measured in seconds, may be negative, and affect either placement or trimming depending on where the composed result is consumed.
 `length` overrides the natural occupied span of one `AudioPlan` in its parent's composition timeline.
+`RenderResult.audio_marks` holds surviving unambiguous render-time mark positions in sample frames.
+`MarkPlan` introduces its mark at frame `0`, and `ComposeAudioPlan` rebases child mark positions into the composed render result while dropping duplicates the same way ambiguous marks stop bubbling at plan time.
+`pan` expressions are evaluated against those render-time mark locals, coerced to an array-valued expression, clipped to `[-1, 1]`, and then applied as stereo attenuation where the near side stays at full scale and the far side follows a smooth cosine falloff to silence.
 The final production result is then passed through the `master` preset.
+
+## Expression layer
+
+Expression support is intentionally narrow.
+
+Current expression contract:
+
+* `eval_expression(text, locals, return_type)` parses one Python expression with `ast.parse(..., mode="eval")`, validates the allowed syntax, evaluates it with no builtins, and then applies `return_type`
+* the currently allowed surface is numeric constants, names, unary `+`/`-`, binary operators, list or tuple literals, and direct function calls
+* the only current global helper is `line(...)`
+* `ArrayExpression` is the abstract base for expressions that expand to one float32 array for a requested frame count
+* `LineExpression` builds arrays from piecewise-linear frame/value control points plus an optional virtual end point at the requested output size
+* `coerce_array_exp` preserves `ArrayExpression` values and wraps plain numbers as constant `line(number)` expressions
 
 Current debug hooks:
 

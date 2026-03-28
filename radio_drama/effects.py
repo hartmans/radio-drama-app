@@ -132,6 +132,7 @@ class EffectChain:
             post_margin=result.post_margin,
             pre_gap=result.pre_gap,
             post_gap=result.post_gap,
+            audio_marks=result.audio_marks,
         )
 
     async def render(self, result: RenderResult, *, sample_rate: int) -> RenderResult:

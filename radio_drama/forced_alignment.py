@@ -500,7 +500,10 @@ class ScriptSlice(AudioPlan):
         start_frame = aligned_result.marker_frames[self.start_marker]
         end_frame = aligned_result.marker_frames[self.end_marker]
         end_frame = max(start_frame, end_frame)
-        return RenderResult(audio=aligned_result.render_result.audio[start_frame:end_frame])
+        return aligned_result.render_result.slice_frames(
+            start_frame,
+            end_frame,
+        )
 
 
 def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[DialogueContents]:

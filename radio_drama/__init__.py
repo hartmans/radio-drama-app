@@ -17,6 +17,7 @@ from .document import (
     parse_production_string,
 )
 from .errors import DocumentError, SourceLocation
+from .expressions import ArrayExpression, LineExpression, coerce_array_exp, eval_expression, line, validate_expression
 from .effects import (
     EffectChain,
     FFmpegFilterEffectStage,
@@ -51,6 +52,7 @@ from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, Soun
 from .vibevoice import VibeVoiceResource
 
 __all__ = [
+    "ArrayExpression",
     "AudioPlan",
     "available_effect_chains",
     "build_named_effect_chain",
@@ -59,6 +61,7 @@ __all__ = [
     "DialogueContents",
     "AudioPlanContext",
     "AttributeOrTextValueNode",
+    "coerce_array_exp",
     "convert_audio_format",
     "convert_channel_count",
     "DialogueLine",
@@ -66,12 +69,15 @@ __all__ = [
     "DocumentNode",
     "ElementNode",
     "ElementContext",
+    "eval_expression",
     "EffectChain",
     "FFmpegFilterEffectStage",
     "AlignedScriptResult",
     "AlignedScriptSource",
     "IgnoreNode",
+    "line",
     "LineNode",
+    "LineExpression",
     "MarkNode",
     "MarkPlan",
     "NormalizedSoundCache",
@@ -98,6 +104,7 @@ __all__ = [
     "SpeakerVoiceReference",
     "SoundPlan",
     "TextNode",
+    "validate_expression",
     "VibeVoiceResource",
     "WhisperXResource",
     "numpy_stage",

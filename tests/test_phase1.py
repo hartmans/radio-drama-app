@@ -1094,6 +1094,7 @@ def test_mark_plan_emits_zero_length_audio_and_one_mark(tmp_path: Path):
     assert isinstance(mark_plan, MarkPlan)
     assert mark_plan.audio_marks == ["cut"]
     assert result.frame_count == 0
+    assert result.audio_marks == {"cut": 0.0}
 
 
 def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
@@ -1112,16 +1113,125 @@ def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
                 source_name="mark-ambiguity.xml",
             )
             audio_plans = [await child.plan(ainjector) for child in root.child_elements_named("mark")]
-            return await ainjector(ComposeAudioPlan, node=root, audio_plans=audio_plans)
+            compose_plan = await ainjector(ComposeAudioPlan, node=root, audio_plans=audio_plans)
+            return compose_plan, await compose_plan.render()
         finally:
             injector.close()
 
-    compose_plan = asyncio.run(runner())
+    compose_plan, result = asyncio.run(runner())
     assert compose_plan.audio_marks == []
+    assert result.audio_marks == {}
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_before_mark("cut")
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_after_mark("cut")
+
+
+def test_compose_audio_plan_bubbles_render_time_mark_positions(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "tone.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"tone")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([1.0, 1.0], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <mark id="start" />
+                  <sound ref="tone" />
+                  <mark id="after" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            compose_plan = await root.plan(ainjector)
+            return await compose_plan.audio_plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio_marks == {"start": 0.0, "after": 2.0}
+
+
+def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=2)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(
+                    audio=np.ones((4, 2), dtype=np.float32),
+                    audio_marks={"cut": 1.0},
+                ),
+                attrs={"pan": "line([cut, -1, cut + 2, 1])"},
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    np.testing.assert_allclose(result.audio[:, 0], np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32))
+    np.testing.assert_allclose(result.audio[:, 1], np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32))
+
+
+def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=2)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.ones((2, 2), dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" pan="1" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            sound_plan = await root.child_elements_named("sound")[0].plan(ainjector)
+            return await sound_plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
+    np.testing.assert_allclose(result.audio[:, 1], np.ones(2, dtype=np.float32))
 
 
 def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):

@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from radio_drama.expressions import (
+    ArrayExpression,
+    LineExpression,
+    coerce_array_exp,
+    eval_expression,
+    line,
+    validate_expression,
+)
+
+
+def test_line_expression_interpolates_from_implicit_zero() -> None:
+    expression = line([2, 1.0, 4, 0.0])
+
+    np.testing.assert_allclose(
+        expression.to_size(6),
+        np.array([0.0, 0.5, 1.0, 0.5, 0.0, 0.0], dtype=np.float32),
+    )
+
+
+def test_line_expression_uses_end_value_when_present() -> None:
+    expression = line([2, 1.0], 0.0)
+
+    np.testing.assert_allclose(
+        expression.to_size(5),
+        np.array([0.0, 0.5, 1.0, 2.0 / 3.0, 1.0 / 3.0], dtype=np.float32),
+        atol=1e-6,
+    )
+
+
+def test_line_expression_truncates_before_end_value_takes_effect() -> None:
+    expression = line([2, 1.0, 6, 3.0], -1.0)
+
+    np.testing.assert_allclose(
+        expression.to_size(4),
+        np.array([0.0, 0.5, 1.0, 1.5], dtype=np.float32),
+    )
+
+
+def test_line_expression_constant_expands_to_requested_size() -> None:
+    expression = line(0.25)
+
+    np.testing.assert_allclose(
+        expression.to_size(4),
+        np.full(4, 0.25, dtype=np.float32),
+    )
+
+
+def test_line_expression_rejects_invalid_frames() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        line([-1, 0.0])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        line([1, 0.0, 1, 1.0])
+    with pytest.raises(ValueError, match="integers"):
+        line([1.5, 0.0])
+
+
+def test_eval_expression_supports_line_names_and_arithmetic() -> None:
+    expression = eval_expression(
+        "line([mark, -1, mark + 2, amount * 2], amount - 1)",
+        {"mark": 1.0, "amount": 0.5},
+        lambda value: value,
+    )
+
+    assert isinstance(expression, LineExpression)
+    np.testing.assert_allclose(
+        expression.to_size(5),
+        np.array([0.0, -1.0, 0.0, 1.0, 0.25], dtype=np.float32),
+        atol=1e-6,
+    )
+
+
+def test_validate_expression_rejects_unsupported_nodes() -> None:
+    with pytest.raises(ValueError, match="Unsupported expression node"):
+        validate_expression("[value for value in values]")
+    with pytest.raises(ValueError, match="Only direct function calls"):
+        validate_expression("factory()(1)")
+
+
+def test_coerce_array_exp_wraps_numbers() -> None:
+    coerced = coerce_array_exp(3.0)
+    assert isinstance(coerced, ArrayExpression)
+    np.testing.assert_allclose(
+        coerced.to_size(3),
+        np.full(3, 3.0, dtype=np.float32),
+    )

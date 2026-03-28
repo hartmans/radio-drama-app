@@ -20,6 +20,7 @@ from carthage.dependency_injection import (
 from .config import ProductionConfig
 from .debug import write_debug_message
 from .errors import DocumentError
+from .expressions import coerce_array_exp, eval_expression, validate_expression
 from .rendering import ProductionResult, RenderResult
 from .audio import SUPPORTED_AUDIO_EXTENSIONS
 
@@ -152,15 +153,43 @@ class AudioPlan(PlanningNode):
         raise NotImplementedError
 
     async def post_render(self, result: RenderResult) -> RenderResult:
-        if self.gain_db == 0.0:
-            return result
-        gain_multiplier = 10.0 ** (self.gain_db / 20.0)
-        return type(result)(
-            audio=np.asarray(result.audio, dtype=np.float32) * gain_multiplier,
-            pre_margin=result.pre_margin,
-            post_margin=result.post_margin,
-            pre_gap=result.pre_gap,
-            post_gap=result.post_gap,
+        updated_result = result
+        if self.gain_db != 0.0:
+            gain_multiplier = 10.0 ** (self.gain_db / 20.0)
+            updated_result = type(result)(
+                audio=np.asarray(updated_result.audio, dtype=np.float32) * gain_multiplier,
+                pre_margin=updated_result.pre_margin,
+                post_margin=updated_result.post_margin,
+                pre_gap=updated_result.pre_gap,
+                post_gap=updated_result.post_gap,
+                audio_marks=updated_result.audio_marks,
+            )
+        if self.pan_expression is None or updated_result.audio.ndim != 2 or updated_result.audio.shape[1] < 2:
+            return updated_result
+        if updated_result.frame_count == 0:
+            return updated_result
+
+        pan_expression = eval_expression(
+            self.pan_expression,
+            updated_result.audio_marks,
+            coerce_array_exp,
+        )
+        pan = np.clip(pan_expression.to_size(updated_result.frame_count), -1.0, 1.0)
+        far_channel_gain = np.cos(np.abs(pan) * (np.pi / 2.0)).astype(np.float32, copy=False)
+        far_channel_gain[np.abs(pan) >= 1.0] = 0.0
+        left_gain = np.where(pan <= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
+        right_gain = np.where(pan >= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
+
+        audio = np.array(updated_result.audio, dtype=np.float32, copy=True)
+        audio[:, 0] *= left_gain
+        audio[:, 1] *= right_gain
+        return type(updated_result)(
+            audio=audio,
+            pre_margin=updated_result.pre_margin,
+            post_margin=updated_result.post_margin,
+            pre_gap=updated_result.pre_gap,
+            post_gap=updated_result.post_gap,
+            audio_marks=updated_result.audio_marks,
         )
 
     def leaf_audio_plans(self) -> list["AudioPlan"]:
@@ -211,6 +240,7 @@ class AudioPlan(PlanningNode):
             allow_missing=True,
         )
         gain = cls._float_attribute(node, "gain", units="decibels")
+        pan = cls._expression_attribute(node, "pan")
         preset = cls._preset_attribute(node)
         if pre_gap is not None:
             attrs["pre_gap"] = pre_gap
@@ -220,6 +250,8 @@ class AudioPlan(PlanningNode):
             attrs["length"] = length
         if gain is not None:
             attrs["gain"] = gain
+        if pan is not None:
+            attrs["pan"] = pan
         if preset is not None:
             attrs["preset"] = preset
         return attrs
@@ -231,6 +263,7 @@ class AudioPlan(PlanningNode):
         self.post_gap = 0.0
         self.length = None
         self.gain_db = 0.0
+        self.pan_expression = None
         if "length" in attrs and "post_gap" in attrs:
             raise self.document_error(
                 f"{self.node.display_name} may not specify both length and post_gap"
@@ -239,6 +272,7 @@ class AudioPlan(PlanningNode):
         self.post_gap = cast(float, attrs.get("post_gap", 0.0))
         self.length = cast(float | None, attrs.get("length"))
         self.gain_db = cast(float, attrs.get("gain", 0.0))
+        self.pan_expression = cast(str | None, attrs.get("pan"))
 
     def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
         self.attrs = dict(attrs)
@@ -315,6 +349,25 @@ class AudioPlan(PlanningNode):
             raise cls._node_error(node, f"{node.display_name} preset attribute cannot be empty")
         return normalized
 
+    @classmethod
+    def _expression_attribute(cls, node: DocumentNode | None, attribute_name: str) -> str | None:
+        if node is None:
+            return None
+        raw_value = node.attributes.get(attribute_name)
+        if raw_value is None:
+            return None
+        normalized = raw_value.strip()
+        if not normalized:
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
+        try:
+            validate_expression(normalized)
+        except (SyntaxError, ValueError) as exc:
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be a valid expression: {exc}"
+            ) from exc
+        return normalized
+
     def with_plan_timing(self, result: RenderResult) -> RenderResult:
         return RenderResult(
             audio=result.audio,
@@ -322,6 +375,7 @@ class AudioPlan(PlanningNode):
             post_margin=self.post_margin if self.post_margin != 0.0 else result.post_margin,
             pre_gap=self.pre_gap if self.pre_gap != 0.0 else result.pre_gap,
             post_gap=self.post_gap if self.post_gap != 0.0 else result.post_gap,
+            audio_marks=result.audio_marks,
         )
 
     def _rebuild_audio_marks(self, audio_plans: Sequence["AudioPlan"]) -> None:
@@ -348,7 +402,10 @@ class MarkPlan(AudioPlan):
 
     async def render_node(self) -> RenderResult:
         return self.with_plan_timing(
-            RenderResult.empty(channels=self.config.resolved_output_channels)
+            RenderResult.empty(
+                channels=self.config.resolved_output_channels,
+                audio_marks={self.id: 0.0},
+            )
         )
 
 
@@ -917,7 +974,27 @@ class ComposeAudioPlan(AudioPlan):
             post_margin=results[-1].post_margin,
             pre_gap=self._frames_to_seconds(min_start_frame),
             post_gap=self._frames_to_seconds(cursor_frame - max_end_frame),
+            audio_marks=self._compose_audio_marks(placements, min_start_frame=min_start_frame),
         )
+
+    def _compose_audio_marks(
+        self,
+        placements: Sequence[tuple[int, RenderResult]],
+        *,
+        min_start_frame: int,
+    ) -> dict[str, float]:
+        mark_counts: dict[str, int] = {}
+        mark_positions: dict[str, float] = {}
+        for start_frame, result in placements:
+            start_position = float(start_frame - min_start_frame)
+            for mark_id, position in result.audio_marks.items():
+                mark_counts[mark_id] = mark_counts.get(mark_id, 0) + 1
+                mark_positions[mark_id] = start_position + position
+        return {
+            mark_id: mark_positions[mark_id]
+            for mark_id, count in mark_counts.items()
+            if count == 1
+        }
 
     def _occupied_length_frames(
         self,
@@ -979,7 +1056,7 @@ class SlicePlan(AudioPlan):
         frame_rate = self.config.resolved_output_sample_rate
         start_frame = max(0, int(round(self.start_time * frame_rate)))
         end_frame = max(start_frame, int(round(self.end_time * frame_rate)))
-        return RenderResult(audio=self.result.audio[start_frame:end_frame])
+        return self.result.slice_frames(start_frame, end_frame)
 
 
 @inject(config=ProductionConfig)
@@ -1002,6 +1079,7 @@ class ProductionPlan(ComposeAudioPlan):
             post_margin=trimmed.post_margin,
             pre_gap=trimmed.pre_gap,
             post_gap=trimmed.post_gap,
+            audio_marks=trimmed.audio_marks,
         )
 
     def _trim_to_production_boundary(self, result: RenderResult) -> RenderResult:
@@ -1020,4 +1098,9 @@ class ProductionPlan(ComposeAudioPlan):
             audio=audio,
             pre_margin=result.pre_margin,
             post_margin=result.post_margin,
+            audio_marks={
+                mark_id: position - trim_start_frames + leading_frames
+                for mark_id, position in result.audio_marks.items()
+                if trim_start_frames <= position <= end_frame
+            },
         )
