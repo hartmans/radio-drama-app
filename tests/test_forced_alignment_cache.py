@@ -107,16 +107,6 @@ def _assert_plausible_alignment(aligned_contents, expected_starts: list[float]) 
         assert actual == pytest.approx(expected, abs=ALIGNMENT_TOLERANCE_SECONDS)
 
 
-def test_cached_whisperx_resource_aligns_fixture_dialogue_from_cache(
-    cached_whisperx_resource_factory,
-):
-    aligned_contents, expected_starts = asyncio.run(
-        _run_cached_alignment(cached_whisperx_resource_factory, mode="cache")
-    )
-
-    _assert_plausible_alignment(aligned_contents, expected_starts)
-
-
 @pytest.mark.live
 def test_cached_whisperx_resource_aligns_fixture_dialogue_live(
     cached_whisperx_resource_factory,
@@ -127,3 +117,13 @@ def test_cached_whisperx_resource_aligns_fixture_dialogue_live(
 
     _assert_plausible_alignment(aligned_contents, expected_starts)
     assert any(FORCED_ALIGNMENT_CACHE_DIR.glob("*.json"))
+
+
+def test_cached_whisperx_resource_aligns_fixture_dialogue_from_cache(
+    cached_whisperx_resource_factory,
+):
+    aligned_contents, expected_starts = asyncio.run(
+        _run_cached_alignment(cached_whisperx_resource_factory, mode="cache")
+    )
+
+    _assert_plausible_alignment(aligned_contents, expected_starts)
