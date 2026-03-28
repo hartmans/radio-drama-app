@@ -189,9 +189,11 @@ class PresetPlan(AudioPlan):
             raise self.document_error(
                 f"Unknown preset {self.preset_name!r}. Available presets: {available}"
             ) from exc
-        return await chain.render(
-            base_result,
-            sample_rate=self.config.resolved_output_sample_rate,
+        return self.with_plan_timing(
+            await chain.render(
+                base_result,
+                sample_rate=self.config.resolved_output_sample_rate,
+            )
         )
 
     async def _bubble_through_compose(self) -> AudioPlan:

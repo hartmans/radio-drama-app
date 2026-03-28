@@ -446,7 +446,21 @@ class VibeVoiceResource(AsyncInjectable):
 
     def _debug_request_label(self, request: ScriptRenderRequest) -> str:
         label = " ".join(request.first_words.split()).strip()
+        if not label:
+            label = self._fallback_debug_label(request.normalized_script)
         return label[:40] or "empty-script"
+
+    def _fallback_debug_label(self, normalized_script: str) -> str:
+        for raw_line in normalized_script.splitlines():
+            stripped_line = raw_line.strip()
+            if not stripped_line:
+                continue
+            speaker_separator = stripped_line.find(":")
+            if speaker_separator != -1:
+                stripped_line = stripped_line[speaker_separator + 1 :].strip()
+            if stripped_line:
+                return " ".join(stripped_line.split()).strip()
+        return ""
 
     def _sanitize_debug_label(self, text: str) -> str:
         sanitized = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
