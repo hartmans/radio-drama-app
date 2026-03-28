@@ -147,9 +147,10 @@ class PresetPlan(AudioPlan):
         node,
         audio_plan: AudioPlan,
         preset_name: str,
+        attrs=None,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, **kwargs)
+        super().__init__(node=node, attrs=attrs, **kwargs)
         self.audio_plan = audio_plan
         self.preset_name = preset_name
         self.inner_plans(audio_plan)
@@ -232,7 +233,7 @@ class PresetPlan(AudioPlan):
                 type(self.audio_plan),
                 node=self.audio_plan.node,
                 audio_plans=list(audio_plans),
-                set_gain=False,
+                attrs={},
             )
         return [
             await self.ainjector(
@@ -240,17 +241,16 @@ class PresetPlan(AudioPlan):
                 node=self.node,
                 audio_plan=wrapped_plan,
                 preset_name=self.preset_name,
+                attrs={},
             )
         ]
 
     async def _compose_replacement(self, audio_plans: list[AudioPlan]) -> AudioPlan:
-        if len(audio_plans) == 1:
-            return audio_plans[0]
         return await self.ainjector(
             type(self.audio_plan),
             node=self.audio_plan.node,
             audio_plans=audio_plans,
-            set_gain=False,
+            attrs=self.attrs,
         )
 
 

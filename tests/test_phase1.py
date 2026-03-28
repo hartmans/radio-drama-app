@@ -44,7 +44,7 @@ from radio_drama.planning import (
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import ProductionResult, RenderResult
 from radio_drama.vibevoice import VibeVoiceResource
-from radio_drama.sound import NormalizedSoundCache
+from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.testing import CachedRenderMetadata
 
 
@@ -337,6 +337,43 @@ def test_sound_plan_applies_gain_from_node(tmp_path: Path):
 
     result = asyncio.run(runner())
     np.testing.assert_allclose(result.audio, np.array([1.0, -1.0], dtype=np.float32), atol=1e-4)
+
+
+def test_sound_plan_wraps_preset_from_node(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([0.5, -0.5], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" preset="narrator" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            return await root.child_elements_named("sound")[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    plan = asyncio.run(runner())
+    assert isinstance(plan, PresetPlan)
+    assert plan.preset_name == "narrator"
+    assert isinstance(plan.audio_plan, SoundPlan)
 
 
 def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
@@ -2162,6 +2199,49 @@ def test_nested_script_preset_bubbles_out_of_outer_preset_by_default(tmp_path: P
     assert outer_plan.audio_plans[1].preset_name == "indoor1"
 
 
+def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    return RenderResult(audio=np.array([value], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script preset="indoor1" gain="6.0206" post_gap="0.25">
+                    <script preset="narrator">Anna: Inner line.</script>
+                    Anna: Outer line.
+                  </script>
+                </production>
+                """,
+                source_name="nested-preset-bubble-attrs.xml",
+            )
+            return await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    production_plan = asyncio.run(runner())
+    outer_plan = production_plan.audio_plan.audio_plans[0]
+    assert isinstance(outer_plan, ComposeAudioPlan)
+    assert outer_plan.gain_db == pytest.approx(6.0206)
+    assert outer_plan.post_gap == pytest.approx(0.25)
+    assert outer_plan.audio_plans[0].gain_db == 0.0
+    assert outer_plan.audio_plans[1].gain_db == 0.0
+
+
 def test_nested_script_preset_stacks_when_stack_preset_is_true(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
@@ -2280,7 +2360,7 @@ def test_script_length_must_be_non_negative(tmp_path: Path):
         asyncio.run(runner())
 
 
-def test_script_margins_cannot_be_set_on_nodes(tmp_path: Path):
+def test_script_margins_on_nodes_are_ignored(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path)
@@ -2297,12 +2377,13 @@ def test_script_margins_cannot_be_set_on_nodes(tmp_path: Path):
                 """,
                 source_name="pre-margin.xml",
             )
-            await root.plan(ainjector)
+            return await root.plan(ainjector)
         finally:
             injector.close()
 
-    with pytest.raises(DocumentError, match="<script> pre_margin cannot be set on document nodes"):
-        asyncio.run(runner())
+    plan = asyncio.run(runner())
+    assert isinstance(plan, PresetPlan)
+    assert plan.audio_plan.audio_plans[0].pre_margin == 0.0
 
 
 def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):

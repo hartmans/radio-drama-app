@@ -38,6 +38,8 @@ if TYPE_CHECKING:
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 PRODUCTION_PLANNING_INJECTOR_KEY = InjectionKey("radio_drama.production_planning_injector")
+AudioAttrValue = float | str
+AudioAttrs = dict[str, AudioAttrValue]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,31 +113,31 @@ class AudioPlan(PlanningNode):
         self,
         node: DocumentNode | None = None,
         *,
-        set_gap: bool = True,
-        set_gain: bool = True,
-        gain_db: float | None = None,
+        attrs: Mapping[str, AudioAttrValue] | None = None,
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
-        self.pre_margin = 0.0
-        self.post_margin = 0.0
-        self.pre_gap = 0.0
-        self.post_gap = 0.0
-        self.length: float | None = None
-        self.gain_db = gain_db if gain_db is not None else 0.0
         self.audio_marks: list[str] = []
         self._audio_mark_counts: dict[str, int] = {}
-        if set_gain and gain_db is None:
-            self.gain_db = self.gain_db_from_node(node)
-        if set_gap and node is not None:
-            self._validate_node_timing_attributes()
-            self.pre_gap = cast(float, self._timing_attribute_seconds("pre_gap", allow_negative=True))
-            self.post_gap = cast(float, self._timing_attribute_seconds("post_gap", allow_negative=True))
-            self.length = self._timing_attribute_seconds(
-                "length",
-                allow_negative=False,
-                allow_missing=True,
-            )
+        resolved_attrs = self.attrs_from_node() if attrs is None else dict(attrs)
+        self._replace_attrs(resolved_attrs)
+
+    async def async_resolve(self):
+        preset_name = cast(str | None, self.attrs.get("preset"))
+        if preset_name is None:
+            return self
+        wrapper_attrs = {key: value for key, value in self.attrs.items() if key != "preset"}
+        await self.async_ready()
+        self._replace_attrs({})
+        from .effects import PresetPlan
+
+        return await self.ainjector(
+            PresetPlan,
+            node=self.node,
+            audio_plan=self,
+            preset_name=preset_name,
+            attrs=wrapper_attrs,
+        )
 
     async def render(self) -> RenderResult:
         if self._render_task is None:
@@ -185,20 +187,58 @@ class AudioPlan(PlanningNode):
         if audio_mark not in self.audio_marks:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
-    @staticmethod
-    def gain_db_from_node(node: "DocumentNode | None") -> float:
-        if node is None:
-            return 0.0
-        raw_value = node.attributes.get("gain")
-        if raw_value is None:
-            return 0.0
-        normalized = raw_value.strip()
-        if not normalized:
-            raise node.error(f"{node.display_name} gain cannot be empty")
-        try:
-            return float(normalized)
-        except ValueError as exc:
-            raise node.error(f"{node.display_name} gain must be a number of decibels") from exc
+    def attrs_from_node(self) -> AudioAttrs:
+        if self.node is None:
+            return {}
+        attrs: AudioAttrs = {}
+        pre_gap = self._timing_attribute_seconds(
+            "pre_gap",
+            allow_negative=True,
+            allow_missing=True,
+        )
+        post_gap = self._timing_attribute_seconds(
+            "post_gap",
+            allow_negative=True,
+            allow_missing=True,
+        )
+        length = self._timing_attribute_seconds(
+            "length",
+            allow_negative=False,
+            allow_missing=True,
+        )
+        gain = self._float_attribute("gain", units="decibels")
+        preset = self._preset_attribute()
+        if pre_gap is not None:
+            attrs["pre_gap"] = pre_gap
+        if post_gap is not None:
+            attrs["post_gap"] = post_gap
+        if length is not None:
+            attrs["length"] = length
+        if gain is not None:
+            attrs["gain"] = gain
+        if preset is not None:
+            attrs["preset"] = preset
+        return attrs
+
+    def process_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
+        self.pre_margin = 0.0
+        self.post_margin = 0.0
+        self.pre_gap = 0.0
+        self.post_gap = 0.0
+        self.length = None
+        self.gain_db = 0.0
+        if "length" in attrs and "post_gap" in attrs:
+            raise self.document_error(
+                f"{self.node.display_name} may not specify both length and post_gap"
+            )
+        self.pre_gap = cast(float, attrs.get("pre_gap", 0.0))
+        self.post_gap = cast(float, attrs.get("post_gap", 0.0))
+        self.length = cast(float | None, attrs.get("length"))
+        self.gain_db = cast(float, attrs.get("gain", 0.0))
+
+    def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
+        self.attrs = dict(attrs)
+        self.process_attrs(self.attrs)
 
     def _timing_attribute_seconds(
         self,
@@ -227,18 +267,32 @@ class AudioPlan(PlanningNode):
             )
         return seconds
 
-    def _validate_node_timing_attributes(self) -> None:
+    def _float_attribute(self, attribute_name: str, *, units: str) -> float | None:
         if self.node is None:
-            return
-        for attribute_name in ("pre_margin", "post_margin"):
-            if attribute_name in self.node.attributes:
-                raise self.document_error(
-                    f"{self.node.display_name} {attribute_name} cannot be set on document nodes"
-                )
-        if "length" in self.node.attributes and "post_gap" in self.node.attributes:
+            return None
+        raw_value = self.node.attributes.get(attribute_name)
+        if raw_value is None:
+            return None
+        normalized = raw_value.strip()
+        if not normalized:
+            raise self.document_error(f"{self.node.display_name} {attribute_name} cannot be empty")
+        try:
+            return float(normalized)
+        except ValueError as exc:
             raise self.document_error(
-                f"{self.node.display_name} may not specify both length and post_gap"
-            )
+                f"{self.node.display_name} {attribute_name} must be a number of {units}"
+            ) from exc
+
+    def _preset_attribute(self) -> str | None:
+        if self.node is None:
+            return None
+        raw_value = self.node.attributes.get("preset")
+        if raw_value is None:
+            return None
+        normalized = raw_value.strip()
+        if not normalized:
+            raise self.document_error(f"{self.node.display_name} preset attribute cannot be empty")
+        return normalized
 
     def with_plan_timing(self, result: RenderResult) -> RenderResult:
         return RenderResult(
@@ -475,28 +529,22 @@ class ScriptPlan(AudioPlan):
 
     @classmethod
     async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
-        if "preset" in node.attributes and node.preset is None:
-            raise node.error("<script> preset attribute cannot be empty")
         node.tts
-
-        script_plan = await ainjector(cls, node=node, set_gain=False)
+        script_plan = await ainjector(
+            cls,
+            node=node,
+            attrs={} if node.element_children else None,
+        )
         audio_plan: AudioPlan = script_plan
 
         if script_plan.needs_forced_alignment():
-            audio_plan = await cls._build_aligned_audio_plan(ainjector, node, script_plan)
-
-        if node.preset is None:
-            audio_plan.gain_db = AudioPlan.gain_db_from_node(node)
-            return audio_plan
-
-        from .effects import PresetPlan
-
-        return await ainjector(
-            PresetPlan,
-            node=node,
-            audio_plan=audio_plan,
-            preset_name=node.preset,
-        )
+            audio_plan = await cls._build_aligned_audio_plan(
+                ainjector,
+                node,
+                script_plan,
+                attrs=script_plan.attrs_from_node(),
+            )
+        return audio_plan
 
     @classmethod
     async def _build_aligned_audio_plan(
@@ -504,6 +552,8 @@ class ScriptPlan(AudioPlan):
         ainjector,
         node: ScriptNode,
         script_plan: "ScriptPlan",
+        *,
+        attrs: Mapping[str, AudioAttrValue],
     ) -> AudioPlan:
         from .forced_alignment import AlignedScriptSource, ScriptSlice
 
@@ -529,6 +579,7 @@ class ScriptPlan(AudioPlan):
                 await ainjector(
                     ScriptSlice,
                     node=node,
+                    attrs={},
                     aligned_script_source=aligned_script_source,
                     start_marker=content_index,
                     end_marker=end_index,
@@ -542,6 +593,7 @@ class ScriptPlan(AudioPlan):
                 await ainjector(
                     ScriptSlice,
                     node=node,
+                    attrs={},
                     aligned_script_source=aligned_script_source,
                     start_marker=len(script_plan.contents),
                     end_marker=len(script_plan.contents),
@@ -552,7 +604,7 @@ class ScriptPlan(AudioPlan):
             ComposeAudioPlan,
             node=node,
             audio_plans=audio_plans,
-            set_gain=False,
+            attrs=attrs,
         )
 
     @staticmethod
@@ -867,7 +919,8 @@ class SlicePlan(AudioPlan):
         node=None,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, set_gain=False, **kwargs)
+        kwargs.setdefault("attrs", {})
+        super().__init__(node=node, **kwargs)
         self.result = result
         self.start_time = start_time
         self.end_time = end_time
@@ -894,6 +947,11 @@ class SlicePlan(AudioPlan):
 @inject(config=ProductionConfig)
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
+
+    def attrs_from_node(self) -> AudioAttrs:
+        attrs = super().attrs_from_node()
+        attrs["preset"] = "master"
+        return attrs
 
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and clip to the production boundary."""

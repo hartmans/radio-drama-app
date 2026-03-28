@@ -336,7 +336,6 @@ class ProductionNode(ElementNode):
         """Plan the production in a child injector with shared production resources."""
         from .init import radio_drama_injector
         from .planning import PRODUCTION_PLANNING_INJECTOR_KEY, AudioPlan, ProductionPlan
-        from .effects import PresetPlan
         from .sound import ProductionDocumentPath
 
         production_injector = radio_drama_injector(
@@ -356,14 +355,9 @@ class ProductionNode(ElementNode):
             ProductionPlan,
             node=self,
             audio_plans=audio_plans,
-            set_gain=False,
+            attrs=None,
         )
-        return await production_ainjector(
-            PresetPlan,
-            node=self,
-            audio_plan=production_plan,
-            preset_name="master",
-        )
+        return production_plan
 
 
 class _ProductionContentHandler(xml.sax.handler.ContentHandler):

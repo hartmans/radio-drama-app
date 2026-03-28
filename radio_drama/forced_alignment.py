@@ -480,7 +480,8 @@ class ScriptSlice(AudioPlan):
         node=None,
         **kwargs,
     ) -> None:
-        super().__init__(node=node, set_gap=False, set_gain=False, **kwargs)
+        kwargs.setdefault("attrs", {})
+        super().__init__(node=node, **kwargs)
         self.aligned_script_source = aligned_script_source
         self.start_marker = start_marker
         self.end_marker = end_marker

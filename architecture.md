@@ -26,7 +26,7 @@ Current document contract:
 * `<production>` may contain zero or one `<speaker-map>` elements plus any element permitted in the audio-plan context
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
-* `<script preset="...">` selects a named render-time effect preset
+* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
@@ -57,11 +57,15 @@ Current planning contract:
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
+* document-authored audio attributes are currently `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
+* any element that plans into an `AudioPlan` may author those audio attributes
+* `AudioPlan` parses its node-level audio attributes into typed values through `attrs_from_node()`, stores them in `self.attrs`, and applies them through `process_attrs()`
+* `process_attrs()` is responsible for cross-attribute validation such as rejecting `length` and `post_gap` on the same node
+* `preset` is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `PresetPlan`
+* every document node's audio attributes must be consumed by the outermost `AudioPlan` produced from that node; inner plans produced from the same node therefore receive `attrs={}`
 * every `AudioPlan` may apply a node-level `gain` in decibels during `post_render()`
 * every `AudioPlan` carries plan-level timing fields: `pre_margin`, `post_margin`, `pre_gap`, `post_gap`, and optional `length`
-* document nodes may set `pre_gap`, `post_gap`, or `length`, but not `pre_margin` or `post_margin`
-* `length` and `post_gap` are mutually exclusive on one document node
-* `set_gap=False` is used for wrapper plans whose timing must remain owned by an inner audio plan
+* `pre_margin` and `post_margin` remain render-time plan fields rather than document-authored attributes
 * productions are planned by walking element children in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
 
 Current plan types:
@@ -79,9 +83,9 @@ Current plan types:
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan`: renders child `AudioPlan`s concurrently into one shared timeline, mixing overlaps and advancing by either explicit `length` or natural rendered span
 * `PresetPlan`: wraps another `AudioPlan`, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
-  when it wraps a plain `ComposeAudioPlan`, it may use `async_resolve()` to rewrite itself into a replacement plan graph before readiness so preset bubbling stays a planning concern rather than a render-time special case
+  when it wraps a plain `ComposeAudioPlan`, it may use `async_resolve()` to rewrite itself into a replacement `ComposeAudioPlan` before readiness so preset bubbling stays a planning concern rather than a render-time special case
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
-  the final production render is then wrapped in a top-level `PresetPlan("master")`
+  `ProductionPlan.attrs_from_node()` also injects the implicit outer `master` preset so mastering remains part of ordinary audio-attribute resolution
 
 Current mark/cut contract:
 
@@ -99,14 +103,16 @@ Planning rule for presets:
 * if a script contains `DialogueAudio` or any non-`normal` `DialogueLine`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of `ScriptSlice` plans and any inline audio plans that survive script-local filtering
 * marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.contents`, not to absolute times
 * `<ignore>` content is rendered as part of the dry script request but omitted from the composed output by slicing around its content boundaries
-* if the same script also has a preset, `PresetPlan` wraps outside that composed audio plan so the preset still covers the full rendered result
-* if that composed audio plan already contains inner `PresetPlan` children from nested scripts, `PresetPlan.async_resolve()` splits the outer preset around only the inner presets whose document node does not set `stack_preset=true`
+* if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
+* if that outermost plan carries a `preset`, `AudioPlan.async_resolve()` wraps it in a `PresetPlan`
+* if that wrapped plan already contains inner `PresetPlan` children from nested scripts, `PresetPlan.async_resolve()` splits the outer preset around only the inner presets whose document node does not set `stack_preset=true`
+* in that bubbling case, the replacement outer `ComposeAudioPlan` keeps the non-`preset` audio attrs from the bubbled preset node, while each surviving outer preset segment is rebuilt with `attrs={}` so those attrs still belong to the returned outermost plan
 * each replacement outer preset segment covers the largest contiguous slice available on its side of those non-stacking inner presets so DSP state is preserved across ordinary gaps and stacked presets
 * `stack_preset` is currently a document-authored boolean attribute interpreted on the inner preset node; missing means false
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
-* the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset
+* the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset, which stacks outside any inner script presets
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path` and do not override `InjectionKey("cache_dir")`, it also provides a production-scoped VibeVoice cache directory derived from that output path.
 
@@ -170,7 +176,7 @@ Current effects contract:
 * each stage receives stereo production-format numpy audio plus the output sample rate
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
 * preset names are resolved at render time, not baked into `ScriptPlan`
-* unknown preset names are document errors attached to the originating `<script>`
+* unknown preset names are document errors attached to the originating audio node
 
 Current built-in presets:
 
@@ -245,7 +251,7 @@ The current resource layer is centered on VibeVoice. Future model integrations s
 
 ## Rendering growth
 
-The current renderer concatenates clips in order and applies any per-script presets before concatenation. Future rendering work is expected to make fuller use of `RenderResult` metadata and may add:
+The current renderer already composes clips on a shared timeline using `RenderResult` gaps and applies presets through `AudioPlan` resolution. Future rendering work may add:
 
 * non-zero gap and margin handling
 * overlapping or mixed clips
