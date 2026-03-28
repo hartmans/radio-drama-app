@@ -292,6 +292,28 @@ class IgnoreNode(ElementNode):
 
 
 @dataclass(slots=True)
+class LineNode(ElementNode):
+    """Document node for one explicit dialogue line inside a script."""
+
+    tag_name: ClassVar[str] = "line"
+    allow_text: ClassVar[bool] = True
+
+    @property
+    def speaker(self) -> str:
+        raw_speaker = self.attributes.get("speaker")
+        if raw_speaker is None:
+            raise self.error("<line> requires a speaker attribute")
+        normalized = raw_speaker.strip()
+        if not normalized:
+            raise self.error("<line> speaker attribute cannot be empty")
+        return normalized
+
+    def validate_document(self) -> None:
+        self.speaker
+        return ElementNode.validate_document(self)
+
+
+@dataclass(slots=True)
 class MarkNode(AttributeOrTextValueNode):
     """Document node for a zero-length named audio mark."""
 
@@ -311,6 +333,7 @@ class MarkNode(AttributeOrTextValueNode):
 
 
 _register_allowed_child(ScriptNode, IgnoreNode)
+_register_allowed_child(ScriptNode, LineNode)
 
 
 @dataclass(slots=True)

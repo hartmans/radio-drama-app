@@ -25,7 +25,7 @@ from .audio import convert_audio_format
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .model_loading import shared_model_load
-from .planning import ScriptRenderRequest
+from .planning import DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult
 
 
@@ -97,7 +97,7 @@ class VibeVoiceResource(AsyncInjectable):
         loop = asyncio.get_running_loop()
         registration = RegisteredRenderRequest(
             resource=self,
-            request=request or ScriptRenderRequest(normalized_script="", voice_samples=()),
+            request=request or ScriptRenderRequest(dialogue_lines=[]),
             future=loop.create_future(),
         )
         async with self._pending_lock:
@@ -189,9 +189,13 @@ class VibeVoiceResource(AsyncInjectable):
         """Return model-native mono audio for one batch before format conversion."""
         requests = [registration.request for registration in batch]
         processor, model = self._ensure_loaded()
+        normalized_requests = [
+            self._normalized_script_and_voice_samples(request)
+            for request in requests
+        ]
         inputs = processor(
-            text=[request.normalized_script for request in requests],
-            voice_samples=[list(request.voice_samples) for request in requests],
+            text=[normalized_script for normalized_script, _ in normalized_requests],
+            voice_samples=[voice_samples for _, voice_samples in normalized_requests],
             padding=True,
             return_tensors="pt",
             return_attention_mask=True,
@@ -447,19 +451,14 @@ class VibeVoiceResource(AsyncInjectable):
     def _debug_request_label(self, request: ScriptRenderRequest) -> str:
         label = " ".join(request.first_words.split()).strip()
         if not label:
-            label = self._fallback_debug_label(request.normalized_script)
+            label = self._fallback_debug_label(request.dialogue_lines)
         return label[:40] or "empty-script"
 
-    def _fallback_debug_label(self, normalized_script: str) -> str:
-        for raw_line in normalized_script.splitlines():
-            stripped_line = raw_line.strip()
-            if not stripped_line:
-                continue
-            speaker_separator = stripped_line.find(":")
-            if speaker_separator != -1:
-                stripped_line = stripped_line[speaker_separator + 1 :].strip()
+    def _fallback_debug_label(self, dialogue_lines: Sequence[DialogueLine]) -> str:
+        for line in dialogue_lines:
+            stripped_line = " ".join(line.spoken_text.split()).strip()
             if stripped_line:
-                return " ".join(stripped_line.split()).strip()
+                return stripped_line
         return ""
 
     def _sanitize_debug_label(self, text: str) -> str:
@@ -506,8 +505,7 @@ class VibeVoiceResource(AsyncInjectable):
         json_path.write_text(
             json.dumps(
                 {
-                    "normalized_script": request.normalized_script,
-                    "voice_samples": list(request.voice_samples),
+                    "dialogue_lines": self._serialize_dialogue_lines(request.dialogue_lines),
                     "first_words": request.first_words,
                     "frame_count": int(audio.shape[0]),
                     "sample_rate": self.sample_rate,
@@ -533,14 +531,51 @@ class VibeVoiceResource(AsyncInjectable):
 
     def _cache_sha256(self, request: ScriptRenderRequest) -> str:
         payload = json.dumps(
-            {
-                "normalized_script": request.normalized_script,
-                "voice_samples": list(request.voice_samples),
-            },
+            self._serialize_request(request),
             sort_keys=True,
             ensure_ascii=True,
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _normalized_script_and_voice_samples(
+        self,
+        request: ScriptRenderRequest,
+    ) -> tuple[str, list[str]]:
+        speaker_numbers: dict[str, int] = {}
+        voice_samples: list[str] = []
+        normalized_lines: list[str] = []
+
+        for line in request.dialogue_lines:
+            speaker_key = line.speaker.authored_name.lower()
+            speaker_number = speaker_numbers.get(speaker_key)
+            if speaker_number is None:
+                speaker_number = len(voice_samples) + 1
+                speaker_numbers[speaker_key] = speaker_number
+                voice_samples.append(str(line.speaker.resolved_path))
+            normalized_lines.append(f"Speaker {speaker_number}: {line.spoken_text}")
+
+        return "\n".join(normalized_lines).replace("’", "'"), voice_samples
+
+    def _serialize_request(self, request: ScriptRenderRequest) -> dict[str, object]:
+        return {
+            "dialogue_lines": self._serialize_dialogue_lines(request.dialogue_lines),
+            "first_words": request.first_words,
+        }
+
+    def _serialize_dialogue_lines(
+        self,
+        dialogue_lines: Sequence[DialogueLine],
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "speaker": line.speaker.authored_name,
+                "voice_name": line.speaker.voice_name,
+                "voice_path": str(line.speaker.resolved_path),
+                "spoken_text": line.spoken_text,
+                "handling": line.handling,
+            }
+            for line in dialogue_lines
+        ]
 
     def _touch_cache_files(self, *paths: Path) -> None:
         for path in paths:

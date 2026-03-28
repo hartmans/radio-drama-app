@@ -83,10 +83,7 @@ class CachedVibeVoiceDouble:
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
         payload = json.dumps(
-            {
-                "normalized_script": request.normalized_script,
-                "voice_samples": list(request.voice_samples),
-            },
+            _serialize_render_request(request),
             sort_keys=True,
             ensure_ascii=True,
         )
@@ -218,10 +215,7 @@ class CachedVibeVoiceResource(VibeVoiceResource):
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
         payload = json.dumps(
-            {
-                "normalized_script": request.normalized_script,
-                "voice_samples": list(request.voice_samples),
-            },
+            _serialize_render_request(request),
             sort_keys=True,
             ensure_ascii=True,
         )
@@ -348,10 +342,7 @@ class CachedQwenTtsResource(QwenTtsResource):
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
         payload = json.dumps(
-            {
-                "normalized_script": request.normalized_script,
-                "voice_samples": list(request.voice_samples),
-            },
+            _serialize_render_request(request),
             sort_keys=True,
             ensure_ascii=True,
         )
@@ -469,10 +460,29 @@ def _serialize_dialogue_content(content: DialogueContents) -> dict[str, object]:
             "type": "line",
             "speaker": content.speaker.authored_name,
             "spoken_text": content.spoken_text,
+            "handling": content.handling,
+            "node": getattr(content.node, "display_name", None),
+            "attributes": getattr(content.node, "attributes", {}),
         }
     audio_node = getattr(content.audio_plan, "node", None)
     return {
         "type": "audio",
         "node": getattr(audio_node, "display_name", None),
         "attributes": getattr(audio_node, "attributes", {}),
+    }
+
+
+def _serialize_render_request(request: ScriptRenderRequest) -> dict[str, object]:
+    return {
+        "dialogue_lines": [
+            {
+                "speaker": line.speaker.authored_name,
+                "voice_name": line.speaker.voice_name,
+                "voice_path": str(line.speaker.resolved_path),
+                "spoken_text": line.spoken_text,
+                "handling": line.handling,
+            }
+            for line in request.dialogue_lines
+        ],
+        "first_words": request.first_words,
     }

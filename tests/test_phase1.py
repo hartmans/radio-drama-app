@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import re
 import sys
 import shutil
 from pathlib import Path
@@ -59,6 +60,55 @@ async def _make_async_injector(
         document_path=document_path,
     )
     return injector, injector(AsyncInjector)
+
+
+_TEST_SPEAKER_LINE_RE = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.*)$")
+
+
+def _request_from_normalized_script(
+    normalized_script: str,
+    voice_samples: tuple[str, ...],
+    *,
+    first_words: str = "",
+) -> ScriptRenderRequest:
+    speaker_refs: dict[int, SpeakerVoiceReference] = {}
+    dialogue_lines: list[DialogueLine] = []
+    for raw_line in normalized_script.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _TEST_SPEAKER_LINE_RE.match(line)
+        assert match is not None, line
+        speaker_number = int(match.group(1))
+        voice_sample = voice_samples[speaker_number - 1]
+        speaker_refs.setdefault(
+            speaker_number,
+            SpeakerVoiceReference(
+                authored_name=f"Speaker {speaker_number}",
+                voice_name=Path(voice_sample).name,
+                resolved_path=Path(voice_sample),
+            ),
+        )
+        dialogue_lines.append(
+            DialogueLine(
+                speaker=speaker_refs[speaker_number],
+                spoken_text=match.group(2).strip(),
+            )
+        )
+    return ScriptRenderRequest(dialogue_lines=dialogue_lines, first_words=first_words)
+
+
+def _normalized_script_from_request(request: ScriptRenderRequest) -> str:
+    speaker_numbers: dict[str, int] = {}
+    normalized_lines: list[str] = []
+    for line in request.dialogue_lines:
+        speaker_key = line.speaker.authored_name.lower()
+        speaker_number = speaker_numbers.get(speaker_key)
+        if speaker_number is None:
+            speaker_number = len(speaker_numbers) + 1
+            speaker_numbers[speaker_key] = speaker_number
+        normalized_lines.append(f"Speaker {speaker_number}: {line.spoken_text}")
+    return "\n".join(normalized_lines).replace("’", "'")
 
 
 def test_speaker_map_plan_resolves_stem_lookup(tmp_path: Path):
@@ -511,7 +561,7 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
         "First line.",
         "Response.",
     ]
-    assert first_slice.aligned_script_source.script_plan.render_request.normalized_script == (
+    assert _normalized_script_from_request(first_slice.aligned_script_source.script_plan.render_request) == (
         "Speaker 1: First line.\nSpeaker 2: Response."
     )
     assert sound_result.frame_count == 0
@@ -530,7 +580,7 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
     class FakeVibeVoice:
         async def register_request(self, request: ScriptRenderRequest | None):
             assert request is not None
-            assert request.normalized_script == (
+            assert _normalized_script_from_request(request) == (
                 "Speaker 1: Settle into a calm, reflective tone.\n"
                 "Speaker 1: The actual line starts here."
             )
@@ -588,6 +638,137 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
     assert isinstance(script_audio_plan, ComposeAudioPlan)
     assert [type(child).__name__ for child in script_audio_plan.audio_plans] == ["ScriptSlice"]
     assert result.audio.tolist() == [4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+
+
+def test_script_line_without_audio_attrs_does_not_create_extra_script_slice(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            return contents
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.zeros((0, 2), dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First line.
+                    <line speaker="Anna">Second line.</line>
+                    <sound ref="door" />
+                    Anna: Third line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return production_plan.audio_plans[0]
+        finally:
+            injector.close()
+
+    audio_plan = asyncio.run(runner())
+    assert isinstance(audio_plan, ComposeAudioPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == [
+        "ScriptSlice",
+        "SoundPlan",
+        "ScriptSlice",
+    ]
+
+
+def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated: list[DialogueAudio | DialogueLine] = []
+            for index, content in enumerate(contents):
+                if isinstance(content, DialogueLine):
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            node=content.node,
+                            start_pos=float(index),
+                        )
+                    )
+                else:
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=content.start_pos))
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First line.
+                    <line speaker="Anna" gain="6.0206" post_gap="0.25">Second line.</line>
+                    Anna: Third line.
+                  </script>
+                </production>
+                """,
+                source_name="line-audio-attrs.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            return production_plan.audio_plans[0]
+        finally:
+            injector.close()
+
+    audio_plan = asyncio.run(runner())
+    assert isinstance(audio_plan, ComposeAudioPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == [
+        "ScriptSlice",
+        "ScriptSlice",
+        "ScriptSlice",
+    ]
+    special_slice = audio_plan.audio_plans[1]
+    assert isinstance(special_slice, ScriptSlice)
+    assert special_slice.node.display_name == "<line>"
+    assert special_slice.gain_db == pytest.approx(6.0206)
+    assert special_slice.post_gap == pytest.approx(0.25)
 
 
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
@@ -1289,9 +1470,9 @@ def test_vibevoice_output_debug_writes_native_wavs(tmp_path: Path):
                 resource = await ainjector(FakeDebugResource)
                 batch = [
                     SimpleNamespace(
-                        request=ScriptRenderRequest(
-                            normalized_script="Speaker 1: First line for debug output.",
-                            voice_samples=("anna.wav",),
+                        request=_request_from_normalized_script(
+                            "Speaker 1: First line for debug output.",
+                            ("anna.wav",),
                         )
                     )
                 ]
@@ -1699,10 +1880,10 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
             resource = await ainjector(FakeBatchingResource)
             requests = [
                 await resource.register_request(
-                    ScriptRenderRequest(
-                    normalized_script=f"Speaker 1: Line {index + 1}",
-                    voice_samples=("voice.wav",),
-                )
+                    _request_from_normalized_script(
+                        f"Speaker 1: Line {index + 1}",
+                        ("voice.wav",),
+                    )
                 )
                 for index in range(2)
             ]
@@ -1731,7 +1912,7 @@ def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: 
 
         def _render_batch_sync(self, batch):
             self.rendered_scripts.extend(
-                registration.request.normalized_script for registration in batch
+                _normalized_script_from_request(registration.request) for registration in batch
             )
             return [np.array([1.0], dtype=np.float32) for _ in batch]
 
@@ -1799,7 +1980,7 @@ def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(t
 
         def _render_batch_sync(self, batch):
             self.rendered_scripts.extend(
-                registration.request.normalized_script for registration in batch
+                _normalized_script_from_request(registration.request) for registration in batch
             )
             return [np.array([1.0], dtype=np.float32) for _ in batch]
 
@@ -1873,7 +2054,7 @@ def test_cut_after_mark_drops_vibevoice_requests_after_mark(tmp_path: Path):
 
         def _render_batch_sync(self, batch):
             self.rendered_scripts.extend(
-                registration.request.normalized_script for registration in batch
+                _normalized_script_from_request(registration.request) for registration in batch
             )
             return [np.array([1.0], dtype=np.float32) for _ in batch]
 
@@ -1936,7 +2117,7 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = float(request.normalized_script[-1])
+                    value = float(_normalized_script_from_request(request)[-1])
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -1975,7 +2156,7 @@ def test_production_plan_applies_script_gaps(tmp_path: Path):
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = float(request.normalized_script[-1])
+                    value = float(_normalized_script_from_request(request)[-1])
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -2014,7 +2195,7 @@ def test_production_plan_mixes_overlapping_scripts(tmp_path: Path):
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    if request.normalized_script.endswith("1"):
+                    if _normalized_script_from_request(request).endswith("1"):
                         return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
                     return RenderResult(audio=np.array([10.0, 20.0], dtype=np.float32))
 
@@ -2124,7 +2305,7 @@ def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = float(request.normalized_script[-1])
+                    value = float(_normalized_script_from_request(request)[-1])
                     return RenderResult(audio=np.full((16, 2), value, dtype=np.float32))
 
             return Registered()
@@ -2164,7 +2345,7 @@ def test_nested_script_preset_bubbles_out_of_outer_preset_by_default(tmp_path: P
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    value = 1.0 if "Inner line" in _normalized_script_from_request(request) else 2.0
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -2208,7 +2389,7 @@ def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Pat
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    value = 1.0 if "Inner line" in _normalized_script_from_request(request) else 2.0
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -2251,7 +2432,7 @@ def test_nested_script_preset_stacks_when_stack_preset_is_true(tmp_path: Path):
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Inner line" in request.normalized_script else 2.0
+                    value = 1.0 if "Inner line" in _normalized_script_from_request(request) else 2.0
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -2582,10 +2763,7 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
         try:
             resource = await ainjector(FakeResource)
             registration = await resource.register_request(
-                ScriptRenderRequest(
-                    normalized_script="Speaker 1: Hello",
-                    voice_samples=("voice.wav",),
-                )
+                _request_from_normalized_script("Speaker 1: Hello", ("voice.wav",))
             )
             return await registration.render()
         finally:
@@ -2621,9 +2799,9 @@ def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Pa
         try:
             resource = await ainjector(FakeResource)
             registration = await resource.register_request(
-                ScriptRenderRequest(
-                    normalized_script="Speaker 1: Hello\nSpeaker 2: There",
-                    voice_samples=("voice1.wav", "voice2.wav"),
+                _request_from_normalized_script(
+                    "Speaker 1: Hello\nSpeaker 2: There",
+                    ("voice1.wav", "voice2.wav"),
                 )
             )
             return await registration.render()
@@ -2637,10 +2815,7 @@ def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Pa
 
 def test_cached_vibevoice_double_stores_metadata_and_replays(cached_vibevoice_factory, tmp_path: Path):
     cache = cached_vibevoice_factory(mode="live", cache_dir=tmp_path / "cache", seed=7)
-    request = ScriptRenderRequest(
-        normalized_script="Speaker 1: Hello",
-        voice_samples=("anna.wav",),
-    )
+    request = _request_from_normalized_script("Speaker 1: Hello", ("anna.wav",))
 
     live_result = cache.render(
         request,

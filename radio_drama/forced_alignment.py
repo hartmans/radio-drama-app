@@ -480,7 +480,6 @@ class ScriptSlice(AudioPlan):
         node=None,
         **kwargs,
     ) -> None:
-        kwargs.setdefault("attrs", {})
         super().__init__(node=node, **kwargs)
         self.aligned_script_source = aligned_script_source
         self.start_marker = start_marker
@@ -513,6 +512,7 @@ def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[Dialogu
                     speaker=content.speaker,
                     spoken_text=content.spoken_text,
                     handling=content.handling,
+                    node=content.node,
                     start_pos=content.start_pos,
                 )
             )

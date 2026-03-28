@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import weakref
 from pathlib import Path
 from threading import Lock, RLock
@@ -16,7 +15,7 @@ from .audio import convert_audio_format
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
-from .planning import ScriptRenderRequest
+from .planning import DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult
 from .vibevoice import RegisteredRenderRequest
 
@@ -28,7 +27,6 @@ if TYPE_CHECKING:
 _QWEN_MODEL_NAME = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 _QWEN_LANGUAGE = "English"
 _QWEN_PROMPT_CACHE_DIRECTORY = Path("~/.cache/radio_drama/qwen_prompts").expanduser()
-_SPEAKER_LINE_RE = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.+)$")
 
 
 class _PendingRender:
@@ -76,7 +74,7 @@ class QwenTtsResource(AsyncInjectable):
         loop = asyncio.get_running_loop()
         registration = RegisteredRenderRequest(
             resource=self,
-            request=request or ScriptRenderRequest(normalized_script="", voice_samples=()),
+            request=request or ScriptRenderRequest(dialogue_lines=[]),
             future=loop.create_future(),
         )
         async with self._pending_lock:
@@ -137,14 +135,14 @@ class QwenTtsResource(AsyncInjectable):
         self,
         batch: Sequence[RegisteredRenderRequest],
     ) -> list[np.ndarray]:
-        parsed_scripts = [self._parse_script_lines(registration.request) for registration in batch]
+        parsed_scripts = [self._script_lines(registration.request) for registration in batch]
         if not any(parsed_scripts):
             return [np.zeros(0, dtype=np.float32) for _ in batch]
 
         voice_paths = {
-            str(Path(voice_sample).expanduser().resolve())
+            str(Path(line.speaker.resolved_path).expanduser().resolve())
             for registration in batch
-            for voice_sample in registration.request.voice_samples
+            for line in self._script_lines(registration.request)
         }
         prompt_items_by_voice = self._prompt_items_by_voice_sync(sorted(voice_paths))
 
@@ -154,12 +152,14 @@ class QwenTtsResource(AsyncInjectable):
         for script_index, (registration, script_lines) in enumerate(
             zip(batch, parsed_scripts, strict=True)
         ):
-            voice_samples = registration.request.voice_samples
-            for speaker_index, line_text in script_lines:
-                voice_path = str(Path(voice_samples[speaker_index]).expanduser().resolve())
-                line_texts.append(line_text)
+            for line in script_lines:
+                voice_path = str(Path(line.speaker.resolved_path).expanduser().resolve())
+                line_texts.append(line.spoken_text)
                 line_prompts.append(prompt_items_by_voice[voice_path][0])
                 line_targets.append(script_index)
+
+        if not line_texts:
+            return [np.zeros(0, dtype=np.float32) for _ in batch]
 
         native_lines = self._generate_line_batch_native_sync(line_texts, line_prompts)
         rendered_by_script: list[list[np.ndarray]] = [[] for _ in batch]
@@ -196,25 +196,15 @@ class QwenTtsResource(AsyncInjectable):
             generated.extend(self._normalize_audio_array(wav) for wav in wavs)
         return generated
 
-    def _parse_script_lines(
+    def _script_lines(
         self,
         request: ScriptRenderRequest,
-    ) -> list[tuple[int, str]]:
-        parsed: list[tuple[int, str]] = []
-        for raw_line in request.normalized_script.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            match = _SPEAKER_LINE_RE.match(line)
-            if match is None:
-                raise ValueError(f"Unsupported normalized script line for Qwen TTS: {line!r}")
-            speaker_number = int(match.group(1))
-            if speaker_number < 1 or speaker_number > len(request.voice_samples):
-                raise ValueError(
-                    f"Speaker index {speaker_number} is outside the available voice sample range"
-                )
-            parsed.append((speaker_number - 1, match.group(2).strip()))
-        return parsed
+    ) -> list[DialogueLine]:
+        return [
+            line
+            for line in request.dialogue_lines
+            if line.spoken_text.strip()
+        ]
 
     def _prompt_items_by_voice_sync(
         self,

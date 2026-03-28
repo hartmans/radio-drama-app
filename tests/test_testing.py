@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import re
 
 import numpy as np
 import pytest
@@ -21,6 +22,7 @@ from radio_drama.testing import CachedWhisperXResource
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VOICE_DIR = REPO_ROOT / "voices"
+_TEST_SPEAKER_LINE_RE = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.*)$")
 
 
 async def _make_async_injector(config: ProductionConfig) -> tuple:
@@ -29,6 +31,39 @@ async def _make_async_injector(config: ProductionConfig) -> tuple:
         event_loop=asyncio.get_running_loop(),
     )
     return injector, injector(AsyncInjector)
+
+
+def _request_from_normalized_script(
+    normalized_script: str,
+    voice_samples: tuple[str, ...],
+    *,
+    first_words: str = "",
+) -> ScriptRenderRequest:
+    speaker_refs: dict[int, SpeakerVoiceReference] = {}
+    dialogue_lines: list[DialogueLine] = []
+    for raw_line in normalized_script.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = _TEST_SPEAKER_LINE_RE.match(line)
+        assert match is not None, line
+        speaker_number = int(match.group(1))
+        voice_sample = voice_samples[speaker_number - 1]
+        speaker_refs.setdefault(
+            speaker_number,
+            SpeakerVoiceReference(
+                authored_name=f"Speaker {speaker_number}",
+                voice_name=Path(voice_sample).name,
+                resolved_path=Path(voice_sample),
+            ),
+        )
+        dialogue_lines.append(
+            DialogueLine(
+                speaker=speaker_refs[speaker_number],
+                spoken_text=match.group(2).strip(),
+            )
+        )
+    return ScriptRenderRequest(dialogue_lines=dialogue_lines, first_words=first_words)
 
 
 class FakeCachedVibeVoiceResource(CachedVibeVoiceResource):
@@ -77,10 +112,7 @@ def test_cached_vibevoice_resource_replays_cached_metadata(
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
-    request = ScriptRenderRequest(
-        normalized_script="Speaker 1: Hello there.",
-        voice_samples=("anna.wav",),
-    )
+    request = _request_from_normalized_script("Speaker 1: Hello there.", ("anna.wav",))
     cache_dir = tmp_path / "cache"
 
     async def runner():
@@ -122,10 +154,7 @@ def test_cached_vibevoice_resource_skips_when_cache_is_missing(
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
-    request = ScriptRenderRequest(
-        normalized_script="Speaker 1: Missing cache entry.",
-        voice_samples=("anna.wav",),
-    )
+    request = _request_from_normalized_script("Speaker 1: Missing cache entry.", ("anna.wav",))
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
@@ -150,9 +179,9 @@ def test_cached_qwen_resource_replays_cached_metadata(
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
-    request = ScriptRenderRequest(
-        normalized_script="Speaker 1: Hello there.\nSpeaker 2: General Kenobi.",
-        voice_samples=("anna.wav", "ben.wav"),
+    request = _request_from_normalized_script(
+        "Speaker 1: Hello there.\nSpeaker 2: General Kenobi.",
+        ("anna.wav", "ben.wav"),
     )
     cache_dir = tmp_path / "cache"
 
@@ -195,10 +224,7 @@ def test_cached_qwen_resource_skips_when_cache_is_missing(
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
-    request = ScriptRenderRequest(
-        normalized_script="Speaker 1: Missing cache entry.",
-        voice_samples=("anna.wav",),
-    )
+    request = _request_from_normalized_script("Speaker 1: Missing cache entry.", ("anna.wav",))
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
@@ -306,12 +332,12 @@ def test_cached_vibevoice_resource_supports_live_then_cache_modes(
         output_channels=2,
         device="cuda",
     )
-    request = ScriptRenderRequest(
-        normalized_script=(
+    request = _request_from_normalized_script(
+        (
             "Speaker 1: This test should populate metadata in live mode.\n"
             "Speaker 2: Then cache mode should replay the structural result."
         ),
-        voice_samples=(
+        (
             str(VOICE_DIR / "chandra.wav"),
             str(VOICE_DIR / "david.wav"),
         ),
@@ -359,12 +385,12 @@ def test_cached_qwen_resource_supports_live_then_cache_modes(
         output_channels=2,
         device="cuda",
     )
-    request = ScriptRenderRequest(
-        normalized_script=(
+    request = _request_from_normalized_script(
+        (
             "Speaker 1: This test should populate metadata in live mode.\n"
             "Speaker 2: Then cache mode should replay the structural result."
         ),
-        voice_samples=(
+        (
             str(VOICE_DIR / "chandra.wav"),
             str(VOICE_DIR / "david.wav"),
         ),

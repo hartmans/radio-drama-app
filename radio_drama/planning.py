@@ -62,14 +62,14 @@ class DialogueLine(DialogueContents):
     """Normalized dialogue stanza belonging to one resolved speaker."""
     speaker: SpeakerVoiceReference
     spoken_text: str
-    handling: Literal["normal", "ignore"] = "normal"
+    handling: Literal["normal", "ignore", "special"] = "normal"
+    node: "DocumentNode | None" = None
 
 
 @dataclass(frozen=True, slots=True)
 class ScriptRenderRequest:
     """Semantic render request sent to a speech resource."""
-    normalized_script: str
-    voice_samples: tuple[str, ...]
+    dialogue_lines: list[DialogueLine]
     first_words: str = ""
 
 
@@ -119,7 +119,7 @@ class AudioPlan(PlanningNode):
         super().__init__(node=node, **kwargs)
         self.audio_marks: list[str] = []
         self._audio_mark_counts: dict[str, int] = {}
-        resolved_attrs = self.attrs_from_node() if attrs is None else dict(attrs)
+        resolved_attrs = type(self).attrs_from_node(node) if attrs is None else dict(attrs)
         self._replace_attrs(resolved_attrs)
 
     async def async_resolve(self):
@@ -187,27 +187,31 @@ class AudioPlan(PlanningNode):
         if audio_mark not in self.audio_marks:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
-    def attrs_from_node(self) -> AudioAttrs:
-        if self.node is None:
+    @classmethod
+    def attrs_from_node(cls, node: DocumentNode | None) -> AudioAttrs:
+        if node is None:
             return {}
         attrs: AudioAttrs = {}
-        pre_gap = self._timing_attribute_seconds(
+        pre_gap = cls._timing_attribute_seconds(
+            node,
             "pre_gap",
             allow_negative=True,
             allow_missing=True,
         )
-        post_gap = self._timing_attribute_seconds(
+        post_gap = cls._timing_attribute_seconds(
+            node,
             "post_gap",
             allow_negative=True,
             allow_missing=True,
         )
-        length = self._timing_attribute_seconds(
+        length = cls._timing_attribute_seconds(
+            node,
             "length",
             allow_negative=False,
             allow_missing=True,
         )
-        gain = self._float_attribute("gain", units="decibels")
-        preset = self._preset_attribute()
+        gain = cls._float_attribute(node, "gain", units="decibels")
+        preset = cls._preset_attribute(node)
         if pre_gap is not None:
             attrs["pre_gap"] = pre_gap
         if post_gap is not None:
@@ -240,58 +244,75 @@ class AudioPlan(PlanningNode):
         self.attrs = dict(attrs)
         self.process_attrs(self.attrs)
 
+    @staticmethod
+    def _node_error(node: DocumentNode, message: str) -> DocumentError:
+        return node.error(message)
+
+    @classmethod
     def _timing_attribute_seconds(
-        self,
+        cls,
+        node: DocumentNode | None,
         attribute_name: str,
         *,
         allow_negative: bool,
         allow_missing: bool = False,
     ) -> float | None:
-        if self.node is None:
+        if node is None:
             return None if allow_missing else 0.0
-        raw_value = self.node.attributes.get(attribute_name)
+        raw_value = node.attributes.get(attribute_name)
         if raw_value is None:
             return None if allow_missing else 0.0
         normalized = raw_value.strip()
         if not normalized:
-            raise self.document_error(f"{self.node.display_name} {attribute_name} cannot be empty")
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
         try:
             seconds = float(normalized)
         except ValueError as exc:
-            raise self.document_error(
-                f"{self.node.display_name} {attribute_name} must be a number of seconds"
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be a number of seconds"
             ) from exc
         if not allow_negative and seconds < 0:
-            raise self.document_error(
-                f"{self.node.display_name} {attribute_name} must be non-negative seconds"
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be non-negative seconds"
             )
         return seconds
 
-    def _float_attribute(self, attribute_name: str, *, units: str) -> float | None:
-        if self.node is None:
+    @classmethod
+    def _float_attribute(
+        cls,
+        node: DocumentNode | None,
+        attribute_name: str,
+        *,
+        units: str,
+    ) -> float | None:
+        if node is None:
             return None
-        raw_value = self.node.attributes.get(attribute_name)
+        raw_value = node.attributes.get(attribute_name)
         if raw_value is None:
             return None
         normalized = raw_value.strip()
         if not normalized:
-            raise self.document_error(f"{self.node.display_name} {attribute_name} cannot be empty")
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
         try:
             return float(normalized)
         except ValueError as exc:
-            raise self.document_error(
-                f"{self.node.display_name} {attribute_name} must be a number of {units}"
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be a number of {units}"
             ) from exc
 
-    def _preset_attribute(self) -> str | None:
-        if self.node is None:
+    @classmethod
+    def _preset_attribute(cls, node: DocumentNode | None) -> str | None:
+        if node is None:
             return None
-        raw_value = self.node.attributes.get("preset")
+        raw_value = node.attributes.get("preset")
         if raw_value is None:
             return None
         normalized = raw_value.strip()
         if not normalized:
-            raise self.document_error(f"{self.node.display_name} preset attribute cannot be empty")
+            raise cls._node_error(node, f"{node.display_name} preset attribute cannot be empty")
         return normalized
 
     def with_plan_timing(self, result: RenderResult) -> RenderResult:
@@ -481,18 +502,9 @@ class ScriptPlan(AudioPlan):
         self.contents = await self._parse_contents()
         self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
         if self.dialogue_lines:
-            local_speaker_ids = {
-                speaker.authored_name.lower(): index + 1
-                for index, speaker in enumerate(self.ordered_speakers)
-            }
             first_words = self._preferred_first_words(self.dialogue_lines)
-            normalized_script = "\n".join(
-                f"Speaker {local_speaker_ids[line.speaker.authored_name.lower()]}: {line.spoken_text}"
-                for line in self.dialogue_lines
-            ).replace("’", "'")
             self.render_request = ScriptRenderRequest(
-                normalized_script=normalized_script,
-                voice_samples=tuple(str(ref.resolved_path) for ref in self.ordered_speakers),
+                dialogue_lines=list(self.dialogue_lines),
                 first_words=first_words,
             )
         resource = await self.ainjector.get_instance_async(self._tts_resource_type())
@@ -542,7 +554,7 @@ class ScriptPlan(AudioPlan):
                 ainjector,
                 node,
                 script_plan,
-                attrs=script_plan.attrs_from_node(),
+                attrs=type(script_plan).attrs_from_node(node),
             )
         return audio_plan
 
@@ -569,6 +581,19 @@ class ScriptPlan(AudioPlan):
             content = script_plan.contents[content_index]
             if isinstance(content, DialogueAudio):
                 audio_plans.append(content.audio_plan)
+                content_index += 1
+                continue
+            if content.handling == "special":
+                audio_plans.append(
+                    await ainjector(
+                        ScriptSlice,
+                        node=content.node,
+                        aligned_script_source=aligned_script_source,
+                        start_marker=content_index,
+                        end_marker=content_index + 1,
+                        name=content.spoken_text[:30] or content.speaker.authored_name,
+                    )
+                )
                 content_index += 1
                 continue
             if content.handling != "normal":
@@ -622,7 +647,8 @@ class ScriptPlan(AudioPlan):
         return "ignored script"
 
     async def _parse_contents(self) -> list[DialogueContents]:
-        from .document import IgnoreNode, TextNode
+        from .document import IgnoreNode, LineNode, TextNode
+        from .forced_alignment import ScriptSlice
 
         contents: list[DialogueContents] = []
         pending_text: list[str] = []
@@ -643,6 +669,18 @@ class ScriptPlan(AudioPlan):
                     self._parse_dialogue_text(
                         child.text_content,
                         handling="ignore",
+                    )
+                )
+                continue
+            if isinstance(child, LineNode):
+                line_attrs = ScriptSlice.attrs_from_node(child)
+                handling: Literal["normal", "special"] = "special" if line_attrs else "normal"
+                contents.append(
+                    DialogueLine(
+                        speaker=self.speaker_map_plan.lookup(child.speaker),
+                        spoken_text=child.normalized_text_content,
+                        handling=handling,
+                        node=child if handling == "special" else None,
                     )
                 )
                 continue
@@ -948,8 +986,9 @@ class SlicePlan(AudioPlan):
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
-    def attrs_from_node(self) -> AudioAttrs:
-        attrs = super().attrs_from_node()
+    @classmethod
+    def attrs_from_node(cls, node: DocumentNode | None) -> AudioAttrs:
+        attrs = super().attrs_from_node(node)
         attrs["preset"] = "master"
         return attrs
 

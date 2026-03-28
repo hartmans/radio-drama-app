@@ -26,6 +26,7 @@ Current document contract:
 * `<production>` may contain zero or one `<speaker-map>` elements plus any element permitted in the audio-plan context
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
+* `<line speaker="...">...</line>` may appear inside a script to author one explicit dialogue line without reparsing its text content as `speaker: ...`
 * any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
@@ -59,7 +60,7 @@ Current planning contract:
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * document-authored audio attributes are currently `pre_gap`, `post_gap`, `length`, `gain`, and `preset`
 * any element that plans into an `AudioPlan` may author those audio attributes
-* `AudioPlan` parses its node-level audio attributes into typed values through `attrs_from_node()`, stores them in `self.attrs`, and applies them through `process_attrs()`
+* `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `length` and `post_gap` on the same node
 * `preset` is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `PresetPlan`
 * every document node's audio attributes must be consumed by the outermost `AudioPlan` produced from that node; inner plans produced from the same node therefore receive `attrs={}`
@@ -74,7 +75,8 @@ Current plan types:
   once ready, it registers itself in the production injector so later scripts can find it
 * `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
-  `DialogueLine` holds spoken text plus a handling mode such as `normal` or `ignore`
+  `DialogueLine` holds spoken text plus a handling mode such as `normal`, `ignore`, or `special`
+  `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan`: resolves one sound asset during planning and lazily starts cached normalization work during render so cut-away plans do not launch unused background sound work
 * `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
@@ -103,6 +105,8 @@ Planning rule for presets:
 * if a script contains `DialogueAudio` or any non-`normal` `DialogueLine`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of `ScriptSlice` plans and any inline audio plans that survive script-local filtering
 * marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.contents`, not to absolute times
 * `<ignore>` content is rendered as part of the dry script request but omitted from the composed output by slicing around its content boundaries
+* a `<line>` with no audio attrs is just another `normal` `DialogueLine` and merges into adjacent normal dialogue slices
+* a `<line>` whose `ScriptSlice.attrs_from_node(line_node)` result is non-empty becomes a `special` `DialogueLine`; aligned planning then emits a dedicated `ScriptSlice` for only that line, using the line node as the slice node so its audio attrs are consumed by that outermost slice
 * if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
 * if that outermost plan carries a `preset`, `AudioPlan.async_resolve()` wraps it in a `PresetPlan`
 * if that wrapped plan already contains inner `PresetPlan` children from nested scripts, `PresetPlan.async_resolve()` splits the outer preset around only the inner presets whose document node does not set `stack_preset=true`
@@ -124,12 +128,13 @@ Current resource contract:
 
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
-* `ScriptRenderRequest` carries the normalized script, resolved voice samples, and a short leading-text label for cache/debug artifacts
-* `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each referenced speaker voice line-by-line before concatenating one script result
+* `ScriptRenderRequest` carries ordered `DialogueLine` objects plus a short leading-text label for cache/debug artifacts
+* `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines
+* `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
-* when `InjectionKey("cache_dir")` is present, `VibeVoiceResource` persists model-native WAV output plus adjacent JSON metadata keyed by normalized script and voice references, and touches cache mtimes whenever cached output is reused
+* when `InjectionKey("cache_dir")` is present, `VibeVoiceResource` persists model-native WAV output plus adjacent JSON metadata keyed by the semantic render request, and touches cache mtimes whenever cached output is reused
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
