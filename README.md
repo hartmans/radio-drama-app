@@ -186,7 +186,7 @@ Example:
 ```xml
 <script>
   narrator: The room was empty when I arrived.
-  <line speaker="narrator" gain="-3" pan="line([door, -1, natural_length, 0])">
+  <line speaker="narrator" gain="-3" pan="line(door, -1, natural_length, 0)">
     But by then I could already hear footsteps in the hall.
   </line>
 </script>
@@ -254,14 +254,15 @@ Marks bubble upward through enclosing audio plans when unambiguous, so `--cut-be
 
 Current expression-driven audio attributes:
 
+* `gain`
 * `pan`
 * `start`
 * `end`
 
-`pan` evaluates at render time against visible marks in natural sample
-geometry. `start` and `end` are layout-time expressions. Unprefixed mark names
-are not populated specially; they simply fail as ordinary undefined names if
-used.
+`gain` and `pan` evaluate at render time against visible marks in natural
+sample geometry. `start` and `end` are layout-time expressions. Unprefixed mark
+names are not populated specially; they simply fail as ordinary undefined names
+if used.
 
 ## Current Presets
 

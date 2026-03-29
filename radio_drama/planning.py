@@ -183,12 +183,23 @@ class AudioPlan(PlanningNode):
 
     async def post_render(self, result: RenderResult) -> RenderResult:
         updated_result = self._apply_node_render_geometry(result)
-        if self.gain_db != 0.0:
-            gain_multiplier = 10.0 ** (self.gain_db / 20.0)
-            updated_result.audio *= np.float32(gain_multiplier)
-        if self.pan_expression is None or updated_result.audio.ndim != 2 or updated_result.audio.shape[1] < 2:
-            return updated_result
         if updated_result.frame_count == 0:
+            return updated_result
+        if self.gain_expression is not None:
+            gain_expression = eval_expression(
+                self.gain_expression,
+                self.render_time_variables(),
+                coerce_array_exp,
+            )
+            gain_db = gain_expression.to_size(updated_result.frame_count)
+            gain_multiplier = np.float32(10.0) ** (
+                gain_db.astype(np.float32, copy=False) / np.float32(20.0)
+            )
+            if updated_result.audio.ndim == 1:
+                updated_result.audio *= gain_multiplier
+            else:
+                updated_result.audio *= gain_multiplier[:, np.newaxis]
+        if self.pan_expression is None or updated_result.audio.ndim != 2 or updated_result.audio.shape[1] < 2:
             return updated_result
 
         pan_expression = eval_expression(
@@ -255,7 +266,7 @@ class AudioPlan(PlanningNode):
             allow_negative=False,
             allow_missing=True,
         )
-        gain = cls._float_attribute(node, "gain", units="decibels")
+        gain = cls._expression_attribute(node, "gain")
         pan = cls._expression_attribute(node, "pan")
         preset = cls._preset_attribute(node)
         if start is not None:
@@ -284,7 +295,7 @@ class AudioPlan(PlanningNode):
         self.length_expression = None
         self.pre_gap = 0.0
         self.post_gap = 0.0
-        self.gain_db = 0.0
+        self.gain_expression = None
         self.pan_expression = None
         if "start" in attrs and "pre_gap" in attrs:
             raise self.document_error(
@@ -306,7 +317,7 @@ class AudioPlan(PlanningNode):
         self.length_expression = self._attr_expression_text(attrs.get("length"))
         self.pre_gap = 0.0 if self.pre_gap_expression is None else float(self.pre_gap_expression)
         self.post_gap = 0.0 if self.post_gap_expression is None else float(self.post_gap_expression)
-        self.gain_db = cast(float, attrs.get("gain", 0.0))
+        self.gain_expression = cast(str | None, attrs.get("gain"))
         self.pan_expression = cast(str | None, attrs.get("pan"))
 
     def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
@@ -347,30 +358,6 @@ class AudioPlan(PlanningNode):
                 f"{node.display_name} {attribute_name} must be non-negative seconds"
             )
         return seconds
-
-    @classmethod
-    def _float_attribute(
-        cls,
-        node: DocumentNode | None,
-        attribute_name: str,
-        *,
-        units: str,
-    ) -> float | None:
-        if node is None:
-            return None
-        raw_value = node.attributes.get(attribute_name)
-        if raw_value is None:
-            return None
-        normalized = raw_value.strip()
-        if not normalized:
-            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
-        try:
-            return float(normalized)
-        except ValueError as exc:
-            raise cls._node_error(
-                node,
-                f"{node.display_name} {attribute_name} must be a number of {units}"
-            ) from exc
 
     @classmethod
     def _preset_attribute(cls, node: DocumentNode | None) -> str | None:

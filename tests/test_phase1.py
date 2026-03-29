@@ -767,7 +767,7 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
     special_slice = audio_plan.audio_plans[1]
     assert isinstance(special_slice, ScriptSlice)
     assert special_slice.node.display_name == "<line>"
-    assert special_slice.gain_db == pytest.approx(6.0206)
+    assert special_slice.gain_expression == "6.0206"
 
 
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
@@ -1191,7 +1191,7 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
                 result=RenderResult(
                     audio=np.ones((4, 2), dtype=np.float32),
                 ),
-                attrs={"pan": "line([cut, -1, cut + 2, 1])"},
+                attrs={"pan": "line(cut, -1, cut + 2, 1)"},
             )
             return await plan.render()
         finally:
@@ -1200,6 +1200,45 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
     result = asyncio.run(runner())
     np.testing.assert_allclose(result.audio[:, 0], np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32))
     np.testing.assert_allclose(result.audio[:, 1], np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32))
+
+
+def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+            self._layout_marks_inner = {"cut": 0.25}
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(
+                    audio=np.ones(4, dtype=np.float32),
+                ),
+                attrs={"gain": "line(cut, -6, cut + 2, 0)"},
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    expected = np.array(
+        [1.0, 10.0 ** (-6.0 / 20.0), 10.0 ** (-3.0 / 20.0), 1.0],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(result.audio, expected, atol=1e-6)
 
 
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
@@ -2537,9 +2576,9 @@ def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Pat
     production_plan = asyncio.run(runner())
     outer_plan = production_plan.audio_plan.audio_plans[0]
     assert isinstance(outer_plan, ComposeAudioPlan)
-    assert outer_plan.gain_db == pytest.approx(6.0206)
-    assert outer_plan.audio_plans[0].gain_db == 0.0
-    assert outer_plan.audio_plans[1].gain_db == 0.0
+    assert outer_plan.gain_expression == "6.0206"
+    assert outer_plan.audio_plans[0].gain_expression is None
+    assert outer_plan.audio_plans[1].gain_expression is None
 
 
 def test_nested_script_preset_stacks_when_stack_preset_is_true(tmp_path: Path):

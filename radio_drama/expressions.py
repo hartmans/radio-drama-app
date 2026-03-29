@@ -4,7 +4,7 @@ import ast
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from numbers import Real
-from typing import Mapping, Sequence
+from typing import Mapping
 
 import numpy as np
 
@@ -89,24 +89,30 @@ class LineExpression(ArrayExpression):
         return result
 
 
-def line(values, end: float | None = None) -> LineExpression:
-    if isinstance(values, Real):
-        if end is not None:
-            raise ValueError("line(number) does not accept an end value")
-        return LineExpression(end=float(values))
+def line(*values) -> LineExpression:
+    if len(values) == 1 and isinstance(values[0], Real):
+        return LineExpression(end=float(values[0]))
 
-    if not isinstance(values, Sequence):
-        raise TypeError("line requires either a number or a flat sequence of frame/value pairs")
+    if not values:
+        raise TypeError("line requires either a number or frame/value arguments")
+    if len(values) < 2:
+        raise ValueError("line requires frame/value pairs")
+
+    end: float | None = None
+    pair_values = values
     if len(values) % 2 != 0:
-        raise ValueError("line requires an even number of frame/value entries")
+        pair_values = values[:-1]
+        end = float(values[-1])
+    if len(pair_values) % 2 != 0 or not pair_values:
+        raise ValueError("line requires frame/value pairs with an optional final end value")
 
     points = []
-    for index in range(0, len(values), 2):
-        frame_value = values[index]
+    for index in range(0, len(pair_values), 2):
+        frame_value = pair_values[index]
         if not isinstance(frame_value, Real) or not float(frame_value).is_integer():
             raise ValueError("line frame indexes must be integers")
-        points.append((int(frame_value), float(values[index + 1])))
-    return LineExpression(points=tuple(points), end=None if end is None else float(end))
+        points.append((int(frame_value), float(pair_values[index + 1])))
+    return LineExpression(points=tuple(points), end=end)
 
 
 def validate_expression(text: str) -> ast.Expression:
@@ -172,9 +178,5 @@ def _validate_node(node: ast.AST) -> None:
             raise ValueError("Keyword arguments are not allowed in expressions")
         for arg in node.args:
             _validate_node(arg)
-        return
-    if isinstance(node, (ast.List, ast.Tuple)):
-        for element in node.elts:
-            _validate_node(element)
         return
     raise ValueError(f"Unsupported expression node: {type(node).__name__}")

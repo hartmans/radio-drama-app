@@ -18,7 +18,6 @@ Allowed syntax:
 * names
 * unary `+` and `-`
 * binary `+`, `-`, `*`, `/`, `**`, `%`
-* list and tuple literals
 * direct function calls such as `line(...)`
 
 Disallowed syntax includes:
@@ -41,9 +40,9 @@ Supported forms:
 
 * `line(number)`
   Returns a constant expression.
-* `line([frame_1, value_1, ..., frame_n, value_n])`
+* `line(frame_1, value_1, ..., frame_n, value_n)`
   Returns a piecewise-linear expression.
-* `line([frame_1, value_1, ..., frame_n, value_n], end_value)`
+* `line(frame_1, value_1, ..., frame_n, value_n, end_value)`
   Uses `end_value` as the virtual point at the requested output size.
 
 Rules:
@@ -73,6 +72,7 @@ Current coercions:
 
 Current authored expression attributes:
 
+* `gain`
 * `pan`
 * `start`
 * `end`
@@ -89,7 +89,7 @@ internally when resolving left-side and right-side placement.
 
 ## Render-time scope
 
-`pan` is evaluated during `AudioPlan.post_render()`.
+`gain` and `pan` are evaluated during `AudioPlan.post_render()`.
 
 Locals available there:
 
@@ -110,7 +110,7 @@ before or after the node's natural render span.
 Example:
 
 ```python
-line([door_open, -1, door_open + 24000, 0])
+line(door_open, -1, door_open + 24000, 0)
 ```
 
 ## Layout helper scopes

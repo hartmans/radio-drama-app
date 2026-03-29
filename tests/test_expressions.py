@@ -14,7 +14,7 @@ from radio_drama.expressions import (
 
 
 def test_line_expression_interpolates_from_implicit_zero() -> None:
-    expression = line([2, 1.0, 4, 0.0])
+    expression = line(2, 1.0, 4, 0.0)
 
     np.testing.assert_allclose(
         expression.to_size(6),
@@ -23,7 +23,7 @@ def test_line_expression_interpolates_from_implicit_zero() -> None:
 
 
 def test_line_expression_uses_end_value_when_present() -> None:
-    expression = line([2, 1.0], 0.0)
+    expression = line(2, 1.0, 0.0)
 
     np.testing.assert_allclose(
         expression.to_size(5),
@@ -33,7 +33,7 @@ def test_line_expression_uses_end_value_when_present() -> None:
 
 
 def test_line_expression_truncates_before_end_value_takes_effect() -> None:
-    expression = line([2, 1.0, 6, 3.0], -1.0)
+    expression = line(2, 1.0, 6, 3.0, -1.0)
 
     np.testing.assert_allclose(
         expression.to_size(4),
@@ -51,7 +51,7 @@ def test_line_expression_constant_expands_to_requested_size() -> None:
 
 
 def test_line_expression_allows_out_of_range_frames_and_clips() -> None:
-    expression = line([-1, 0.0, 1, 1.0, 6, 0.0])
+    expression = line(-1, 0.0, 1, 1.0, 6, 0.0)
 
     np.testing.assert_allclose(
         expression.to_size(4),
@@ -62,14 +62,16 @@ def test_line_expression_allows_out_of_range_frames_and_clips() -> None:
 
 def test_line_expression_rejects_invalid_frames() -> None:
     with pytest.raises(ValueError, match="strictly increasing"):
-        line([1, 0.0, 1, 1.0])
+        line(1, 0.0, 1, 1.0)
     with pytest.raises(ValueError, match="integers"):
-        line([1.5, 0.0])
+        line(1.5, 0.0)
+    with pytest.raises(TypeError, match="frame/value arguments"):
+        line()
 
 
 def test_eval_expression_supports_line_names_and_arithmetic() -> None:
     expression = eval_expression(
-        "line([mark, -1, mark + 2, amount * 2], amount - 1)",
+        "line(mark, -1, mark + 2, amount * 2, amount - 1)",
         {"mark": 1.0, "amount": 0.5},
         lambda value: value,
     )
@@ -83,6 +85,8 @@ def test_eval_expression_supports_line_names_and_arithmetic() -> None:
 
 
 def test_validate_expression_rejects_unsupported_nodes() -> None:
+    with pytest.raises(ValueError, match="Unsupported expression node: List"):
+        validate_expression("line([1, 2])")
     with pytest.raises(ValueError, match="Unsupported expression node"):
         validate_expression("[value for value in values]")
     with pytest.raises(ValueError, match="Only direct function calls"):
