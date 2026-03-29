@@ -84,7 +84,7 @@ The current schema is intentionally small.
 Current children:
 
 * zero or one `<speaker-map>`
-* any number of audio-producing child elements
+* any number of audio-producing child elements or `<mark>` elements
 * today, those audio-producing elements are `<script>` and `<sound>`
 
 Example:
@@ -127,14 +127,18 @@ Voice references are resolved from `--voice-dir` when provided, or from the defa
 
 Supported attributes:
 
+* `start="EXPR"`: explicit outer-geometry placement in the parent composition
+* `end="EXPR"`: explicit outer-geometry end position in the parent composition
 * `preset="NAME"`: applies a named effect chain after the script is rendered
 * `gain="DB"`: applies a post-render gain adjustment in decibels
 * `pre_gap="SECONDS"`: time before the audio occupies space in its parent composition
 * `post_gap="SECONDS"`: time after the audio occupies space in its parent composition
 * `length="SECONDS"`: explicit occupied length in the parent composition
+* `pan="EXPR"`: stereo automation evaluated against render-time mark positions
 
 Current rules:
 
+* `start` and `pre_gap` are mutually exclusive
 * `length` and `post_gap` are mutually exclusive
 * `length` must be non-negative
 * `pre_gap` and `post_gap` are measured in seconds and may be negative
@@ -143,7 +147,9 @@ Current rules:
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty
 * a script may contain nested `<sound>`, `<script>`, `<mark>`, and `<ignore>` elements in document order
+* a script may also contain `<line speaker="...">...</line>` elements in document order
 * `<ignore>` dialogue is included in the speech-model render request and then sliced back out of the final script audio
+* nested `<script preset="...">` nodes bubble or stack presets according to `stack_preset`
 
 Example:
 
@@ -170,6 +176,31 @@ Example:
 </script>
 ```
 
+### `<line>`
+
+`<line>` may appear inside a `<script>` to author one explicit dialogue line
+without reparsing the text as `Speaker: ...`.
+
+Example:
+
+```xml
+<script>
+  narrator: The room was empty when I arrived.
+  <line speaker="narrator" gain="-3" pan="line([door, -1, natural_length, 0])">
+    But by then I could already hear footsteps in the hall.
+  </line>
+</script>
+```
+
+Current rules:
+
+* `speaker` is required
+* the text inside `<line>` is used literally and may itself begin with `Name:`
+* a `<line>` with no audio attrs merges into surrounding normal dialogue
+* a `<line>` with audio attrs becomes its own aligned `ScriptSlice`, so its
+  audio attrs apply to that one line while the line still contributes to the
+  speech-model context of surrounding dialogue
+
 ### `<sound>`
 
 `<sound>` inserts an audio asset into production composition.
@@ -184,10 +215,14 @@ Equivalent forms:
 Supported attributes:
 
 * `ref="NAME_OR_PATH"`: optional if the text content supplies the same value
+* `start="EXPR"`
+* `end="EXPR"`
 * `gain="DB"`
 * `pre_gap="SECONDS"`
 * `post_gap="SECONDS"`
 * `length="SECONDS"`
+* `pan="EXPR"`
+* `preset="NAME"`
 
 Current sound resolution rules:
 
@@ -214,6 +249,19 @@ Equivalent forms:
 ```
 
 Marks bubble upward through enclosing audio plans when unambiguous, so `--cut-before verdict` or `--cut-after verdict` can target a mark inside a nested script.
+
+## Expression Attributes
+
+Current expression-driven audio attributes:
+
+* `pan`
+* `start`
+* `end`
+
+`pan` evaluates at render time against visible marks in natural sample
+geometry. `start` and `end` are layout-time expressions. Unprefixed mark names
+are not populated specially; they simply fail as ordinary undefined names if
+used.
 
 ## Current Presets
 

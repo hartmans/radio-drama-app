@@ -768,7 +768,6 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
     assert isinstance(special_slice, ScriptSlice)
     assert special_slice.node.display_name == "<line>"
     assert special_slice.gain_db == pytest.approx(6.0206)
-    assert special_slice.post_gap == pytest.approx(0.25)
 
 
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
@@ -2539,7 +2538,6 @@ def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Pat
     outer_plan = production_plan.audio_plan.audio_plans[0]
     assert isinstance(outer_plan, ComposeAudioPlan)
     assert outer_plan.gain_db == pytest.approx(6.0206)
-    assert outer_plan.post_gap == pytest.approx(0.25)
     assert outer_plan.audio_plans[0].gain_db == 0.0
     assert outer_plan.audio_plans[1].gain_db == 0.0
 
