@@ -137,13 +137,21 @@ Supported attributes:
 * `pan="EXPR"`: stereo automation evaluated against render-time mark positions
 * `first_mark="NAME"`: introduces a mark at the node's natural first boundary
 * `last_mark="NAME"`: introduces a mark at the node's natural last boundary
+* `loop_beg="EXPR"` / `loop_end="EXPR"`: wrapped-plan inner-geometry loop boundaries
+* `loop_loops="NUMBER"`: repeat count after the first pass through the loop body
+* `loop_until="EXPR"`: loop-plan inner-geometry stop point for repeated looping
+* `loop_silence="SECONDS"`: silence inserted between loop iterations
+* `loop_outro="BOOL"`: append wrapped audio after `loop_end`
+* `loop_whole="extend|shorten|no"`: whole-cycle adjustment when `loop_until` is used
 
 Current rules:
 
 * `start` and `pre_gap` are mutually exclusive
 * `length` and `post_gap` are mutually exclusive
+* `loop_until` and `loop_loops` are mutually exclusive
 * `length` must be non-negative
 * `pre_gap` and `post_gap` are measured in seconds and may be negative
+* `loop_silence` must be non-negative
 * dialogue lines use `Speaker: text`
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
@@ -204,6 +212,8 @@ Current rules:
   speech-model context of surrounding dialogue
 * `first_mark` and `last_mark` are ordinary audio attrs here, so they also
   force a dedicated `ScriptSlice`
+* loop attrs are also ordinary audio attrs here, so they also force a
+  dedicated `ScriptSlice`
 
 ### `<sound>`
 

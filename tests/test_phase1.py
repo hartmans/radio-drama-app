@@ -37,6 +37,7 @@ from radio_drama.planning import (
     ComposeAudioPlan,
     DialogueAudio,
     DialogueLine,
+    LoopPlan,
     MarkPlan,
     ScriptPlan,
     ScriptRenderRequest,
@@ -1304,6 +1305,100 @@ def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
         dtype=np.float32,
     )
     np.testing.assert_allclose(result.audio, expected, atol=1e-6)
+
+
+def test_loop_plan_repeats_region_suppresses_loop_marks_and_shifts_outro(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+            self._layout_marks_inner = {
+                "pre": 0.25,
+                "beg": 0.5,
+                "mid": 0.75,
+                "end": 1.0,
+                "out": 1.25,
+            }
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.arange(6, dtype=np.float32)),
+                attrs={
+                    "loop_beg": "0.5",
+                    "loop_end": "1.0",
+                    "loop_loops": 1.0,
+                    "loop_silence": 0.25,
+                    "loop_outro": True,
+                },
+            )
+            assert isinstance(plan, LoopPlan)
+            result = await plan.render()
+            return plan, result
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    np.testing.assert_allclose(
+        result.audio,
+        np.array([0.0, 1.0, 2.0, 3.0, 0.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32),
+    )
+    assert plan.audio_marks_inner == {"pre": 0.25, "beg": 0.5, "end": 1.0, "out": 2.0}
+    assert plan.audio_marks_render == {"pre": 1.0, "beg": 2.0, "end": 4.0, "out": 8.0}
+    assert "mid" not in plan.audio_marks_inner
+
+
+def test_loop_plan_loop_until_whole_extend_adjusts_loop_stop(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.arange(6, dtype=np.float32)),
+                attrs={
+                    "loop_beg": "0.5",
+                    "loop_end": "1.0",
+                    "loop_until": "1.6",
+                    "loop_silence": 0.25,
+                    "loop_whole": "extend",
+                },
+            )
+            assert isinstance(plan, LoopPlan)
+            await plan.layout()
+            return plan
+        finally:
+            injector.close()
+
+    plan = asyncio.run(runner())
+    assert plan.resolved_loop_stop == pytest.approx(1.75)
+    assert plan.inner_last == pytest.approx(1.75)
 
 
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):

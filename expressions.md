@@ -76,12 +76,17 @@ Current authored expression attributes:
 * `pan`
 * `start`
 * `end`
+* `loop_beg`
+* `loop_end`
+* `loop_until`
 
 Current numeric timing attributes:
 
 * `pre_gap`
 * `post_gap`
 * `length`
+* `loop_loops`
+* `loop_silence`
 
 Those numeric timing attributes are still parsed as numbers at the document
 boundary today, but the layout code uses the same expression-helper machinery
@@ -151,6 +156,20 @@ Locals available:
 
 The key design point is that right-side placement can refer to `last` without
 becoming recursive, because left-side placement is resolved first.
+
+## Loop scopes
+
+Looping uses layout-time expressions with two different inner-coordinate
+spaces:
+
+* `loop_beg` and `loop_end`
+  Evaluate in the wrapped plan's inner geometry. They use the same helper
+  locals as other inner-geometry layout expressions, especially `inner_<mark>`
+  from the wrapped plan.
+* `loop_until`
+  Evaluates in the `LoopPlan`'s own inner geometry. It therefore sees only the
+  marks that survive into the looped plan itself, not marks from the repeated
+  region that have been suppressed as ambiguous.
 
 ## Mark namespaces
 

@@ -27,7 +27,7 @@ Current document contract:
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
 * `<line speaker="...">...</line>` may appear inside a script to author one explicit dialogue line without reparsing its text content as `speaker: ...`
-* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, and `last_mark`
+* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, and looping attrs such as `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
@@ -59,12 +59,13 @@ Current planning contract:
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * `AudioPlan` also owns layout state and exposes a memoized `layout()` pass before render-time mixing or DSP
-* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, and `last_mark`
+* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * any element that plans into an `AudioPlan` may author those audio attributes
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `start` with `pre_gap`, and rejecting `length` with `post_gap`
 * `pan` is validated as an expression at planning time but evaluated only at render time, because it may depend on render-time audio mark positions
 * `preset` is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `PresetPlan`
+* looping is also handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `LoopPlan`
 * every document node's audio attributes must be consumed by the outermost `AudioPlan` produced from that node; inner plans produced from the same node therefore receive `attrs={}`
 * every `AudioPlan.layout()` computes intrinsic layout facts for that node:
   * `inner_first`
@@ -95,6 +96,7 @@ Current plan types:
 * `ComposeAudioPlan`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, and renders child audio into one shared timeline
 * `PresetPlan`: wraps another `AudioPlan`, preserves that wrapped plan's layout, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
   when it wraps a plain `ComposeAudioPlan`, it may use `async_resolve()` to rewrite itself into a replacement `ComposeAudioPlan` before readiness so preset bubbling stays a planning concern rather than a render-time special case
+* `LoopPlan`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
   `ProductionPlan.attrs_from_node()` also injects the implicit outer `master` preset so mastering remains part of ordinary audio-attribute resolution
 
@@ -102,6 +104,7 @@ Current mark/cut contract:
 
 * every `AudioPlan` exposes `audio_marks`, the set of unambiguous named cut points bubbled up from its immediate inner plans plus any local `first_mark` / `last_mark`
 * `MarkPlan` introduces one explicit authored mark, while any audio-producing node may also introduce boundary marks through `first_mark` and `last_mark`
+* `LoopPlan` suppresses bubbled wrapped marks from the repeated region, preserving only the first instance of boundary marks and any surviving pre-loop or outro marks
 * container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
 * `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
 * `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules
@@ -215,6 +218,10 @@ Current expression scopes:
 * layout helpers use two mark namespaces:
   * `inner_<mark>` for marks already visible in the node's own inner geometry
   * `outer_<mark>` for marks visible in the containing scope
+* loop expressions use three scopes:
+  * `loop_beg` and `loop_end` evaluate in the wrapped plan's inner geometry
+  * `loop_until` evaluates in the loop plan's own inner geometry
+  * render-time controls on the loop plan use the loop plan's render geometry like any other plan
 * unprefixed mark names are not populated specially and therefore fail as ordinary `NameError`s if referenced
 
 Current debug hooks:

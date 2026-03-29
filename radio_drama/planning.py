@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 PRODUCTION_PLANNING_INJECTOR_KEY = InjectionKey("radio_drama.production_planning_injector")
-AudioAttrValue = float | str
+AudioAttrValue = float | str | bool
 AudioAttrs = dict[str, AudioAttrValue]
 
 
@@ -139,17 +139,42 @@ class AudioPlan(PlanningNode):
 
     async def async_resolve(self):
         preset_name = cast(str | None, self.attrs.get("preset"))
-        if preset_name is None:
+        loop_attr_names = {
+            "loop_beg",
+            "loop_end",
+            "loop_loops",
+            "loop_until",
+            "loop_silence",
+            "loop_outro",
+            "loop_whole",
+        }
+        loop_enabled = "loop_until" in self.attrs or "loop_loops" in self.attrs
+        if preset_name is None and not loop_enabled:
             return self
-        wrapper_attrs = {key: value for key, value in self.attrs.items() if key != "preset"}
+        loop_attrs = {key: value for key, value in self.attrs.items() if key in loop_attr_names}
+        wrapper_attrs = {
+            key: value
+            for key, value in self.attrs.items()
+            if key != "preset" and key not in loop_attr_names
+        }
         await self.async_ready()
         self._replace_attrs({})
+        wrapped: AudioPlan = self
+        if loop_enabled:
+            wrapped = await self.ainjector(
+                LoopPlan,
+                node=self.node,
+                audio_plan=wrapped,
+                attrs=loop_attrs if preset_name is not None else {**wrapper_attrs, **loop_attrs},
+            )
+        if preset_name is None:
+            return wrapped
         from .effects import PresetPlan
 
         return await self.ainjector(
             PresetPlan,
             node=self.node,
-            audio_plan=self,
+            audio_plan=wrapped,
             preset_name=preset_name,
             attrs=wrapper_attrs,
         )
@@ -270,6 +295,23 @@ class AudioPlan(PlanningNode):
             allow_negative=False,
             allow_missing=True,
         )
+        loop_beg = cls._expression_attribute(node, "loop_beg")
+        loop_end = cls._expression_attribute(node, "loop_end")
+        loop_until = cls._expression_attribute(node, "loop_until")
+        loop_loops = cls._number_attribute(
+            node,
+            "loop_loops",
+            allow_negative=False,
+            allow_missing=True,
+        )
+        loop_silence = cls._timing_attribute_seconds(
+            node,
+            "loop_silence",
+            allow_negative=False,
+            allow_missing=True,
+        )
+        loop_outro = cls._boolean_attribute(node, "loop_outro")
+        loop_whole = cls._choice_attribute(node, "loop_whole", ("extend", "shorten", "no"))
         first_mark = cls._mark_attribute(node, "first_mark")
         last_mark = cls._mark_attribute(node, "last_mark")
         gain = cls._expression_attribute(node, "gain")
@@ -285,6 +327,20 @@ class AudioPlan(PlanningNode):
             attrs["post_gap"] = post_gap
         if length is not None:
             attrs["length"] = length
+        if loop_beg is not None:
+            attrs["loop_beg"] = loop_beg
+        if loop_end is not None:
+            attrs["loop_end"] = loop_end
+        if loop_until is not None:
+            attrs["loop_until"] = loop_until
+        if loop_loops is not None:
+            attrs["loop_loops"] = loop_loops
+        if loop_silence is not None:
+            attrs["loop_silence"] = loop_silence
+        if loop_outro is not None:
+            attrs["loop_outro"] = loop_outro
+        if loop_whole is not None:
+            attrs["loop_whole"] = loop_whole
         if first_mark is not None:
             attrs["first_mark"] = first_mark
         if last_mark is not None:
@@ -303,6 +359,13 @@ class AudioPlan(PlanningNode):
         self.end_expression = None
         self.post_gap_expression = None
         self.length_expression = None
+        self.loop_beg_expression = None
+        self.loop_end_expression = None
+        self.loop_until_expression = None
+        self.loop_loops = None
+        self.loop_silence = 0.0
+        self.loop_outro = False
+        self.loop_whole = "no"
         self.pre_gap = 0.0
         self.post_gap = 0.0
         self.first_mark = None
@@ -317,16 +380,33 @@ class AudioPlan(PlanningNode):
             raise self.document_error(
                 f"{self.node.display_name} may not specify both length and post_gap"
             )
+        if "loop_until" in attrs and "loop_loops" in attrs:
+            raise self.document_error(
+                f"{self.node.display_name} may not specify both loop_until and loop_loops"
+            )
         right_side_attrs = sum(1 for attribute_name in ("end", "length", "post_gap") if attribute_name in attrs)
         if right_side_attrs > 1:
             raise self.document_error(
                 f"{self.node.display_name} may not specify more than one of end, length, and post_gap"
+            )
+        loop_configured = "loop_until" in attrs or "loop_loops" in attrs
+        loop_detail_attrs = {"loop_beg", "loop_end", "loop_silence", "loop_outro", "loop_whole"}
+        if not loop_configured and any(attribute_name in attrs for attribute_name in loop_detail_attrs):
+            raise self.document_error(
+                f"{self.node.display_name} loop_beg, loop_end, loop_silence, loop_outro, and loop_whole require loop_until or loop_loops"
             )
         self.start_expression = cast(str | None, attrs.get("start"))
         self.pre_gap_expression = self._attr_expression_text(attrs.get("pre_gap"))
         self.end_expression = cast(str | None, attrs.get("end"))
         self.post_gap_expression = self._attr_expression_text(attrs.get("post_gap"))
         self.length_expression = self._attr_expression_text(attrs.get("length"))
+        self.loop_beg_expression = cast(str | None, attrs.get("loop_beg"))
+        self.loop_end_expression = cast(str | None, attrs.get("loop_end"))
+        self.loop_until_expression = cast(str | None, attrs.get("loop_until"))
+        self.loop_loops = cast(float | None, attrs.get("loop_loops"))
+        self.loop_silence = cast(float, attrs.get("loop_silence", 0.0))
+        self.loop_outro = cast(bool, attrs.get("loop_outro", False))
+        self.loop_whole = cast(str, attrs.get("loop_whole", "no"))
         self.pre_gap = 0.0 if self.pre_gap_expression is None else float(self.pre_gap_expression)
         self.post_gap = 0.0 if self.post_gap_expression is None else float(self.post_gap_expression)
         self.first_mark = cast(str | None, attrs.get("first_mark"))
@@ -384,6 +464,37 @@ class AudioPlan(PlanningNode):
         return seconds
 
     @classmethod
+    def _number_attribute(
+        cls,
+        node: DocumentNode | None,
+        attribute_name: str,
+        *,
+        allow_negative: bool,
+        allow_missing: bool = False,
+    ) -> float | None:
+        if node is None:
+            return None if allow_missing else 0.0
+        raw_value = node.attributes.get(attribute_name)
+        if raw_value is None:
+            return None if allow_missing else 0.0
+        normalized = raw_value.strip()
+        if not normalized:
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
+        try:
+            number = float(normalized)
+        except ValueError as exc:
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be a number"
+            ) from exc
+        if not allow_negative and number < 0:
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be non-negative"
+            )
+        return number
+
+    @classmethod
     def _preset_attribute(cls, node: DocumentNode | None) -> str | None:
         return cls._mark_attribute(node, "preset")
 
@@ -416,6 +527,35 @@ class AudioPlan(PlanningNode):
                 node,
                 f"{node.display_name} {attribute_name} must be a valid expression: {exc}"
             ) from exc
+        return normalized
+
+    @classmethod
+    def _boolean_attribute(cls, node: DocumentNode | None, attribute_name: str) -> bool | None:
+        if node is None or attribute_name not in node.attributes:
+            return None
+        return node.boolean_attribute(attribute_name)
+
+    @classmethod
+    def _choice_attribute(
+        cls,
+        node: DocumentNode | None,
+        attribute_name: str,
+        choices: tuple[str, ...],
+    ) -> str | None:
+        if node is None:
+            return None
+        raw_value = node.attributes.get(attribute_name)
+        if raw_value is None:
+            return None
+        normalized = raw_value.strip().lower()
+        if not normalized:
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} cannot be empty")
+        if normalized not in choices:
+            formatted_choices = ", ".join(repr(choice) for choice in choices)
+            raise cls._node_error(
+                node,
+                f"{node.display_name} {attribute_name} must be one of {formatted_choices}"
+            )
         return normalized
 
     @staticmethod
@@ -1281,6 +1421,216 @@ class ComposeAudioPlan(AudioPlan):
             source_end = max(0, write_end - write_start)
             audio[write_start:write_end] += result.audio[:source_end]
         return RenderResult(audio=audio)
+
+
+@inject(config=ProductionConfig)
+class LoopPlan(AudioPlan):
+    """Audio plan wrapper that repeats one interval of an inner plan."""
+
+    def __init__(
+        self,
+        node: DocumentNode,
+        audio_plan: AudioPlan,
+        **kwargs,
+    ) -> None:
+        super().__init__(node=node, **kwargs)
+        self.audio_plan = audio_plan
+        self._rebuild_audio_marks((self.audio_plan,))
+        self.resolved_loop_beg = 0.0
+        self.resolved_loop_end = 0.0
+        self.resolved_loop_stop = 0.0
+        self.resolved_loop_silence = 0.0
+
+    def __repr__(self) -> str:
+        return f"LoopPlan(audio_plan={self.audio_plan!r})"
+
+    def _mark_children(self) -> Sequence[AudioPlan]:
+        return (self.__dict__["audio_plan"],) if "audio_plan" in self.__dict__ else ()
+
+    def __getattr__(self, name: str):
+        return getattr(self.audio_plan, name)
+
+    async def async_resolve(self):
+        return self
+
+    async def layout_node(self) -> None:
+        await self.audio_plan.layout()
+        self.resolved_loop_beg = self._resolve_wrapped_loop_expression(
+            self.loop_beg_expression,
+            default=0.0,
+            attribute_name="loop_beg",
+        )
+        self.resolved_loop_end = self._resolve_wrapped_loop_expression(
+            self.loop_end_expression,
+            default=self.audio_plan.inner_last,
+            attribute_name="loop_end",
+        )
+        if self.resolved_loop_beg >= self.resolved_loop_end:
+            raise self.document_error(
+                f"{self.node.display_name} loop_beg must be less than loop_end"
+            )
+        self.resolved_loop_silence = self.loop_silence
+        self.resolved_loop_stop = self._resolve_loop_stop()
+        if self.resolved_loop_stop + self._loop_epsilon() < self.resolved_loop_end:
+            raise self.document_error(
+                f"{self.node.display_name} loop_until must be greater than or equal to loop_end"
+            )
+
+        self._raw_inner_first = min(self.audio_plan.inner_first, self.resolved_loop_beg)
+        outro_duration = (
+            max(0.0, self.audio_plan.inner_last - self.resolved_loop_end)
+            if self.loop_outro
+            else 0.0
+        )
+        self._raw_inner_last = self.resolved_loop_stop + outro_duration
+        self._raw_length = self._raw_inner_last
+        self._layout_marks_inner = self._loop_layout_marks_inner()
+
+    async def render_node(self) -> RenderResult:
+        base_result = await self.audio_plan.render()
+        segments: list[RenderResult] = []
+        if self.resolved_loop_beg > self._raw_inner_first:
+            segments.append(
+                self._render_wrapped_interval(
+                    base_result,
+                    self._raw_inner_first,
+                    self.resolved_loop_beg,
+                )
+            )
+        segments.append(
+            self._render_wrapped_interval(
+                base_result,
+                self.resolved_loop_beg,
+                self.resolved_loop_end,
+            )
+        )
+        remaining_repeat_frames = max(
+            0,
+            self._seconds_to_frames(self.resolved_loop_stop - self.resolved_loop_end),
+        )
+        silence_frames = self._seconds_to_frames(self.resolved_loop_silence)
+        loop_body_frames = self._seconds_to_frames(self.resolved_loop_end - self.resolved_loop_beg)
+        while remaining_repeat_frames > 0:
+            silence_chunk_frames = min(silence_frames, remaining_repeat_frames)
+            if silence_chunk_frames > 0:
+                segments.append(self._silent_result(self._frames_to_seconds(silence_chunk_frames)))
+                remaining_repeat_frames -= silence_chunk_frames
+            segment_frames = min(loop_body_frames, remaining_repeat_frames)
+            if segment_frames > 0:
+                segments.append(
+                    self._render_wrapped_interval(
+                        base_result,
+                        self.resolved_loop_beg,
+                        self.resolved_loop_beg + self._frames_to_seconds(segment_frames),
+                    )
+                )
+                remaining_repeat_frames -= segment_frames
+            if silence_chunk_frames == 0 and segment_frames == 0:
+                break
+        if self.loop_outro and self.audio_plan.inner_last > self.resolved_loop_end:
+            segments.append(
+                self._render_wrapped_interval(
+                    base_result,
+                    self.resolved_loop_end,
+                    self.audio_plan.inner_last,
+                )
+            )
+        return RenderResult.concatenate(segments)
+
+    def _resolve_wrapped_loop_expression(
+        self,
+        expression: str | None,
+        *,
+        default: float,
+        attribute_name: str,
+    ) -> float:
+        if expression is None:
+            return default
+        return self.audio_plan.evaluate_expression(
+            expression,
+            self.audio_plan.left_side_variables(explicit_start=False),
+            attribute_name=attribute_name,
+        )
+
+    def _resolve_loop_stop(self) -> float:
+        cycle_frames = self._seconds_to_frames(
+            (self.resolved_loop_end - self.resolved_loop_beg) + self.resolved_loop_silence
+        )
+        if cycle_frames <= 0:
+            raise self.document_error(
+                f"{self.node.display_name} loop cycle must be longer than zero"
+            )
+        if self.loop_loops is not None:
+            repeat_frames = int(round(self.loop_loops * cycle_frames))
+            return self.resolved_loop_end + self._frames_to_seconds(repeat_frames)
+
+        base_marks = self._loop_expression_marks()
+        variables = {"natural_length": self.audio_plan.natural_length}
+        for mark_id, position in base_marks.items():
+            variables[f"inner_{mark_id}"] = position
+        raw_stop = self.evaluate_expression(
+            cast(str, self.loop_until_expression),
+            variables,
+            attribute_name="loop_until",
+        )
+        extra_frames = self._seconds_to_frames(max(0.0, raw_stop - self.resolved_loop_end))
+        if self.loop_whole == "extend":
+            extra_frames = ((extra_frames + cycle_frames - 1) // cycle_frames) * cycle_frames
+        elif self.loop_whole == "shorten":
+            extra_frames = (extra_frames // cycle_frames) * cycle_frames
+        return self.resolved_loop_end + self._frames_to_seconds(extra_frames)
+
+    def _loop_expression_marks(self) -> dict[str, float]:
+        marks: dict[str, float] = {}
+        epsilon = self._loop_epsilon()
+        for mark_id, position in self.audio_plan.audio_marks_inner.items():
+            if position < self.resolved_loop_beg - epsilon:
+                marks[mark_id] = position
+                continue
+            if (
+                abs(position - self.resolved_loop_beg) <= epsilon
+                or abs(position - self.resolved_loop_end) <= epsilon
+            ):
+                marks.setdefault(mark_id, position)
+        return marks
+
+    def _loop_layout_marks_inner(self) -> dict[str, float]:
+        marks = self._loop_expression_marks()
+        if self.loop_outro:
+            outro_offset = self.resolved_loop_stop - self.resolved_loop_end
+            epsilon = self._loop_epsilon()
+            for mark_id, position in self.audio_plan.audio_marks_inner.items():
+                if position > self.resolved_loop_end + epsilon:
+                    marks.setdefault(mark_id, outro_offset + position)
+        return marks
+
+    def _render_wrapped_interval(
+        self,
+        base_result: RenderResult,
+        start_time: float,
+        end_time: float,
+    ) -> RenderResult:
+        duration = max(0.0, end_time - start_time)
+        frame_count = self._seconds_to_frames(duration)
+        if frame_count == 0:
+            return RenderResult.empty(channels=self.config.resolved_output_channels)
+        audio = self._empty_audio(frame_count)
+        overlap_start = max(start_time, self.audio_plan.inner_first)
+        overlap_end = min(end_time, self.audio_plan.inner_last)
+        if overlap_end <= overlap_start:
+            return RenderResult(audio=audio)
+        source_start = self._seconds_to_frames(overlap_start - self.audio_plan.inner_first)
+        source_end = self._seconds_to_frames(overlap_end - self.audio_plan.inner_first)
+        write_start = self._seconds_to_frames(overlap_start - start_time)
+        write_end = write_start + max(0, source_end - source_start)
+        audio[write_start:write_end] = base_result.audio[source_start:source_end]
+        return RenderResult(audio=audio)
+
+    def _silent_result(self, duration: float) -> RenderResult:
+        return RenderResult(audio=self._empty_audio(self._seconds_to_frames(duration)))
+
+    def _loop_epsilon(self) -> float:
+        return 1e-9
 
 
 @inject(config=ProductionConfig)
