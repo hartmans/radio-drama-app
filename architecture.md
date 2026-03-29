@@ -259,6 +259,314 @@ This keeps tests focused on structural behavior such as batching, ordering, outp
 
 # Future plans
 
+## Sound layout and automation
+
+The current render-time mark model is intentionally local. It is useful for
+cutting and for simple post-render automation on one already-bounded
+`RenderResult`, but it is not sufficient for whole-production staging where
+automation should be able to refer to marks later in the production and where
+long-running sounds may continue across several scripts.
+
+The intended direction is to keep the existing `AudioPlan` tree, keep
+automation expression-based, and add an explicit layout pass inside that tree.
+The layout pass is responsible for computing timing and mark positions before
+final DSP/effects are applied.
+
+### Terminology
+
+The layout proposal uses these terms:
+
+* `length`: how much a plan advances the composition cursor
+* `start`: the point at which an item is placed in composition cursor space,
+  just after its `pre_gap`
+* `first`: where the first sample of an item is placed
+* `last`: where the last sample of an item is placed
+* `end`: the last position in composition cursor space that the item occupies
+
+The intended invariant is:
+
+* `end - start == length`
+
+`post_gap` therefore affects `length`, not just rendered samples. In the common
+case, `first == start`. If a plan carries trailing silence through `post_gap`,
+then `last < end`. If a plan later gains render-time overhang concepts such as
+negative pre-roll or tail spill, those should affect `first` and `last` without
+changing `start` or `end`.
+
+### One layout pass, not a separate whole-graph discovery pass
+
+This proposal does not require a separate "discover everything in the whole
+graph first" phase.
+
+Instead:
+
+* layout is one bottom-up pass over the existing plan tree
+* leaf plans may materialize their primitive render artifacts during layout
+* container plans may lay out children in parallel
+* the result of layout is enough timing information to drive final rendering
+
+So the useful separation is:
+
+* layout determines timing, local marks, and clip placement
+* render consumes the saved layout result and produces final audio
+
+But leaf work such as TTS, forced alignment, and sound sizing may happen during
+layout itself rather than in a distinct pre-pass.
+
+### Proposed layout contract
+
+Every `AudioPlan.layout()` call should set two intrinsic layout facts on the
+node itself, both expressed in the node's inner geometry:
+
+* `natural_length`
+* `audio_marks_inner`
+
+`natural_length` is the total unclipped natural render/control span of the
+node.
+`audio_marks_inner` is a dict of visible marks rebased into that same inner
+geometry.
+
+This is the core contract that every `AudioPlan` must satisfy, including
+leaves.
+
+`ComposeAudioPlan` does more than that. As part of placing children into the
+parent's geometry, it also sets these concrete outer-geometry values on each
+child:
+
+* `start`
+* `end`
+* `length`
+
+Those child values are not intrinsic facts about the child. They are placement
+facts computed by the parent.
+
+`ComposeAudioPlan` then satisfies the ordinary `AudioPlan` contract for itself
+by:
+
+* computing its own `natural_length` as the span of its inner render/control
+  extent, effectively `inner_last - inner_first`
+* bubbling and rebasing child marks into its own `audio_marks_inner`
+
+This means child layout can run in parallel without knowing production-absolute
+coordinates. A child only computes intrinsic inner-geometry facts. The parent
+is responsible for turning those into outer-geometry placement.
+
+### Leaf materialization during layout
+
+Leaf plans should be allowed to do the expensive work they need in order to
+produce stable layout facts.
+
+That likely means:
+
+* `SoundPlan` may resolve and size its source audio during layout
+* `ScriptPlan` may materialize the speech primitive during layout
+* script-local forced alignment may also happen during layout, because it is
+  required to place script-local marks and slices
+
+If useful for implementation clarity, leaves may expose a helper such as
+`render_primitive()` or `layout_primitive()`, but the architectural point is
+that this is leaf work in support of layout, not a separate whole-production
+discovery stage.
+
+### Container layout
+
+`ComposeAudioPlan` remains the fundamental hierarchical composition structure.
+Its layout path would:
+
+1. lay out children concurrently
+2. compute each child's `start`, `end`, and `length` in outer geometry
+3. advance the parent cursor by each child's `length`
+4. rebase child marks into parent-local inner geometry
+5. suppress duplicate marks the same way mark bubbling already does
+6. compute the parent's own `inner_first` and `inner_last`
+7. compute the parent's own inner render/control extent and therefore its
+   `natural_length`
+8. compute the parent's `audio_marks_inner`
+
+For a composed parent, those inner bounds are derived from all children after
+placement, not only from children that produce nonzero samples:
+
+* `child_inner_first_in_parent = child.start + child.inner_first`
+* `child_inner_last_in_parent = child.start + child.inner_last`
+* `parent.inner_first = min(child_inner_first_in_parent over all children)`
+* `parent.inner_last = max(child_inner_last_in_parent over all children)`
+
+This is intentional. Silence introduced by child placement, child `post_gap`,
+or internal marks still counts toward the parent's natural render/control
+extent.
+
+This keeps the existing tree semantics, but turns timing into an explicit stored
+result instead of something that is only implicit in render-time mixing.
+
+### Layout scope and expression evaluation
+
+Expressions remain the preferred automation surface.
+
+The important change is that expressions such as `pan` should evaluate against
+marks from a stable layout scope rather than against only the marks already
+present in one rendered child `RenderResult`.
+
+The default long-term layout scope is the full production, still subject to the
+existing bubbling rule:
+
+* a mark is referable only if it remains unambiguous through the relevant
+  container path
+* duplicate marks do not bubble
+
+Nothing in this proposal requires inline dialogue anchors. The working authoring
+surface remains `script + mark + line`.
+
+### Positioning expressions
+
+The first version of layout expressions should stay narrow and should use
+explicit mark namespaces.
+
+Positioning attributes are:
+
+* `start`
+* `end`
+* `length`
+* `pre_gap`
+* `post_gap`
+
+The main constraints are:
+
+* at most one of `start` or `pre_gap` may be authored
+* at most one of `end`, `length`, or `post_gap` may be authored
+* `end` and `start` are both interpreted in outer geometry
+* `natural_length` is not an authored attribute
+
+Mark references in positioning expressions must always be prefixed:
+
+* `inner_<mark>` refers to a visible mark produced within the node after the
+  node's contents have been laid out, expressed in inner geometry
+* `outer_<mark>` refers to a visible mark in outer geometry
+
+Unprefixed mark names are simply not populated as expression variables. They
+should therefore fall out as ordinary expression-evaluation `NameError`s rather
+than receiving special-case validation.
+
+For the first version, only marks are exposed from the node's inner geometry.
+The following inner values are intentionally hidden:
+
+* `inner_length`
+* `inner_first`
+* `inner_last`
+
+Those values may become useful later, but in the initial design they mostly add
+alternate spellings for relationships that are already expressible in outer
+geometry and make the dependency model harder to explain.
+
+The evaluation model is intentionally phased:
+
+1. layout the node's contents and determine visible `inner_<mark>` values
+2. evaluate the node's left-side positioning (`start` or `pre_gap`) in outer
+   geometry
+3. determine the node's render/control extent in outer geometry
+4. evaluate the node's right-side positioning (`end`, `length`, or `post_gap`)
+
+This phased model is what makes expressions such as `end=last` well-defined
+without turning right-side positioning into a recursive dependency on itself.
+
+After layout, the canonical placement fields are:
+
+* `start`
+* `end`
+* `length`
+
+`pre_gap` and `post_gap` remain authored inputs, but are no longer used for
+composition once layout has resolved concrete placement.
+
+### Rendering from layout
+
+Once layout has run, render becomes a top-down application of the saved layout.
+
+At render time:
+
+* `ProductionPlan.render()` is the only render entry point that may omit
+  `incoming_marks`
+* all other render paths conceptually require `incoming_marks` in outer
+  geometry, even if the implementation keeps a public zero-argument `render()`
+  wrapper for memoization convenience
+* leaves reuse or finalize the primitive artifacts prepared during layout
+* containers mix child audio at the already-decided child `start` positions
+* effects, presets, gain, pan, and future automation run after placement is
+  known
+* automation expressions such as `pan` and future gain automation operate in
+  inner geometry over the node's natural render/control extent
+* clipping or slicing during render is an implementation detail layered on top
+  of that inner geometry
+* each node merges incoming marks into `audio_marks_inner` by rebasing incoming
+  marks from outer geometry into inner geometry and filling only names that are
+  not already present locally
+* each node then derives `audio_marks_render` by rebasing the resulting
+  `audio_marks_inner` through `inner_first`, so render/control geometry has
+  `inner_first == 0`
+* expression locals for automation come from `audio_marks_render`
+
+The key invariant is:
+
+* once a node's layout result has been computed, later rendering does not move
+  it
+
+Without that invariant, later mark references and long-running sounds become
+recursive.
+
+For automation expressions, inner geometry means:
+
+* `natural_length` is the node's total unclipped natural render/control span
+* any rebased mark position may be less than `0`
+* any rebased mark position may be greater than `natural_length`
+
+That is expected. Automation expressions should be able to refer to marks that
+fall outside the node's natural render/control span, and the array-building
+helpers used by those expressions should clip or truncate accordingly rather
+than rejecting such positions.
+
+Under the current one-shot render contract, mutating `audio_marks_inner` during
+render is acceptable. `render()` is memoized per plan instance, so the node is
+not expected to support multiple distinct render contexts. If that ever changes,
+the render contract would need to become explicit about multi-render behavior
+rather than relying on node-local mutation.
+
+### Loops
+
+Looping sounds are feasible within this model only under explicit convergence
+constraints.
+
+The working assumptions are:
+
+* loop structure is internal to the looping sound
+  A loop may have an intro segment, a looping middle segment, and an outro
+  segment, but those segment boundaries are not determined by external marks.
+* a looping node must have a computable `length`
+  That `length` determines cursor advance and cannot depend on later layout
+  results.
+* the rendered extent of a loop may continue until a later visible mark
+* that later stop condition must not move sibling placement
+* external expressions may refer to authored marks that happen to bound the
+  loop, but not to loop iteration count or other expanded loop internals
+* samples produced beyond the resolved bounds of the enclosing container may be
+  discarded instead of forcing the container to grow
+
+These constraints intentionally separate:
+
+* composition occupancy, described by `start`, `end`, and `length`
+* rendered sample support, described by `first` and `last`
+
+That separation is what keeps expression-based automation compatible with loops
+that may render beyond their nominal cursor advance.
+
+### Why this is still simpler than a separate constraint graph
+
+This proposal does not require a separate global graph or a general constraint
+solver.
+
+The existing plan tree remains the composition structure. The layout pass makes
+that structure explicit, parallelizable, and stable enough for whole-production
+automation, while still letting local planning rules such as script slicing and
+preset wrapping remain ordinary tree-local concerns.
+
 ## Document model growth
 
 The current document schema is intentionally small. Future work may add richer structure above scripts, such as scenes, processors, effects, or asset references. Those additions should extend the semantic node tree rather than introducing a separate global planner.
