@@ -1094,7 +1094,7 @@ def test_mark_plan_emits_zero_length_audio_and_one_mark(tmp_path: Path):
     assert isinstance(mark_plan, MarkPlan)
     assert mark_plan.audio_marks == ["cut"]
     assert result.frame_count == 0
-    assert result.audio_marks == {"cut": 0.0}
+    assert mark_plan.audio_marks_render == {"cut": 0.0}
 
 
 def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
@@ -1120,7 +1120,7 @@ def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
 
     compose_plan, result = asyncio.run(runner())
     assert compose_plan.audio_marks == []
-    assert result.audio_marks == {}
+    assert compose_plan.audio_marks_render == {}
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_before_mark("cut")
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
@@ -1157,12 +1157,14 @@ def test_compose_audio_plan_bubbles_render_time_mark_positions(tmp_path: Path):
                 source_name=str(xml_path),
             )
             compose_plan = await root.plan(ainjector)
-            return await compose_plan.audio_plan.render()
+            result = await compose_plan.audio_plan.render()
+            return compose_plan.audio_plan, result
         finally:
             injector.close()
 
-    result = asyncio.run(runner())
-    assert result.audio_marks == {"start": 0.0, "after": 2.0}
+    audio_plan, result = asyncio.run(runner())
+    assert result.audio.tolist() == [1.0, 1.0]
+    assert audio_plan.audio_marks_render == {"start": 0.0, "after": 2.0}
 
 
 def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
@@ -1174,6 +1176,11 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
             super().__init__(node=None, **kwargs)
             self.result = result
 
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+            self._layout_marks_inner = {"cut": 0.25}
+
         async def render_node(self) -> RenderResult:
             return self.result
 
@@ -1184,7 +1191,6 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
                 FakeAudioPlan,
                 result=RenderResult(
                     audio=np.ones((4, 2), dtype=np.float32),
-                    audio_marks={"cut": 1.0},
                 ),
                 attrs={"pan": "line([cut, -1, cut + 2, 1])"},
             )
@@ -1252,6 +1258,10 @@ def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
         def __repr__(self) -> str:
             return f"FakeAudioPlan({self.label!r})"
 
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+
         async def render_node(self) -> RenderResult:
             return self.result
 
@@ -1266,7 +1276,8 @@ def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
             second = await ainjector(
                 FakeAudioPlan,
                 label="second",
-                result=RenderResult(audio=np.array([3.0], dtype=np.float32), pre_gap=0.25),
+                result=RenderResult(audio=np.array([3.0], dtype=np.float32)),
+                attrs={"pre_gap": "0.25"},
             )
             compose_plan = await ainjector(
                 ComposeAudioPlan,

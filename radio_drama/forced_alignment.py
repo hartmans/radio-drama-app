@@ -495,6 +495,13 @@ class ScriptSlice(AudioPlan):
             f"end_marker={self.end_marker})"
         )
 
+    async def layout_node(self) -> None:
+        aligned_result = await self.aligned_script_source.render()
+        start_frame = aligned_result.marker_frames[self.start_marker]
+        end_frame = max(start_frame, aligned_result.marker_frames[self.end_marker])
+        self._raw_inner_last = self._frames_to_seconds(end_frame - start_frame)
+        self._raw_length = self._raw_inner_last
+
     async def render_node(self) -> RenderResult:
         aligned_result = await self.aligned_script_source.render()
         start_frame = aligned_result.marker_frames[self.start_marker]

@@ -36,11 +36,9 @@ class LineExpression(ArrayExpression):
     end: float | None = None
 
     def __post_init__(self) -> None:
-        previous_frame = -1
+        previous_frame: int | None = None
         for frame, _ in self.points:
-            if frame < 0:
-                raise ValueError("line frame indexes must be non-negative")
-            if frame <= previous_frame:
+            if previous_frame is not None and frame <= previous_frame:
                 raise ValueError("line frame indexes must be strictly increasing")
             previous_frame = frame
 
@@ -54,32 +52,37 @@ class LineExpression(ArrayExpression):
             return result
 
         points = list(self.points)
-        if points[0][0] != 0:
+        if points[0][0] > 0:
             points.insert(0, (0, 0.0))
 
         for point_index, (start_frame, start_value) in enumerate(points):
-            if start_frame >= frame_count:
-                break
-
             if point_index + 1 < len(points):
                 end_frame, end_value = points[point_index + 1]
+                if end_frame <= 0:
+                    continue
+                if start_frame >= frame_count:
+                    break
+                segment_start = max(start_frame, 0)
                 segment_end = min(end_frame, frame_count)
                 segment_length = end_frame - start_frame
-                if segment_length > 0:
-                    frames = np.arange(start_frame, segment_end, dtype=np.float32)
-                    result[start_frame:segment_end] = np.float32(start_value) + (
+                if segment_length > 0 and segment_end > segment_start:
+                    frames = np.arange(segment_start, segment_end, dtype=np.float32)
+                    result[segment_start:segment_end] = np.float32(start_value) + (
                         (frames - start_frame) / segment_length
                     ) * np.float32(end_value - start_value)
                 continue
 
-            result[start_frame:] = np.float32(start_value)
-            if self.end is None or start_frame >= frame_count:
+            if start_frame >= frame_count:
+                break
+            segment_start = max(start_frame, 0)
+            result[segment_start:] = np.float32(start_value)
+            if self.end is None or segment_start >= frame_count:
                 break
             segment_length = frame_count - start_frame
             if segment_length <= 0:
                 break
-            frames = np.arange(start_frame, frame_count, dtype=np.float32)
-            result[start_frame:] = np.float32(start_value) + (
+            frames = np.arange(segment_start, frame_count, dtype=np.float32)
+            result[segment_start:] = np.float32(start_value) + (
                 (frames - start_frame) / segment_length
             ) * np.float32(self.end - start_value)
 
@@ -133,6 +136,12 @@ def coerce_array_exp(value) -> ArrayExpression:
     if isinstance(value, Real):
         return line(float(value))
     raise TypeError(f"Expected an ArrayExpression or number, got {type(value).__name__}")
+
+
+def coerce_real(value) -> float:
+    if isinstance(value, Real):
+        return float(value)
+    raise TypeError(f"Expected a real number, got {type(value).__name__}")
 
 
 def _validate_node(node: ast.AST) -> None:

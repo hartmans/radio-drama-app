@@ -50,9 +50,17 @@ def test_line_expression_constant_expands_to_requested_size() -> None:
     )
 
 
+def test_line_expression_allows_out_of_range_frames_and_clips() -> None:
+    expression = line([-1, 0.0, 1, 1.0, 6, 0.0])
+
+    np.testing.assert_allclose(
+        expression.to_size(4),
+        np.array([0.5, 1.0, 0.8, 0.6], dtype=np.float32),
+        atol=1e-6,
+    )
+
+
 def test_line_expression_rejects_invalid_frames() -> None:
-    with pytest.raises(ValueError, match="non-negative"):
-        line([-1, 0.0])
     with pytest.raises(ValueError, match="strictly increasing"):
         line([1, 0.0, 1, 1.0])
     with pytest.raises(ValueError, match="integers"):

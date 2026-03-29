@@ -126,14 +126,7 @@ class EffectChain:
         audio = normalize_audio_array(result.audio)
         for stage in self.stages:
             audio = stage.apply(audio, sample_rate=sample_rate)
-        return type(result)(
-            audio=audio,
-            pre_margin=result.pre_margin,
-            post_margin=result.post_margin,
-            pre_gap=result.pre_gap,
-            post_gap=result.post_gap,
-            audio_marks=result.audio_marks,
-        )
+        return type(result)(audio=audio)
 
     async def render(self, result: RenderResult, *, sample_rate: int) -> RenderResult:
         return await asyncio.to_thread(self.apply, result, sample_rate=sample_rate)
@@ -181,6 +174,16 @@ class PresetPlan(AudioPlan):
         self.audio_plan.cut_after_mark(audio_mark)
         self._rebuild_audio_marks((self.audio_plan,))
 
+    async def layout_node(self) -> None:
+        await self.audio_plan.layout()
+        self._raw_inner_first = self.audio_plan.inner_first
+        self._raw_inner_last = self.audio_plan.inner_last
+        self._raw_length = self.audio_plan.length
+        self._layout_marks_inner = dict(self.audio_plan.audio_marks_inner)
+
+    def _apply_node_render_geometry(self, result: RenderResult) -> RenderResult:
+        return result
+
     async def render_node(self) -> RenderResult:
         base_result = await self.audio_plan.render()
         try:
@@ -190,11 +193,9 @@ class PresetPlan(AudioPlan):
             raise self.document_error(
                 f"Unknown preset {self.preset_name!r}. Available presets: {available}"
             ) from exc
-        return self.with_plan_timing(
-            await chain.render(
-                base_result,
-                sample_rate=self.config.resolved_output_sample_rate,
-            )
+        return await chain.render(
+            base_result,
+            sample_rate=self.config.resolved_output_sample_rate,
         )
 
     async def _bubble_through_compose(self) -> AudioPlan:

@@ -493,12 +493,12 @@ At render time:
 * effects, presets, gain, pan, and future automation run after placement is
   known
 * automation expressions such as `pan` and future gain automation operate in
-  inner geometry over the node's natural render/control extent
+  natural sample geometry, where `0 == inner_first`
 * clipping or slicing during render is an implementation detail layered on top
-  of that inner geometry
-* each node merges incoming marks into `audio_marks_inner` by rebasing incoming
-  marks from outer geometry into inner geometry and filling only names that are
-  not already present locally
+  of that natural sample geometry
+* `render(incoming_marks=...)` receives marks in outer geometry
+* each node rebases those marks into inner geometry and merges them into
+  `audio_marks_inner`, filling only names that are not already present locally
 * each node then derives `audio_marks_render` by rebasing the resulting
   `audio_marks_inner` through `inner_first`, so render/control geometry has
   `inner_first == 0`
