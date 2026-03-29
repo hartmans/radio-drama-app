@@ -130,11 +130,13 @@ Supported attributes:
 * `start="EXPR"`: explicit outer-geometry placement in the parent composition
 * `end="EXPR"`: explicit outer-geometry end position in the parent composition
 * `preset="NAME"`: applies a named effect chain after the script is rendered
-* `gain="DB"`: applies a post-render gain adjustment in decibels
+* `gain="EXPR"`: post-render gain automation in decibels
 * `pre_gap="SECONDS"`: time before the audio occupies space in its parent composition
 * `post_gap="SECONDS"`: time after the audio occupies space in its parent composition
 * `length="SECONDS"`: explicit occupied length in the parent composition
 * `pan="EXPR"`: stereo automation evaluated against render-time mark positions
+* `first_mark="NAME"`: introduces a mark at the node's natural first boundary
+* `last_mark="NAME"`: introduces a mark at the node's natural last boundary
 
 Current rules:
 
@@ -200,6 +202,8 @@ Current rules:
 * a `<line>` with audio attrs becomes its own aligned `ScriptSlice`, so its
   audio attrs apply to that one line while the line still contributes to the
   speech-model context of surrounding dialogue
+* `first_mark` and `last_mark` are ordinary audio attrs here, so they also
+  force a dedicated `ScriptSlice`
 
 ### `<sound>`
 

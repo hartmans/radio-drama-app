@@ -147,10 +147,13 @@ class PresetPlan(AudioPlan):
         super().__init__(node=node, attrs=attrs, **kwargs)
         self.audio_plan = audio_plan
         self.preset_name = preset_name
-        self.inner_plans(audio_plan)
+        self._rebuild_audio_marks((self.audio_plan,))
 
     def __repr__(self) -> str:
         return f"PresetPlan(preset_name={self.preset_name!r})"
+
+    def _mark_children(self):
+        return (self.__dict__["audio_plan"],) if "audio_plan" in self.__dict__ else ()
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         return self.audio_plan.leaf_audio_plans()

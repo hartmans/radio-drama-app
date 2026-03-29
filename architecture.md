@@ -27,7 +27,7 @@ Current document contract:
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<script>` content is speaker-authored dialogue text
 * `<line speaker="...">...</line>` may appear inside a script to author one explicit dialogue line without reparsing its text content as `speaker: ...`
-* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, and `preset`
+* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, and `last_mark`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
 * `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
@@ -59,7 +59,7 @@ Current planning contract:
 * `render()` is memoized per plan instance so duplicate callers share work
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * `AudioPlan` also owns layout state and exposes a memoized `layout()` pass before render-time mixing or DSP
-* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, and `preset`
+* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, and `last_mark`
 * any element that plans into an `AudioPlan` may author those audio attributes
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `start` with `pre_gap`, and rejecting `length` with `post_gap`
@@ -100,8 +100,8 @@ Current plan types:
 
 Current mark/cut contract:
 
-* every `AudioPlan` exposes `audio_marks`, the set of unambiguous named cut points bubbled up from its immediate inner plans
-* `MarkPlan` is the only leaf plan that introduces a new mark
+* every `AudioPlan` exposes `audio_marks`, the set of unambiguous named cut points bubbled up from its immediate inner plans plus any local `first_mark` / `last_mark`
+* `MarkPlan` introduces one explicit authored mark, while any audio-producing node may also introduce boundary marks through `first_mark` and `last_mark`
 * container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
 * `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
 * `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules

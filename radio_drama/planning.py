@@ -133,6 +133,7 @@ class AudioPlan(PlanningNode):
         self._raw_length = 0.0
         self._content_start = 0.0
         self._content_end = 0.0
+        self._local_audio_marks: list[str] = []
         resolved_attrs = type(self).attrs_from_node(node) if attrs is None else dict(attrs)
         self._replace_attrs(resolved_attrs)
 
@@ -223,15 +224,18 @@ class AudioPlan(PlanningNode):
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
 
+    def _add_visible_audio_mark(self, audio_mark: str) -> None:
+        mark_count = self._audio_mark_counts.get(audio_mark, 0) + 1
+        self._audio_mark_counts[audio_mark] = mark_count
+        if mark_count == 1:
+            self.audio_marks.append(audio_mark)
+        elif mark_count == 2:
+            self.audio_marks.remove(audio_mark)
+
     def inner_plans(self, *audio_plans: "AudioPlan") -> None:
         for audio_plan in audio_plans:
             for audio_mark in audio_plan.audio_marks:
-                mark_count = self._audio_mark_counts.get(audio_mark, 0) + 1
-                self._audio_mark_counts[audio_mark] = mark_count
-                if mark_count == 1:
-                    self.audio_marks.append(audio_mark)
-                elif mark_count == 2:
-                    self.audio_marks.remove(audio_mark)
+                self._add_visible_audio_mark(audio_mark)
 
     def cut_before_mark(self, audio_mark: str) -> None:
         if audio_mark not in self.audio_marks:
@@ -266,6 +270,8 @@ class AudioPlan(PlanningNode):
             allow_negative=False,
             allow_missing=True,
         )
+        first_mark = cls._mark_attribute(node, "first_mark")
+        last_mark = cls._mark_attribute(node, "last_mark")
         gain = cls._expression_attribute(node, "gain")
         pan = cls._expression_attribute(node, "pan")
         preset = cls._preset_attribute(node)
@@ -279,6 +285,10 @@ class AudioPlan(PlanningNode):
             attrs["post_gap"] = post_gap
         if length is not None:
             attrs["length"] = length
+        if first_mark is not None:
+            attrs["first_mark"] = first_mark
+        if last_mark is not None:
+            attrs["last_mark"] = last_mark
         if gain is not None:
             attrs["gain"] = gain
         if pan is not None:
@@ -295,6 +305,8 @@ class AudioPlan(PlanningNode):
         self.length_expression = None
         self.pre_gap = 0.0
         self.post_gap = 0.0
+        self.first_mark = None
+        self.last_mark = None
         self.gain_expression = None
         self.pan_expression = None
         if "start" in attrs and "pre_gap" in attrs:
@@ -317,12 +329,24 @@ class AudioPlan(PlanningNode):
         self.length_expression = self._attr_expression_text(attrs.get("length"))
         self.pre_gap = 0.0 if self.pre_gap_expression is None else float(self.pre_gap_expression)
         self.post_gap = 0.0 if self.post_gap_expression is None else float(self.post_gap_expression)
+        self.first_mark = cast(str | None, attrs.get("first_mark"))
+        self.last_mark = cast(str | None, attrs.get("last_mark"))
+        if self.first_mark is not None and self.first_mark == self.last_mark:
+            raise self.document_error(
+                f"{self.node.display_name} may not specify the same id for first_mark and last_mark"
+            )
+        self._local_audio_marks = [
+            mark_id
+            for mark_id in (self.first_mark, self.last_mark)
+            if mark_id is not None
+        ]
         self.gain_expression = cast(str | None, attrs.get("gain"))
         self.pan_expression = cast(str | None, attrs.get("pan"))
 
     def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
         self.attrs = dict(attrs)
         self.process_attrs(self.attrs)
+        self._rebuild_audio_marks(self._mark_children())
 
     @staticmethod
     def _node_error(node: DocumentNode, message: str) -> DocumentError:
@@ -361,14 +385,18 @@ class AudioPlan(PlanningNode):
 
     @classmethod
     def _preset_attribute(cls, node: DocumentNode | None) -> str | None:
+        return cls._mark_attribute(node, "preset")
+
+    @classmethod
+    def _mark_attribute(cls, node: DocumentNode | None, attribute_name: str) -> str | None:
         if node is None:
             return None
-        raw_value = node.attributes.get("preset")
+        raw_value = node.attributes.get(attribute_name)
         if raw_value is None:
             return None
         normalized = raw_value.strip()
         if not normalized:
-            raise cls._node_error(node, f"{node.display_name} preset attribute cannot be empty")
+            raise cls._node_error(node, f"{node.display_name} {attribute_name} attribute cannot be empty")
         return normalized
 
     @classmethod
@@ -401,7 +429,14 @@ class AudioPlan(PlanningNode):
     def _rebuild_audio_marks(self, audio_plans: Sequence["AudioPlan"]) -> None:
         self.audio_marks.clear()
         self._audio_mark_counts.clear()
-        self.inner_plans(*audio_plans)
+        for audio_mark in self._local_audio_marks:
+            self._add_visible_audio_mark(audio_mark)
+        for audio_plan in audio_plans:
+            for audio_mark in audio_plan.audio_marks:
+                self._add_visible_audio_mark(audio_mark)
+
+    def _mark_children(self) -> Sequence["AudioPlan"]:
+        return ()
 
     @property
     def explicit_start(self) -> bool:
@@ -457,7 +492,6 @@ class AudioPlan(PlanningNode):
             ) from exc
 
     def _finalize_intrinsic_layout(self) -> None:
-        self.audio_marks_inner = dict(self._layout_marks_inner)
         self._content_start = self._raw_inner_first
         self._content_end = self._raw_inner_last
         self.inner_first = self._raw_inner_first
@@ -465,6 +499,21 @@ class AudioPlan(PlanningNode):
         self.length = self._raw_length
         self.end = self.length
         self.start = 0.0
+        self.audio_marks_inner = self._resolved_layout_marks_inner()
+
+    def _resolved_layout_marks_inner(self) -> dict[str, float]:
+        marks = dict(self._layout_marks_inner)
+        if self.first_mark is not None:
+            if self.first_mark in marks:
+                marks.pop(self.first_mark, None)
+            else:
+                marks[self.first_mark] = self.inner_first
+        if self.last_mark is not None:
+            if self.last_mark in marks:
+                marks.pop(self.last_mark, None)
+            else:
+                marks[self.last_mark] = self.inner_last
+        return marks
 
     def _merge_incoming_marks(self, incoming_marks: Mapping[str, float] | None) -> None:
         if incoming_marks is not None:
@@ -522,8 +571,8 @@ class MarkPlan(AudioPlan):
     def __init__(self, node: "MarkNode", id: str, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
         self.id = id
-        self.audio_marks.append(id)
-        self._audio_mark_counts[id] = 1
+        self._local_audio_marks = [id]
+        self._rebuild_audio_marks(())
 
     def __repr__(self) -> str:
         return f"MarkPlan(id={self.id!r})"
@@ -1021,10 +1070,13 @@ class ComposeAudioPlan(AudioPlan):
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.audio_plans = list(audio_plans)
-        self.inner_plans(*self.audio_plans)
+        self._rebuild_audio_marks(self.audio_plans)
 
     def __repr__(self) -> str:
         return f"ComposeAudioPlan(children={len(self.audio_plans)})"
+
+    def _mark_children(self) -> Sequence[AudioPlan]:
+        return getattr(self, "audio_plans", ())
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
         flattened: list[AudioPlan] = []

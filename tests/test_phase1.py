@@ -770,6 +770,71 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
     assert special_slice.gain_expression == "6.0206"
 
 
+def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.arange(12, dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated: list[DialogueAudio | DialogueLine] = []
+            line_index = 0
+            for content in contents:
+                if isinstance(content, DialogueLine):
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            node=content.node,
+                            start_pos=float(line_index),
+                        )
+                    )
+                    line_index += 1
+                else:
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=content.start_pos))
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First line.
+                    <line speaker="Anna" first_mark="enter" last_mark="exit">Second line.</line>
+                    Anna: Third line.
+                  </script>
+                </production>
+                """,
+                source_name="line-boundary-marks.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            special_slice = production_plan.audio_plans[0].audio_plans[1]
+            return production_plan, special_slice, await special_slice.render()
+        finally:
+            injector.close()
+
+    production_plan, special_slice, result = asyncio.run(runner())
+    assert isinstance(special_slice, ScriptSlice)
+    assert production_plan.audio_marks == ["enter", "exit"]
+    assert special_slice.audio_marks == ["enter", "exit"]
+    assert special_slice.audio_marks_render == {"enter": 0.0, "exit": 4.0}
+    np.testing.assert_allclose(result.audio, np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float32))
+
+
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
