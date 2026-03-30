@@ -3018,6 +3018,7 @@ def test_named_effect_chains_include_demo_presets():
         "narrator",
         "outdoor1",
         "outdoor2",
+        "phone",
         "thoughts",
     )
     assert build_named_effect_chain("Narrator").name == "narrator"

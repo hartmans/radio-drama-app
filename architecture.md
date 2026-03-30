@@ -250,6 +250,7 @@ Current built-in presets:
 * `outdoor1`: a lighter open-air variant with extra width and sparse reflections
 * `outdoor2`: a deliberately obvious outdoor diagnostic variant with wider stereo, audible noise bed, and a strong echo tail
 * `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image
+* `phone`: a narrow-band, mid-forward telephone/comm variant with heavier leveling, very narrow stereo, and a small hiss bed
 
 ## Backend preview service
 

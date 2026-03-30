@@ -663,6 +663,38 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
             ),
         ),
     ),
+    "phone": EffectChain(
+        name="phone",
+        stages=(
+            scipy_signal_stage(
+                "phone_highpass",
+                partial(_filter_audio, btype="highpass", cutoff_hz=320.0),
+            ),
+            scipy_signal_stage(
+                "phone_lowpass",
+                partial(_filter_audio, btype="lowpass", cutoff_hz=3200.0),
+            ),
+            numpy_stage(
+                "phone_leveling",
+                partial(
+                    _compress_audio,
+                    threshold_db=-30.0,
+                    ratio=3.6,
+                    attack_ms=3.0,
+                    release_ms=160.0,
+                    makeup_db=3.0,
+                ),
+            ),
+            numpy_stage(
+                "phone_focus",
+                partial(_mid_side_mix, mid_gain=1.16, side_gain=0.15),
+            ),
+            numpy_stage(
+                "phone_hiss",
+                partial(_mix_white_noise, relative_db=-34.0),
+            ),
+        ),
+    ),
 }
 
 _PRESET_ALIASES = {

@@ -289,8 +289,9 @@ Built-in render-time presets:
 * `outdoor2`
 * `indoor1`
 * `indoor2`
+* `phone`
 
-`master` is reserved for the final production render. The preview frontend/backend expose `none` plus the other six presets.
+`master` is reserved for the final production render. The preview frontend/backend expose `none` plus the other seven presets.
 
 ## Demo Production
 
