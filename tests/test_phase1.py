@@ -966,6 +966,83 @@ def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Pa
     np.testing.assert_allclose(result.audio, np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float32))
 
 
+def test_script_group_attrs_create_special_script_slices(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated: list[DialogueAudio | DialogueLine] = []
+            for index, content in enumerate(contents):
+                if isinstance(content, DialogueLine):
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            node=content.node,
+                            start_pos=float(index),
+                        )
+                    )
+                else:
+                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=content.start_pos))
+            return updated
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: First line.
+                    <group gain="6.0206" preset="thoughts">
+                      Anna: Second line.
+                      Anna: Third line.
+                    </group>
+                    Anna: Fourth line.
+                  </script>
+                </production>
+                """,
+                source_name="group-audio-attrs.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            return production_plan.audio_plans[0]
+        finally:
+            injector.close()
+
+    audio_plan = asyncio.run(runner())
+    assert isinstance(audio_plan, ComposeAudioPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == [
+        "ScriptSlice",
+        "ScriptSlice",
+        "ScriptSlice",
+        "ScriptSlice",
+    ]
+    first_group_slice = audio_plan.audio_plans[1]
+    second_group_slice = audio_plan.audio_plans[2]
+    assert isinstance(first_group_slice, ScriptSlice)
+    assert isinstance(second_group_slice, ScriptSlice)
+    assert first_group_slice.node.display_name == "<group>"
+    assert second_group_slice.node.display_name == "<group>"
+    assert first_group_slice.gain_expression == "6.0206"
+    assert second_group_slice.gain_expression == "6.0206"
+    assert first_group_slice.preset_name == "thoughts"
+    assert second_group_slice.preset_name == "thoughts"
+
+
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

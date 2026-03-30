@@ -156,6 +156,27 @@ def test_script_allows_ignore_nodes():
     assert "Internal guidance." in ignore_nodes[0].normalized_text_content
 
 
+def test_script_allows_group_nodes():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script>
+            <group gain="6.0206" preset="thoughts">
+              Anna: Internal line.
+            </group>
+          </script>
+        </production>
+        """,
+        source_name="group.xml",
+    )
+
+    group_nodes = root.script_nodes[0].child_elements_named("group")
+    assert len(group_nodes) == 1
+    assert group_nodes[0].attributes == {"gain": "6.0206", "preset": "thoughts"}
+    assert "Anna: Internal line." in group_nodes[0].normalized_text_content
+
+
 def test_production_allows_mark_nodes_by_attribute_or_text():
     root = parse_production_string(
         """

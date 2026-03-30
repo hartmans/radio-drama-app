@@ -28,6 +28,7 @@ from .audio import SUPPORTED_AUDIO_EXTENSIONS
 if TYPE_CHECKING:
     from .document import (
         DocumentNode,
+        GroupNode,
         IgnoreNode,
         MarkNode,
         ProductionNode,
@@ -1059,7 +1060,7 @@ class ScriptPlan(AudioPlan):
         return "ignored script"
 
     async def _parse_contents(self) -> list[DialogueContents]:
-        from .document import IgnoreNode, LineNode, TextNode
+        from .document import GroupNode, IgnoreNode, LineNode, TextNode
         from .forced_alignment import ScriptSlice
 
         contents: list[DialogueContents] = []
@@ -1084,6 +1085,15 @@ class ScriptPlan(AudioPlan):
                     )
                 )
                 continue
+            if isinstance(child, GroupNode):
+                contents.extend(
+                    self._parse_dialogue_text(
+                        child.text_content,
+                        handling="special",
+                        node=child,
+                    )
+                )
+                continue
             if isinstance(child, LineNode):
                 line_attrs = ScriptSlice.attrs_from_node(child)
                 handling: Literal["normal", "special"] = "special" if line_attrs else "normal"
@@ -1104,7 +1114,8 @@ class ScriptPlan(AudioPlan):
         self,
         text: str,
         *,
-        handling: Literal["normal", "ignore"] = "normal",
+        handling: Literal["normal", "ignore", "special"] = "normal",
+        node: DocumentNode | None = None,
     ) -> list[DialogueLine]:
         """Parse dialogue text into speaker-scoped lines.
 
@@ -1143,6 +1154,7 @@ class ScriptPlan(AudioPlan):
                         speaker=current_speaker,
                         spoken_text=spoken_text,
                         handling=handling,
+                        node=node,
                     )
                 )
 

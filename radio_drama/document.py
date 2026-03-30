@@ -292,6 +292,14 @@ class IgnoreNode(ElementNode):
 
 
 @dataclass(slots=True)
+class GroupNode(ElementNode):
+    """Document node for a script-local dialogue group with shared audio attrs."""
+
+    tag_name: ClassVar[str] = "group"
+    allow_text: ClassVar[bool] = True
+
+
+@dataclass(slots=True)
 class LineNode(ElementNode):
     """Document node for one explicit dialogue line inside a script."""
 
@@ -333,6 +341,7 @@ class MarkNode(AttributeOrTextValueNode):
 
 
 _register_allowed_child(ScriptNode, IgnoreNode)
+_register_allowed_child(ScriptNode, GroupNode)
 _register_allowed_child(ScriptNode, LineNode)
 
 
