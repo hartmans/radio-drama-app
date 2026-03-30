@@ -431,6 +431,16 @@ class AudioPlan(PlanningNode):
 
     @classmethod
     def wrapper_attr_names(cls) -> frozenset[str]:
+        """Return audio attrs that belong on wrapper plans rather than the inner plan.
+
+        ``AudioPlan.async_resolve()`` moves these attrs onto ``PresetPlan`` or
+        ``LoopPlan`` when a node is wrapped so the outermost plan produced from
+        one document node continues to own ordinary AudioPlan semantics.
+
+        New general AudioPlan attrs that should still apply after preset or loop
+        wrapping should be added here. Sound-specific attrs such as file trims do
+        not belong here, because they must remain on the inner ``SoundPlan``.
+        """
         return frozenset({
             "start",
             "pre_gap",
