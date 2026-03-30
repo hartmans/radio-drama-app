@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gc
+import sys
 from pathlib import Path
 
 import soundfile as sf
@@ -11,6 +12,7 @@ from carthage.dependency_injection import AsyncInjector
 from radio_drama.config import ProductionConfig, SUPPORTED_DEBUG_CATEGORIES
 from radio_drama.debug import reset_debug_outputs
 from radio_drama.document import parse_production_file
+from radio_drama.errors import DocumentError
 from radio_drama.init import radio_drama_injector
 
 
@@ -98,7 +100,11 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         sf.write(output, production_result.audio, config.resolved_output_sample_rate)
 
-    asyncio.run(runner())
+    try:
+        asyncio.run(runner())
+    except DocumentError as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

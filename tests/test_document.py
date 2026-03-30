@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
+import radio_drama_app
 from radio_drama.document import parse_production_string
-from radio_drama.errors import DocumentError
+from radio_drama.errors import DocumentError, SourceLocation
 
 
 def test_parse_production_builds_phase1_tree():
@@ -243,6 +246,26 @@ def test_parse_production_rejects_unknown_child():
             """,
             source_name="bad.xml",
         )
+
+
+def test_radio_drama_app_prints_document_error_without_traceback(monkeypatch, capsys):
+    def fake_parse_production_file(_path: str):
+        raise DocumentError(
+            "bad explicit mark reference",
+            location=SourceLocation("broken.xml", 12, 7),
+        )
+
+    monkeypatch.setattr(radio_drama_app, "parse_production_file", fake_parse_production_file)
+    monkeypatch.setattr(sys, "argv", ["radio_drama_app.py", "broken.xml"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        radio_drama_app.main()
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "broken.xml:12:7: bad explicit mark reference" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_parse_production_wraps_xml_parse_errors():
