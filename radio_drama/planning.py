@@ -1279,6 +1279,12 @@ class ComposeAudioPlan(AudioPlan):
             self.audio_plans[0].cut_before_mark(audio_mark)
             self._rebuild_audio_marks(self.audio_plans)
             return
+        if audio_mark == self.first_mark:
+            return
+        if audio_mark == self.last_mark:
+            self.audio_plans = []
+            self._rebuild_audio_marks(self.audio_plans)
+            return
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     def cut_after_mark(self, audio_mark: str) -> None:
@@ -1288,6 +1294,12 @@ class ComposeAudioPlan(AudioPlan):
                 continue
             self.audio_plans = self.audio_plans[: index + 1]
             self.audio_plans[-1].cut_after_mark(audio_mark)
+            self._rebuild_audio_marks(self.audio_plans)
+            return
+        if audio_mark == self.last_mark:
+            return
+        if audio_mark == self.first_mark:
+            self.audio_plans = []
             self._rebuild_audio_marks(self.audio_plans)
             return
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
