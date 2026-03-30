@@ -1,190 +1,135 @@
 # Expressions
 
-This document describes the expression language used by radio-drama audio
-attributes and the variable scopes available to those expressions.
+This document describes the expression syntax available to people authoring
+radio-drama documents.
 
-## Language
+The short version:
 
-Expressions are parsed with `ast.parse(..., mode="eval")`, validated against a
-small whitelist, and then evaluated with:
+* `gain` and `pan` accept Python-style expressions
+* expressions can refer to marks and layout values made available by the node
+  they are written on
+* invalid syntax or unknown names fails as an ordinary error instead of being
+  silently ignored
 
-* no Python builtins
-* one global helper: `line(...)`
-* a caller-supplied locals dictionary
+## Syntax
 
-Allowed syntax:
+Expressions are written as a single Python expression. They support:
 
-* numeric constants
-* names
+* numeric literals such as `1`, `-3.5`, and `0.25`
+* names such as `natural_length`, `intro`, or `outer_cue`
 * unary `+` and `-`
-* binary `+`, `-`, `*`, `/`, `**`, `%`
-* direct function calls such as `line(...)`
+* binary `+`, `-`, `*`, `/`, `**`, and `%`
+* function calls, currently only `line(...)`
 
-Disallowed syntax includes:
+Expressions do not support:
 
 * attribute access
+* indexing
 * comprehensions
 * lambdas
 * keyword arguments
-* indirect calls such as `factory()(1)`
+* chained call tricks such as `factory()(1)`
 
-If a name is not present in the locals dictionary, evaluation fails in the
-ordinary Python way with `NameError`. The evaluator does not populate special
-placeholder variables just to improve that error.
+If you use a name that is not available in the current scope, evaluation fails
+with the ordinary Python `NameError`.
 
 ## `line(...)`
 
-`line(...)` builds an `ArrayExpression` from piecewise-linear control points.
+`line(...)` is the main helper for gain ramps and pan sweeps.
 
-Supported forms:
+Common forms:
 
-* `line(number)`
-  Returns a constant expression.
+* `line(value)`
+  A constant value across the whole span.
 * `line(frame_1, value_1, ..., frame_n, value_n)`
-  Returns a piecewise-linear expression.
+  A piecewise-linear ramp through the given control points.
 * `line(frame_1, value_1, ..., frame_n, value_n, end_value)`
-  Uses `end_value` as the virtual point at the requested output size.
+  Like the previous form, but the final value is held to the end of the span.
 
-Rules:
+Use it when you want audio to change gradually instead of jumping.
 
-* frame indexes must be integers
-* frame indexes must be strictly increasing
-* frame indexes may be negative
-* frame indexes may be greater than the requested output size
-* out-of-range control points are clipped or truncated when expanded
-
-`to_size(frame_count)` returns one contiguous `float32` numpy array of length
-`frame_count`.
-
-## Return coercion
-
-The evaluator is parameterized by a return-type coercion function.
-
-Current coercions:
-
-* `coerce_array_exp`
-  Accepts an `ArrayExpression` directly or wraps a plain number as
-  `line(number)`.
-* `coerce_real`
-  Accepts one real scalar and returns it as `float`.
-
-## Where expressions are used
-
-Current authored expression attributes:
-
-* `gain`
-* `pan`
-* `start`
-* `end`
-* `loop_beg`
-* `loop_end`
-* `loop_until`
-
-Current numeric timing attributes:
-
-* `pre_gap`
-* `post_gap`
-* `length`
-* `loop_loops`
-* `loop_silence`
-
-Those numeric timing attributes are still parsed as numbers at the document
-boundary today, but the layout code uses the same expression-helper machinery
-internally when resolving left-side and right-side placement.
-
-## Render-time scope
-
-`gain` and `pan` are evaluated during `AudioPlan.post_render()`.
-
-Locals available there:
-
-* `natural_length`
-  The node's natural render/control span in sample frames.
-* one variable per visible render-time mark
-  These come from `audio_marks_render`, also in sample-frame coordinates.
-
-Render-time mark coordinates use natural sample geometry:
-
-* `0 == inner_first`
-* a mark may be negative
-* a mark may be greater than `natural_length`
-
-This is intentional. Automation should be able to refer to marks that lie
-before or after the node's natural render span.
-
-Example:
+Examples:
 
 ```python
-line(door_open, -1, door_open + 24000, 0)
+line(0)
+line(0, -12, natural_length, -3)
+line(0, -1, door_open, 0)
 ```
 
-## Layout helper scopes
+The frame positions are sample-frame positions in the current expression
+context. They may be negative or extend past the current node span when that is
+useful for a ramp that starts before the visible section or continues after it.
 
-The layout code exposes two helper variable environments. These are part of the
-layout contract even where the current document syntax does not yet use every
-one of them directly.
+## Gain
 
-### Left-side scope
+`gain` is evaluated after the audio for a node has been rendered.
 
-Used when resolving the node's left-side placement, meaning `start` or
-`pre_gap`.
+It is typically written in decibels. Positive values boost, negative values
+attenuate.
 
-Locals available:
+Useful names in gain expressions include:
 
 * `natural_length`
-  The node's intrinsic natural span before outer placement.
-* `inner_<mark>`
-  A visible mark already known in the node's inner geometry.
-* `outer_<mark>`
-  A visible mark in the containing scope when explicit outer placement is being
-  resolved.
+  The node's natural span in sample frames.
+* visible marks
+  Marks exposed by the node's render-time scope, such as `intro`, `verse_end`,
+  or `door_open`.
 
-### Right-side scope
+Examples:
 
-Used when resolving the node's right-side placement, meaning `end`, `length`,
-or `post_gap`.
+```python
+gain="line(0, -6, natural_length, 0)"
+gain="-3"
+```
 
-Locals available:
+The expression engine does not provide conditional syntax, so for more complex
+shapes use piecewise ramps with `line(...)`.
 
-* everything from the left-side scope
+## Pan
+
+`pan` is evaluated with the same expression syntax as `gain`.
+
+Pan values are expected to fall in the range `-1` to `1`:
+
+* `-1` means full left
+* `0` means center
+* `1` means full right
+
+Values outside that range are clipped when used.
+
+Typical uses:
+
+* keep a voice centered with `pan="0"`
+* drift a source from left to right with `pan="line(-1, 1)"`
+* pan a cue around an event mark with `pan="line(0, -1, cue, 1)"`
+
+## Available names
+
+The exact names available depend on where the expression is written.
+
+Common names for authored expressions include:
+
+* `natural_length`
+  The node's span in sample frames.
 * `start`
-  The node's resolved outer-geometry start when explicit placement is active.
+  The node's resolved start position when placement is explicit.
 * `first`
-  The node's first rendered sample in outer geometry after left-side placement.
+  The first rendered sample position after left-side placement.
 * `last`
-  The node's last rendered sample in outer geometry after left-side placement.
-
-The key design point is that right-side placement can refer to `last` without
-becoming recursive, because left-side placement is resolved first.
-
-## Loop scopes
-
-Looping uses layout-time expressions with two different inner-coordinate
-spaces:
-
-* `loop_beg` and `loop_end`
-  Evaluate in the wrapped plan's inner geometry. They use the same helper
-  locals as other inner-geometry layout expressions, especially `inner_<mark>`
-  from the wrapped plan.
-* `loop_until`
-  Evaluates in the `LoopPlan`'s own inner geometry. It therefore sees only the
-  marks that survive into the looped plan itself, not marks from the repeated
-  region that have been suppressed as ambiguous.
-
-## Mark namespaces
-
-Positioning expressions always use explicit mark namespaces:
-
+  The last rendered sample position after left-side placement.
 * `inner_<mark>`
+  A mark already known in the node's own inner geometry.
 * `outer_<mark>`
+  A mark visible in the containing scope.
 
-Unprefixed mark names are not populated automatically.
+For render-time automation, mark names are exposed directly as names in the
+current scope.
 
-## Current limitations
+## Practical notes
 
-Deliberate current limitations:
-
-* the only array helper is `line(...)`
-* timing expressions are not yet fully generalized at the document boundary
-* inner scalar values such as `inner_first`, `inner_last`, and `inner_length`
-  are intentionally not exposed as authored names
+* document authors should think in sample frames, not seconds, when writing
+  expressions
+* use marks when you want a control point to follow a specific event in the
+  script or audio timeline
+* if you need a simple constant, just write a number
+* if you need a ramp, use `line(...)`
