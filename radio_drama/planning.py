@@ -148,6 +148,7 @@ class AudioPlan(PlanningNode):
             "loop_outro",
             "loop_whole",
         }
+        wrapper_attr_names = type(self).wrapper_attr_names()
         loop_enabled = "loop_until" in self.attrs or "loop_loops" in self.attrs
         if preset_name is None and not loop_enabled:
             return self
@@ -155,10 +156,15 @@ class AudioPlan(PlanningNode):
         wrapper_attrs = {
             key: value
             for key, value in self.attrs.items()
-            if key != "preset" and key not in loop_attr_names
+            if key in wrapper_attr_names
+        }
+        retained_attrs = {
+            key: value
+            for key, value in self.attrs.items()
+            if key != "preset" and key not in loop_attr_names and key not in wrapper_attr_names
         }
         await self.async_ready()
-        self._replace_attrs({})
+        self._replace_attrs(retained_attrs)
         wrapped: AudioPlan = self
         if loop_enabled:
             wrapped = await self.ainjector(
@@ -422,6 +428,20 @@ class AudioPlan(PlanningNode):
         ]
         self.gain_expression = cast(str | None, attrs.get("gain"))
         self.pan_expression = cast(str | None, attrs.get("pan"))
+
+    @classmethod
+    def wrapper_attr_names(cls) -> frozenset[str]:
+        return frozenset({
+            "start",
+            "pre_gap",
+            "end",
+            "post_gap",
+            "length",
+            "first_mark",
+            "last_mark",
+            "gain",
+            "pan",
+        })
 
     def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
         self.attrs = dict(attrs)

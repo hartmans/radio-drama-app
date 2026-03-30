@@ -118,6 +118,22 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
+def test_sound_node_preserves_trim_attributes():
+    root = parse_production_string(
+        """
+        <production>
+          <sound ref="door" from="1.25" to="2.5" />
+        </production>
+        """,
+        source_name="sound-trim.xml",
+    )
+
+    sound_node = root.child_elements_named("sound")[0]
+    assert sound_node.ref == "door"
+    assert sound_node.attributes["from"] == "1.25"
+    assert sound_node.attributes["to"] == "2.5"
+
+
 def test_script_allows_ignore_nodes():
     root = parse_production_string(
         """

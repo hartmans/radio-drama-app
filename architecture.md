@@ -30,6 +30,7 @@ Current document contract:
 * any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, and looping attrs such as `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
+  `from` and `to` are sound-specific trim attributes in source-file time, not general outer audio attrs
 * `<mark>` identifies a named zero-duration cut point either as `<mark id="chapter2" />` or `<mark>chapter2</mark>`
 * relative `<sound>` references are resolved under a configured sounds directory when one is supplied, otherwise under a `sounds/` tree next to the source XML document
 * a script may contain stanza continuation lines and paragraph breaks
@@ -88,7 +89,7 @@ Current plan types:
   `DialogueLine` holds spoken text plus a handling mode such as `normal`, `ignore`, or `special`
   `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
-* `SoundPlan`: resolves one sound asset during planning, sizes it during layout, and renders one normalized clip
+* `SoundPlan`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
 * `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and content-boundary marker frames used by script-local slicing
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes

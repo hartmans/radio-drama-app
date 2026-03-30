@@ -229,6 +229,8 @@ Equivalent forms:
 Supported attributes:
 
 * `ref="NAME_OR_PATH"`: optional if the text content supplies the same value
+* `from="SECONDS"`: optional trim start in source-file time
+* `to="SECONDS"`: optional trim end in source-file time
 * `start="EXPR"`
 * `end="EXPR"`
 * `gain="DB"`

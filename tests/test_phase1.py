@@ -427,6 +427,120 @@ def test_sound_plan_wraps_preset_from_node(tmp_path: Path):
     assert isinstance(plan.audio_plan, SoundPlan)
 
 
+def test_sound_plan_trims_audio_with_from_and_to(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(
+                    0,
+                    result=np.array([10.0, 11.0, 12.0, 13.0, 14.0, 15.0], dtype=np.float32),
+                )
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" from="0.25" to="1.0" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            plan = await root.child_elements_named("sound")[0].plan(ainjector)
+            return plan, await plan.render()
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    assert isinstance(plan, SoundPlan)
+    assert plan.inner_first == 0.0
+    assert plan.natural_length == 0.75
+    np.testing.assert_array_equal(result.audio, np.array([11.0, 12.0, 13.0], dtype=np.float32))
+
+
+def test_sound_plan_keeps_trim_attrs_on_inner_sound_when_wrapped(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([1.0, 2.0], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" from="0.25" to="1.0" preset="narrator" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            return await root.child_elements_named("sound")[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    plan = asyncio.run(runner())
+    assert isinstance(plan, PresetPlan)
+    assert isinstance(plan.audio_plan, SoundPlan)
+    assert plan.audio_plan.file_from == 0.25
+    assert plan.audio_plan.file_to == 1.0
+    assert "from" not in plan.attrs
+    assert "to" not in plan.attrs
+
+
+def test_sound_plan_rejects_to_before_from(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            return asyncio.create_task(asyncio.sleep(0, result=np.ones(1, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" from="1.0" to="0.25" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            await root.child_elements_named("sound")[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<sound> to must be greater than or equal to from"):
+        asyncio.run(runner())
+
+
 def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

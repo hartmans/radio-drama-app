@@ -118,12 +118,35 @@ class SoundNode(AttributeOrTextValueNode):
 class SoundPlan(AudioPlan):
     """Plan that resolves, normalizes, and renders one sound asset."""
 
+    @classmethod
+    def attrs_from_node(cls, node) -> dict[str, float | str | bool]:
+        attrs = super().attrs_from_node(node)
+        trim_from = cls._timing_attribute_seconds(
+            node,
+            "from",
+            allow_negative=False,
+            allow_missing=True,
+        )
+        trim_to = cls._timing_attribute_seconds(
+            node,
+            "to",
+            allow_negative=False,
+            allow_missing=True,
+        )
+        if trim_from is not None:
+            attrs["from"] = trim_from
+        if trim_to is not None:
+            attrs["to"] = trim_to
+        return attrs
+
     def __init__(
         self,
         node: SoundNode | None,
         sound_cache: NormalizedSoundCache | None = None,
         **kwargs,
     ) -> None:
+        self.file_from = 0.0
+        self.file_to: float | None = None
         super().__init__(node=node, **kwargs)
         self.sound_cache = sound_cache
         self.resolved_path: Path | None = None
@@ -133,6 +156,15 @@ class SoundPlan(AudioPlan):
         sound_ref = self.node.ref if self.node is not None else None
         return f"SoundPlan(ref={sound_ref!r})"
 
+    def process_attrs(self, attrs) -> None:
+        super().process_attrs(attrs)
+        self.file_from = float(attrs.get("from", 0.0))
+        self.file_to = float(attrs["to"]) if "to" in attrs else None
+        if self.file_to is not None and self.file_to < self.file_from:
+            raise self.document_error(
+                f"{self.node.display_name} to must be greater than or equal to from"
+            )
+
     async def async_ready(self):
         if self.resolved_path is None:
             self.resolved_path = self._resolve_sound_path()
@@ -141,13 +173,14 @@ class SoundPlan(AudioPlan):
     async def layout_node(self) -> None:
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
-        self._raw_inner_last = self._frames_to_seconds(audio.shape[0])
+        trimmed_audio = self._trimmed_audio(audio)
+        self._raw_inner_last = self._frames_to_seconds(trimmed_audio.shape[0])
         self._raw_length = self._raw_inner_last
 
     async def render_node(self) -> RenderResult:
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
-        return RenderResult(audio=audio)
+        return RenderResult(audio=self._trimmed_audio(audio))
 
     async def _ensure_normalized_audio_task(self) -> asyncio.Task:
         if self._normalized_audio_task is None:
@@ -206,6 +239,18 @@ class SoundPlan(AudioPlan):
                 "Relative <sound> references require a production document path in the injector"
             )
         return provider_injector.get_instance(ProductionDocumentPath).path
+
+    def _trimmed_audio(self, audio):
+        start_frame, end_frame = self._trim_frame_bounds(audio.shape[0])
+        return audio[start_frame:end_frame]
+
+    def _trim_frame_bounds(self, total_frames: int) -> tuple[int, int]:
+        start_frame = min(max(0, self._seconds_to_frames(self.file_from)), total_frames)
+        if self.file_to is None:
+            end_frame = total_frames
+        else:
+            end_frame = min(max(0, self._seconds_to_frames(self.file_to)), total_frames)
+        return start_frame, max(start_frame, end_frame)
 
 
 def _iter_sound_files(sounds_root: Path):
