@@ -411,7 +411,7 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             FFmpegFilterEffectStage(
                 name="master_loudnorm",
-                filter_graph="loudnorm"
+                filter_graph="loudnorm=I=-16:TP=-1.5:LRA=11"
             ),
         ),
     ),
