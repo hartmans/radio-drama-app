@@ -129,7 +129,7 @@ Supported attributes:
 
 * `start="EXPR"`: explicit outer-geometry placement in the parent composition
 * `end="EXPR"`: explicit outer-geometry end position in the parent composition
-* `preset="NAME"`: applies a named effect chain after the script is rendered
+* `preset="NAME"`: routes this node's rendered audio into the named preset bus at the nearest enclosing compose
 * `gain="EXPR"`: post-render gain automation in decibels
 * `pre_gap="SECONDS"`: time before the audio occupies space in its parent composition
 * `post_gap="SECONDS"`: time after the audio occupies space in its parent composition
@@ -159,7 +159,7 @@ Current rules:
 * a script may contain nested `<sound>`, `<script>`, `<mark>`, and `<ignore>` elements in document order
 * a script may also contain `<line speaker="...">...</line>` elements in document order
 * `<ignore>` dialogue is included in the speech-model render request and then sliced back out of the final script audio
-* nested `<script preset="...">` nodes bubble or stack presets according to `stack_preset`
+* nested preset-bearing audio nodes stay in the same compose scope; the nearest enclosing compose applies one preset bus per preset name before the final mix
 
 Example:
 

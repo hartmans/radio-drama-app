@@ -65,8 +65,8 @@ Current planning contract:
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `start` with `pre_gap`, and rejecting `length` with `post_gap`
 * `pan` is validated as an expression at planning time but evaluated only at render time, because it may depend on render-time audio mark positions
-* `preset` is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `PresetPlan`
-* looping is also handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `LoopPlan`
+* `preset` is parsed into `AudioPlan.preset_key` metadata and is consumed by the nearest enclosing `ComposeAudioPlan` when that compose builds preset buses during render
+* looping is handled through `AudioPlan.async_resolve()`, which may replace one plan with a wrapping `LoopPlan`
 * every document node's audio attributes must be consumed by the outermost `AudioPlan` produced from that node; inner plans produced from the same node therefore receive `attrs={}`
 * every `AudioPlan.layout()` computes intrinsic layout facts for that node:
   * `inner_first`
@@ -94,12 +94,9 @@ Current plan types:
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and content-boundary marker frames used by script-local slicing
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
-* `ComposeAudioPlan`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, and renders child audio into one shared timeline
-* `PresetPlan`: wraps another `AudioPlan`, preserves that wrapped plan's layout, resolves a named `EffectChain` at render time, and applies it to that plan's `RenderResult`
-  when it wraps a plain `ComposeAudioPlan`, it may use `async_resolve()` to rewrite itself into a replacement `ComposeAudioPlan` before readiness so preset bubbling stays a planning concern rather than a render-time special case
+* `ComposeAudioPlan`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, renders child audio into compose-local preset buses, applies each preset bus once, and then sums the buses into one shared timeline
 * `LoopPlan`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
-* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes
-  `ProductionPlan.attrs_from_node()` also injects the implicit outer `master` preset so mastering remains part of ordinary audio-attribute resolution
+* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes and then applying the special `master` preset to the final trimmed production audio
 
 Current mark/cut contract:
 
@@ -109,8 +106,6 @@ Current mark/cut contract:
 * container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
 * `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
 * `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules
-* `PresetPlan` passes mark bubbling and cutting through to the wrapped audio plan, so top-level production cuts can target marks inside nested script composition
-
 Planning rule for presets:
 
 * `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
@@ -121,15 +116,14 @@ Planning rule for presets:
 * a `<line>` with no audio attrs is just another `normal` `DialogueLine` and merges into adjacent normal dialogue slices
 * a `<line>` whose `ScriptSlice.attrs_from_node(line_node)` result is non-empty becomes a `special` `DialogueLine`; aligned planning then emits a dedicated `ScriptSlice` for only that line, using the line node as the slice node so its audio attrs are consumed by that outermost slice
 * if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
-* if that outermost plan carries a `preset`, `AudioPlan.async_resolve()` wraps it in a `PresetPlan`
-* if that wrapped plan already contains inner `PresetPlan` children from nested scripts, `PresetPlan.async_resolve()` splits the outer preset around only the inner presets whose document node does not set `stack_preset=true`
-* in that bubbling case, the replacement outer `ComposeAudioPlan` keeps the non-`preset` audio attrs from the bubbled preset node, while each surviving outer preset segment is rebuilt with `attrs={}` so those attrs still belong to the returned outermost plan
-* each replacement outer preset segment covers the largest contiguous slice available on its side of those non-stacking inner presets so DSP state is preserved across ordinary gaps and stacked presets
-* `stack_preset` is currently a document-authored boolean attribute interpreted on the inner preset node; missing means false
+* `preset` stays on that outermost audio plan as metadata rather than introducing another wrapper plan
+* when a `ComposeAudioPlan` renders, each child contributes its rendered audio to either the child's own preset bus or, if the child is otherwise dry, the compose node's own preset bus
+* a `ComposeAudioPlan` therefore consumes its own preset locally and returns dry audio upward to its parent compose
+* sibling children that land on the same preset bus share DSP state across adjacency and across silence within that compose timeline
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
-* the top-level production render is also treated as an `AudioPlan` and is mastered through the named `master` preset, which stacks outside any inner script presets
+* the top-level production render is mastered through the named `master` preset after production trimming
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path` and do not override `InjectionKey("cache_dir")`, it also provides a production-scoped VibeVoice cache directory derived from that output path.
 
@@ -241,7 +235,7 @@ Current effects contract:
 * `EffectChain` is a named ordered sequence of stages
 * each stage receives stereo production-format numpy audio plus the output sample rate
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
-* preset names are resolved at render time, not baked into `ScriptPlan`
+* preset names are validated while processing audio attrs and are consumed later by `ComposeAudioPlan` render-time bus mixing
 * unknown preset names are document errors attached to the originating audio node
 
 Current built-in presets:
@@ -316,13 +310,16 @@ The current resource layer is centered on VibeVoice. Future model integrations s
 
 ## Rendering growth
 
-The current renderer already composes clips from stored layout state and applies presets through `AudioPlan` resolution. Future rendering work may add:
+The current renderer already composes clips from stored layout state, mixes non-`master` presets through compose-local preset buses, and applies `master` at the production boundary. Future rendering work may add:
 
 * non-zero gap and margin handling
 * overlapping or mixed clips
 * scene transitions
 * production-level effects and mastering passes
 * alignment-aware composition
+* preset stacks as first-class bus keys rather than one-name preset assignments
+* preset continuity across compose boundaries when adjacent composed children share the same preset stack
+* more sophisticated bus routing or sidechain-style interactions between sibling presets
 
 ## Testing growth
 

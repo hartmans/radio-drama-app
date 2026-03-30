@@ -20,9 +20,9 @@ from .errors import DocumentError, SourceLocation
 from .expressions import ArrayExpression, LineExpression, coerce_array_exp, eval_expression, line, validate_expression
 from .effects import (
     EffectChain,
+    EffectMixer,
     FFmpegFilterEffectStage,
     PedalboardEffectStage,
-    PresetPlan,
     available_effect_chains,
     build_named_effect_chain,
     normalize_effect_chain_name,
@@ -72,6 +72,7 @@ __all__ = [
     "ElementContext",
     "eval_expression",
     "EffectChain",
+    "EffectMixer",
     "FFmpegFilterEffectStage",
     "AlignedScriptResult",
     "AlignedScriptSource",
@@ -85,7 +86,6 @@ __all__ = [
     "NormalizedSoundCache",
     "PedalboardEffectStage",
     "PlanningNode",
-    "PresetPlan",
     "ProductionConfig",
     "ProductionDocumentPath",
     "ProductionNode",

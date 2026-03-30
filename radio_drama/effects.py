@@ -7,16 +7,12 @@ import tempfile
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Mapping, Protocol, Sequence
 
 import numpy as np
-from carthage.dependency_injection import inject
 from scipy.signal import butter, sosfiltfilt
 
 from .audio import normalize_audio_array
-from .config import ProductionConfig
-from .planning import AudioPlan
-from .rendering import RenderResult
 
 
 class EffectStage(Protocol):
@@ -122,143 +118,102 @@ class EffectChain:
     name: str
     stages: tuple[EffectStage, ...]
 
-    def apply(self, result: RenderResult, *, sample_rate: int) -> RenderResult:
-        audio = normalize_audio_array(result.audio)
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        if audio.shape[0] == 0:
+            return
+        working = normalize_audio_array(audio)
         for stage in self.stages:
-            audio = stage.apply(audio, sample_rate=sample_rate)
-        return type(result)(audio=audio)
+            working = stage.apply(working, sample_rate=sample_rate)
+        audio[...] = working
 
-    async def render(self, result: RenderResult, *, sample_rate: int) -> RenderResult:
-        return await asyncio.to_thread(self.apply, result, sample_rate=sample_rate)
+    async def render(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        await asyncio.to_thread(self.apply, audio, sample_rate=sample_rate)
 
 
-@inject(config=ProductionConfig)
-class PresetPlan(AudioPlan):
-    """Audio plan wrapper that applies a named preset at render time."""
+@dataclass(slots=True)
+class _EffectRegion:
+    start_frame: int
+    end_frame: int
+    audio: np.ndarray
+    preset_key: tuple[str, ...]
 
-    def __init__(
+
+class EffectMixer:
+    """Compose-local preset bus mixer.
+
+    Child renders are added in compose-frame coordinates along with a preset bus
+    key. All regions for one preset key are mixed into one full-timeline bus,
+    that bus is processed once, and then all buses are summed together.
+    """
+
+    def __init__(self, *, total_frames: int, channels: int) -> None:
+        self.total_frames = max(0, int(total_frames))
+        self.channels = max(1, int(channels))
+        self._regions: list[_EffectRegion] = []
+
+    def add(
         self,
-        node,
-        audio_plan: AudioPlan,
-        preset_name: str,
-        attrs=None,
-        **kwargs,
+        *,
+        start_frame: int,
+        end_frame: int,
+        audio: np.ndarray,
+        preset_key: Sequence[str] = (),
     ) -> None:
-        super().__init__(node=node, attrs=attrs, **kwargs)
-        self.audio_plan = audio_plan
-        self.preset_name = preset_name
-        self._rebuild_audio_marks((self.audio_plan,))
-
-    def __repr__(self) -> str:
-        return f"PresetPlan(preset_name={self.preset_name!r})"
-
-    def _mark_children(self):
-        return (self.__dict__["audio_plan"],) if "audio_plan" in self.__dict__ else ()
-
-    def leaf_audio_plans(self) -> list[AudioPlan]:
-        return self.audio_plan.leaf_audio_plans()
-
-    async def async_resolve(self):
-        replacement = await self._bubble_through_compose()
-        if replacement is not self:
-            return replacement
-        return self
-
-    def __getattr__(self, name: str):
-        return getattr(self.audio_plan, name)
-
-    def cut_before_mark(self, audio_mark: str) -> None:
-        super().cut_before_mark(audio_mark)
-        self.audio_plan.cut_before_mark(audio_mark)
-        self._rebuild_audio_marks((self.audio_plan,))
-
-    def cut_after_mark(self, audio_mark: str) -> None:
-        super().cut_after_mark(audio_mark)
-        self.audio_plan.cut_after_mark(audio_mark)
-        self._rebuild_audio_marks((self.audio_plan,))
-
-    async def layout_node(self) -> None:
-        await self.audio_plan.layout()
-        self._raw_inner_first = self.audio_plan.inner_first
-        self._raw_inner_last = self.audio_plan.inner_last
-        self._raw_length = self.audio_plan.length
-        self._layout_marks_inner = dict(self.audio_plan.audio_marks_inner)
-
-    def _apply_node_render_geometry(self, result: RenderResult) -> RenderResult:
-        return result
-
-    async def render_node(self) -> RenderResult:
-        base_result = await self.audio_plan.render()
-        try:
-            chain = build_named_effect_chain(self.preset_name)
-        except KeyError as exc:
-            available = ", ".join(sorted(available_effect_chains()))
-            raise self.document_error(
-                f"Unknown preset {self.preset_name!r}. Available presets: {available}"
-            ) from exc
-        return await chain.render(
-            base_result,
-            sample_rate=self.config.resolved_output_sample_rate,
+        self._regions.append(
+            _EffectRegion(
+                start_frame=int(start_frame),
+                end_frame=int(end_frame),
+                audio=audio,
+                preset_key=tuple(preset_key),
+            )
         )
 
-    async def _bubble_through_compose(self) -> AudioPlan:
-        from .planning import ComposeAudioPlan
-
-        if type(self.audio_plan) is not ComposeAudioPlan:
-            return self
-
-        replacement_children: list[AudioPlan] = []
-        pending_segment: list[AudioPlan] = []
-        bubbled = False
-
-        for child_plan in self.audio_plan.audio_plans:
-            if not self._child_blocks_outer_preset(child_plan):
-                pending_segment.append(child_plan)
-                continue
-            bubbled = True
-            replacement_children.extend(await self._segment_with_outer_preset(pending_segment))
-            pending_segment.clear()
-            replacement_children.append(child_plan)
-
-        if not bubbled:
-            return self
-        replacement_children.extend(await self._segment_with_outer_preset(pending_segment))
-        return await self._compose_replacement(replacement_children)
-
-    def _child_blocks_outer_preset(self, child_plan: AudioPlan) -> bool:
-        if not isinstance(child_plan, PresetPlan):
-            return False
-        return not child_plan.node.boolean_attribute("stack_preset")
-
-    async def _segment_with_outer_preset(self, audio_plans: list[AudioPlan]) -> list[AudioPlan]:
-        if not audio_plans:
-            return []
-        if len(audio_plans) == 1:
-            wrapped_plan = audio_plans[0]
-        else:
-            wrapped_plan = await self.ainjector(
-                type(self.audio_plan),
-                node=self.audio_plan.node,
-                audio_plans=list(audio_plans),
-                attrs={},
+    async def apply(self, *, sample_rate: int) -> np.ndarray:
+        buses: dict[tuple[str, ...], np.ndarray] = {}
+        for region in self._regions:
+            bus = buses.get(region.preset_key)
+            if bus is None:
+                bus = self._empty_audio()
+                buses[region.preset_key] = bus
+            self._mix_region_into_bus(bus, region)
+        await asyncio.gather(
+            *(
+                self._apply_bus_preset(preset_key, bus, sample_rate=sample_rate)
+                for preset_key, bus in buses.items()
+                if preset_key
             )
-        return [
-            await self.ainjector(
-                type(self),
-                node=self.node,
-                audio_plan=wrapped_plan,
-                preset_name=self.preset_name,
-                attrs={},
-            )
-        ]
-
-    async def _compose_replacement(self, audio_plans: list[AudioPlan]) -> AudioPlan:
-        return await self.ainjector(
-            type(self.audio_plan),
-            node=self.audio_plan.node,
-            audio_plans=audio_plans,
-            attrs=self.attrs,
         )
+        mixed = self._empty_audio()
+        for bus in buses.values():
+            mixed += bus
+        return mixed
+
+    async def _apply_bus_preset(
+        self,
+        preset_key: tuple[str, ...],
+        audio: np.ndarray,
+        *,
+        sample_rate: int,
+    ) -> None:
+        for preset_name in preset_key:
+            chain = build_named_effect_chain(preset_name)
+            await chain.render(audio, sample_rate=sample_rate)
+
+    def _mix_region_into_bus(self, bus: np.ndarray, region: _EffectRegion) -> None:
+        if region.audio.shape[0] == 0:
+            return
+        write_start = max(0, region.start_frame)
+        write_end = min(self.total_frames, region.end_frame)
+        if write_end <= write_start:
+            return
+        source_start = max(0, -region.start_frame)
+        source_end = source_start + (write_end - write_start)
+        bus[write_start:write_end] += region.audio[source_start:source_end]
+
+    def _empty_audio(self) -> np.ndarray:
+        if self.channels == 1:
+            return np.zeros(self.total_frames, dtype=np.float32)
+        return np.zeros((self.total_frames, self.channels), dtype=np.float32)
 
 
 def callable_stage(
@@ -456,7 +411,7 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
         stages=(
             FFmpegFilterEffectStage(
                 name="master_loudnorm",
-                filter_graph="loudnorm",
+                filter_graph="loudnorm"
             ),
         ),
     ),

@@ -19,7 +19,7 @@ from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.debug import debug_artifact_directory
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
-from radio_drama.effects import EffectChain, PresetPlan, available_effect_chains, build_named_effect_chain
+from radio_drama.effects import EffectChain, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import (
     AlignedClause,
     AlignedWord,
@@ -39,6 +39,7 @@ from radio_drama.planning import (
     DialogueLine,
     LoopPlan,
     MarkPlan,
+    ProductionPlan,
     ScriptPlan,
     ScriptRenderRequest,
     SpeakerVoiceReference,
@@ -110,6 +111,21 @@ def _normalized_script_from_request(request: ScriptRenderRequest) -> str:
             speaker_numbers[speaker_key] = speaker_number
         normalized_lines.append(f"Speaker {speaker_number}: {line.spoken_text}")
     return "\n".join(normalized_lines).replace("’", "'")
+
+
+@pytest.fixture(autouse=True)
+def _noop_master_chain(monkeypatch, request):
+    if request.node.name == "test_master_effect_chain_preserves_output_format":
+        return
+
+    original = effects_module.build_named_effect_chain
+
+    def fake_build_named_effect_chain(name: str):
+        if effects_module.normalize_effect_chain_name(name) == "master":
+            return EffectChain(name="master", stages=())
+        return original(name)
+
+    monkeypatch.setattr(effects_module, "build_named_effect_chain", fake_build_named_effect_chain)
 
 
 def test_speaker_map_plan_resolves_stem_lookup(tmp_path: Path):
@@ -302,12 +318,12 @@ def test_production_with_direct_sound_renders_without_speaker_map(tmp_path: Path
                 source_name=str(xml_path),
             )
             plan = await root.plan(ainjector)
-            return plan, await plan.audio_plan.render()
+            return plan, await plan.render()
         finally:
             injector.close()
 
     plan, result = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
+    assert isinstance(plan, ProductionPlan)
     assert result.audio.tolist() == [1.0, 2.0]
 
 
@@ -344,7 +360,7 @@ def test_sound_plan_defers_normalization_until_render(tmp_path: Path):
             )
             plan = await root.plan(ainjector)
             preload_count_before_render = len(sound_cache.preloaded_paths)
-            await plan.audio_plan.render()
+            await plan.render()
             return preload_count_before_render, sound_cache.preloaded_paths
         finally:
             injector.close()
@@ -422,9 +438,9 @@ def test_sound_plan_wraps_preset_from_node(tmp_path: Path):
             injector.close()
 
     plan = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
+    assert isinstance(plan, SoundPlan)
     assert plan.preset_name == "narrator"
-    assert isinstance(plan.audio_plan, SoundPlan)
+    assert plan.preset_key == ("narrator",)
 
 
 def test_sound_plan_trims_audio_with_from_and_to(tmp_path: Path):
@@ -501,12 +517,12 @@ def test_sound_plan_keeps_trim_attrs_on_inner_sound_when_wrapped(tmp_path: Path)
             injector.close()
 
     plan = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert isinstance(plan.audio_plan, SoundPlan)
-    assert plan.audio_plan.file_from == 0.25
-    assert plan.audio_plan.file_to == 1.0
-    assert "from" not in plan.attrs
-    assert "to" not in plan.attrs
+    assert isinstance(plan, SoundPlan)
+    assert plan.file_from == 0.25
+    assert plan.file_to == 1.0
+    assert "from" in plan.attrs
+    assert "to" in plan.attrs
+    assert "preset" in plan.attrs
 
 
 def test_sound_plan_rejects_to_before_from(tmp_path: Path):
@@ -1336,8 +1352,8 @@ def test_compose_audio_plan_bubbles_render_time_mark_positions(tmp_path: Path):
                 source_name=str(xml_path),
             )
             compose_plan = await root.plan(ainjector)
-            result = await compose_plan.audio_plan.render()
-            return compose_plan.audio_plan, result
+            result = await compose_plan.render()
+            return compose_plan, result
         finally:
             injector.close()
 
@@ -2570,13 +2586,12 @@ def test_production_plan_renders_scripts_in_order(tmp_path: Path):
                 source_name="ordered.xml",
             )
             plan = await root.plan(ainjector)
-            return plan, await plan.audio_plan.render()
+            return plan, await plan.render()
         finally:
             injector.close()
 
     plan, result = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert plan.preset_name == "master"
+    assert isinstance(plan, ProductionPlan)
     assert result.audio.tolist() == [1.0, 2.0]
 
 
@@ -2609,13 +2624,12 @@ def test_production_plan_applies_script_gaps(tmp_path: Path):
                 source_name="script-gaps.xml",
             )
             plan = await root.plan(ainjector)
-            return plan, await plan.audio_plan.render()
+            return plan, await plan.render()
         finally:
             injector.close()
 
     plan, result = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert plan.preset_name == "master"
+    assert isinstance(plan, ProductionPlan)
     assert result.audio.tolist() == [1.0, 0.0, 0.0, 0.0, 2.0]
 
 
@@ -2649,13 +2663,12 @@ def test_production_plan_mixes_overlapping_scripts(tmp_path: Path):
                 source_name="overlap.xml",
             )
             plan = await root.plan(ainjector)
-            return plan, await plan.audio_plan.render()
+            return plan, await plan.render()
         finally:
             injector.close()
 
     plan, result = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert isinstance(plan.audio_plan, ComposeAudioPlan)
+    assert isinstance(plan, ProductionPlan)
     assert result.audio.tolist() == [11.0, 22.0]
 
 
@@ -2686,7 +2699,7 @@ def test_production_plan_trims_audio_before_zero(tmp_path: Path):
                 source_name="trim-start.xml",
             )
             plan = await root.plan(ainjector)
-            return await plan.audio_plan.render()
+            return await plan.render()
         finally:
             injector.close()
 
@@ -2721,7 +2734,7 @@ def test_production_plan_trims_audio_after_end(tmp_path: Path):
                 source_name="trim-end.xml",
             )
             plan = await root.plan(ainjector)
-            return await plan.audio_plan.render()
+            return await plan.render()
         finally:
             injector.close()
 
@@ -2729,7 +2742,7 @@ def test_production_plan_trims_audio_after_end(tmp_path: Path):
     assert result.audio.tolist() == [1.0]
 
 
-def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
+def test_preset_bus_preserves_script_timeline_length(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=2)
@@ -2758,18 +2771,16 @@ def test_preset_plan_preserves_inner_script_gap(tmp_path: Path):
                 source_name="preset-gap.xml",
             )
             plan = await root.plan(ainjector)
-            return plan, await plan.audio_plan.render()
+            return plan, await plan.render()
         finally:
             injector.close()
 
     plan, result = asyncio.run(runner())
-    assert isinstance(plan, PresetPlan)
-    assert isinstance(plan.audio_plan, ComposeAudioPlan)
+    assert isinstance(plan, ProductionPlan)
     assert result.audio.shape == (33, 2)
-    assert np.allclose(result.audio[16], 0.0)
 
 
-def test_nested_script_preset_bubbles_out_of_outer_preset_by_default(tmp_path: Path):
+def test_nested_script_presets_keep_outer_compose_scope(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
@@ -2797,32 +2808,53 @@ def test_nested_script_preset_bubbles_out_of_outer_preset_by_default(tmp_path: P
                   </script>
                 </production>
                 """,
-                source_name="nested-preset-bubble.xml",
+                source_name="nested-preset-scope.xml",
             )
             return await root.plan(ainjector)
         finally:
             injector.close()
 
     production_plan = asyncio.run(runner())
-    outer_plan = production_plan.audio_plan.audio_plans[0]
+    outer_plan = production_plan.audio_plans[0]
     assert isinstance(outer_plan, ComposeAudioPlan)
+    assert outer_plan.preset_key == ("indoor1",)
     assert len(outer_plan.audio_plans) == 2
-    assert isinstance(outer_plan.audio_plans[0], PresetPlan)
-    assert outer_plan.audio_plans[0].preset_name == "narrator"
-    assert isinstance(outer_plan.audio_plans[1], PresetPlan)
-    assert outer_plan.audio_plans[1].preset_name == "indoor1"
+    assert outer_plan.audio_plans[0].preset_key == ("narrator",)
+    assert outer_plan.audio_plans[1].preset_key == ()
 
 
-def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Path):
+def test_same_preset_children_share_one_compose_bus(tmp_path: Path, monkeypatch):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+    call_count = 0
+
+    class CountingStage:
+        name = "counting"
+        backend = "test"
+
+        def apply(self, audio: np.ndarray, *, sample_rate: int) -> np.ndarray:
+            nonlocal call_count
+            del sample_rate
+            call_count += 1
+            return audio + 1.0
+
+    monkeypatch.setitem(
+        effects_module._PRESET_CHAINS,
+        "narrator",
+        EffectChain(name="narrator", stages=(CountingStage(),)),
+    )
+    monkeypatch.setitem(
+        effects_module._PRESET_CHAINS,
+        "master",
+        EffectChain(name="master", stages=()),
+    )
 
     class FakeVibeVoice:
         async def register_request(self, request: ScriptRenderRequest):
             class Registered:
                 async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Inner line" in _normalized_script_from_request(request) else 2.0
+                    value = 1.0 if "Line 1" in _normalized_script_from_request(request) else 2.0
                     return RenderResult(audio=np.array([value], dtype=np.float32))
 
             return Registered()
@@ -2835,67 +2867,20 @@ def test_nested_script_preset_bubbling_preserves_outer_audio_attrs(tmp_path: Pat
                 """
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
-                  <script preset="indoor1" gain="6.0206" post_gap="0.25">
-                    <script preset="narrator">Anna: Inner line.</script>
-                    Anna: Outer line.
-                  </script>
+                  <script preset="narrator">Anna: Line 1.</script>
+                  <script preset="narrator">Anna: Line 2.</script>
                 </production>
                 """,
-                source_name="nested-preset-bubble-attrs.xml",
+                source_name="shared-preset-bus.xml",
             )
-            return await root.plan(ainjector)
+            plan = await root.plan(ainjector)
+            return await plan.render()
         finally:
             injector.close()
 
-    production_plan = asyncio.run(runner())
-    outer_plan = production_plan.audio_plan.audio_plans[0]
-    assert isinstance(outer_plan, ComposeAudioPlan)
-    assert outer_plan.gain_expression == "6.0206"
-    assert outer_plan.audio_plans[0].gain_expression is None
-    assert outer_plan.audio_plans[1].gain_expression is None
-
-
-def test_nested_script_preset_stacks_when_stack_preset_is_true(tmp_path: Path):
-    voice_file = tmp_path / "anna.wav"
-    voice_file.write_bytes(b"fake")
-    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
-
-    class FakeVibeVoice:
-        async def register_request(self, request: ScriptRenderRequest):
-            class Registered:
-                async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Inner line" in _normalized_script_from_request(request) else 2.0
-                    return RenderResult(audio=np.array([value], dtype=np.float32))
-
-            return Registered()
-
-    async def runner():
-        injector, ainjector = await _make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
-        try:
-            root = parse_production_string(
-                """
-                <production>
-                  <speaker-map>Anna: anna.wav</speaker-map>
-                  <script preset="indoor1">
-                    <script preset="narrator" stack_preset="true">Anna: Inner line.</script>
-                    Anna: Outer line.
-                  </script>
-                </production>
-                """,
-                source_name="nested-preset-stack.xml",
-            )
-            return await root.plan(ainjector)
-        finally:
-            injector.close()
-
-    production_plan = asyncio.run(runner())
-    outer_plan = production_plan.audio_plan.audio_plans[0]
-    assert isinstance(outer_plan, PresetPlan)
-    assert outer_plan.preset_name == "indoor1"
-    assert isinstance(outer_plan.audio_plan, ComposeAudioPlan)
-    assert isinstance(outer_plan.audio_plan.audio_plans[0], PresetPlan)
-    assert outer_plan.audio_plan.audio_plans[0].preset_name == "narrator"
+    result = asyncio.run(runner())
+    assert call_count == 1
+    assert result.audio.tolist() == [2.0, 3.0]
 
 
 def test_script_gap_attribute_requires_numeric_seconds(tmp_path: Path):
@@ -3011,14 +2996,15 @@ def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
             )
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
-            rendered = await audio_plan.render()
+            rendered = await production_plan.render()
             return production_plan, audio_plan, rendered
         finally:
             injector.close()
 
     production_plan, audio_plan, rendered = asyncio.run(runner())
-    assert isinstance(audio_plan, PresetPlan)
+    assert isinstance(audio_plan, ScriptPlan)
     assert audio_plan.preset_name == "narrator"
+    assert audio_plan.preset_key == ("narrator",)
     assert len(production_plan.leaf_audio_plans()) == 1
     assert rendered.audio.shape == (512, 2)
     assert not np.allclose(rendered.audio[:, 0], np.linspace(-0.2, 0.2, 512, dtype=np.float32))
@@ -3147,10 +3133,10 @@ def test_master_effect_chain_preserves_output_format():
     chain = build_named_effect_chain("master")
     audio = np.linspace(-0.2, 0.2, 1024, dtype=np.float32)
     stereo_audio = np.column_stack([audio, audio])
-    result = chain.apply(RenderResult(audio=stereo_audio), sample_rate=48000)
+    chain.apply(stereo_audio, sample_rate=48000)
 
-    assert result.audio.shape == stereo_audio.shape
-    assert result.audio.dtype == np.float32
+    assert stereo_audio.shape == (1024, 2)
+    assert stereo_audio.dtype == np.float32
 
 
 def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):

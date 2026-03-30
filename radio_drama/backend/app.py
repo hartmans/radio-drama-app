@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
+import numpy as np
 import uvicorn
 from carthage.dependency_injection import AsyncInjector
 from fastapi import FastAPI, HTTPException, Response
@@ -97,7 +98,9 @@ class PresetAudioStore:
 
     async def _render_preset(self, preset_name: str) -> RenderResult:
         chain = build_named_effect_chain(preset_name)
-        return await chain.render(self.base_result, sample_rate=self.sample_rate)
+        rendered = RenderResult(audio=np.array(self.base_result.audio, copy=True))
+        await chain.render(rendered.audio, sample_rate=self.sample_rate)
+        return rendered
 
     def _normalize_preset_names(self, preset_names: Sequence[str]) -> tuple[str, ...]:
         normalized_names: list[str] = []

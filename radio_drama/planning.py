@@ -138,7 +138,6 @@ class AudioPlan(PlanningNode):
         self._replace_attrs(resolved_attrs)
 
     async def async_resolve(self):
-        preset_name = cast(str | None, self.attrs.get("preset"))
         loop_attr_names = {
             "loop_beg",
             "loop_end",
@@ -150,7 +149,7 @@ class AudioPlan(PlanningNode):
         }
         wrapper_attr_names = type(self).wrapper_attr_names()
         loop_enabled = "loop_until" in self.attrs or "loop_loops" in self.attrs
-        if preset_name is None and not loop_enabled:
+        if not loop_enabled:
             return self
         loop_attrs = {key: value for key, value in self.attrs.items() if key in loop_attr_names}
         wrapper_attrs = {
@@ -161,28 +160,14 @@ class AudioPlan(PlanningNode):
         retained_attrs = {
             key: value
             for key, value in self.attrs.items()
-            if key != "preset" and key not in loop_attr_names and key not in wrapper_attr_names
+            if key not in loop_attr_names and key not in wrapper_attr_names
         }
-        await self.async_ready()
         self._replace_attrs(retained_attrs)
-        wrapped: AudioPlan = self
-        if loop_enabled:
-            wrapped = await self.ainjector(
-                LoopPlan,
-                node=self.node,
-                audio_plan=wrapped,
-                attrs=loop_attrs if preset_name is not None else {**wrapper_attrs, **loop_attrs},
-            )
-        if preset_name is None:
-            return wrapped
-        from .effects import PresetPlan
-
         return await self.ainjector(
-            PresetPlan,
+            LoopPlan,
             node=self.node,
-            audio_plan=wrapped,
-            preset_name=preset_name,
-            attrs=wrapper_attrs,
+            audio_plan=self,
+            attrs={**wrapper_attrs, **loop_attrs},
         )
 
     @property
@@ -254,6 +239,9 @@ class AudioPlan(PlanningNode):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
+
+    def output_preset_key(self) -> tuple[str, ...]:
+        return self.preset_key
 
     def _add_visible_audio_mark(self, audio_mark: str) -> None:
         mark_count = self._audio_mark_counts.get(audio_mark, 0) + 1
@@ -378,6 +366,8 @@ class AudioPlan(PlanningNode):
         self.last_mark = None
         self.gain_expression = None
         self.pan_expression = None
+        self.preset_name = None
+        self.preset_key: tuple[str, ...] = ()
         if "start" in attrs and "pre_gap" in attrs:
             raise self.document_error(
                 f"{self.node.display_name} may not specify both start and pre_gap"
@@ -428,20 +418,34 @@ class AudioPlan(PlanningNode):
         ]
         self.gain_expression = cast(str | None, attrs.get("gain"))
         self.pan_expression = cast(str | None, attrs.get("pan"))
+        self.preset_name = cast(str | None, attrs.get("preset"))
+        if self.preset_name is not None:
+            from .effects import available_effect_chains, normalize_effect_chain_name
+
+            normalized_preset_name = normalize_effect_chain_name(self.preset_name)
+            available = set(available_effect_chains())
+            if normalized_preset_name not in available:
+                formatted = ", ".join(sorted(available))
+                raise self.document_error(
+                    f"Unknown preset {self.preset_name!r}. Available presets: {formatted}"
+                )
+            self.preset_name = normalized_preset_name
+            self.preset_key = (normalized_preset_name,)
 
     @classmethod
     def wrapper_attr_names(cls) -> frozenset[str]:
         """Return audio attrs that belong on wrapper plans rather than the inner plan.
 
-        ``AudioPlan.async_resolve()`` moves these attrs onto ``PresetPlan`` or
-        ``LoopPlan`` when a node is wrapped so the outermost plan produced from
-        one document node continues to own ordinary AudioPlan semantics.
+        ``AudioPlan.async_resolve()`` moves these attrs onto wrapper plans such
+        as ``LoopPlan`` when a node is wrapped so the outermost plan produced
+        from one document node continues to own ordinary AudioPlan semantics.
 
-        New general AudioPlan attrs that should still apply after preset or loop
-        wrapping should be added here. Sound-specific attrs such as file trims do
-        not belong here, because they must remain on the inner ``SoundPlan``.
+        New general AudioPlan attrs that should still apply after wrapping
+        should be added here. Sound-specific attrs such as file trims do not
+        belong here, because they must remain on the inner ``SoundPlan``.
         """
         return frozenset({
+            "preset",
             "start",
             "pre_gap",
             "end",
@@ -1333,10 +1337,43 @@ class ComposeAudioPlan(AudioPlan):
         self._layout_marks_inner = self._visible_child_marks_inner()
 
     async def render_node(self) -> RenderResult:
+        from .effects import EffectMixer
+
         rendered_results = await asyncio.gather(
             *(audio_plan.render(self.audio_marks_inner) for audio_plan in self.audio_plans)
         )
-        return self._compose_results(rendered_results)
+        total_frames = max(0, self._seconds_to_frames(self._raw_inner_last - self._raw_inner_first))
+        mixer = EffectMixer(
+            total_frames=total_frames,
+            channels=self.config.resolved_output_channels,
+        )
+        for audio_plan, result in zip(self.audio_plans, rendered_results, strict=True):
+            start_frame = self._seconds_to_frames(
+                audio_plan.start + audio_plan.inner_first - self._raw_inner_first
+            )
+            end_frame = start_frame + result.frame_count
+            write_debug_message(
+                self.config,
+                "compose_audio",
+                (
+                    f"{self!r} places {audio_plan!r} from "
+                    f"{self._frames_to_seconds(start_frame):.3f}s to "
+                    f"{self._frames_to_seconds(end_frame):.3f}s "
+                    f"on preset bus {audio_plan.preset_key!r}"
+                ),
+            )
+            mixer.add(
+                start_frame=start_frame,
+                end_frame=end_frame,
+                audio=result.audio,
+                preset_key=audio_plan.output_preset_key() or self.preset_key,
+            )
+        return RenderResult(
+            audio=await mixer.apply(sample_rate=self.config.resolved_output_sample_rate)
+        )
+
+    def output_preset_key(self) -> tuple[str, ...]:
+        return ()
 
     def _place_child_automatically(
         self,
@@ -1422,36 +1459,6 @@ class ComposeAudioPlan(AudioPlan):
             for mark_id, count in mark_counts.items()
             if count == 1
         }
-
-    def _compose_results(self, results: Sequence[RenderResult]) -> RenderResult:
-        if not results:
-            return RenderResult.empty(channels=self.config.resolved_output_channels)
-        placements: list[tuple[int, RenderResult]] = []
-        total_frames = max(0, self._seconds_to_frames(self._raw_inner_last - self._raw_inner_first))
-        audio = self._empty_audio(total_frames)
-        for audio_plan, result in zip(self.audio_plans, results, strict=True):
-            start_frame = self._seconds_to_frames(
-                audio_plan.start + audio_plan.inner_first - self._raw_inner_first
-            )
-            end_frame = start_frame + result.frame_count
-            write_debug_message(
-                self.config,
-                "compose_audio",
-                (
-                    f"{self!r} places {audio_plan!r} from "
-                    f"{self._frames_to_seconds(start_frame):.3f}s to "
-                    f"{self._frames_to_seconds(end_frame):.3f}s"
-                ),
-            )
-            placements.append((start_frame, result))
-            if result.frame_count == 0:
-                continue
-            write_start = max(0, start_frame)
-            write_end = min(total_frames, write_start + result.frame_count)
-            source_end = max(0, write_end - write_start)
-            audio[write_start:write_end] += result.audio[:source_end]
-        return RenderResult(audio=audio)
-
 
 @inject(config=ProductionConfig)
 class LoopPlan(AudioPlan):
@@ -1712,16 +1719,16 @@ class SlicePlan(AudioPlan):
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
-    @classmethod
-    def attrs_from_node(cls, node: DocumentNode | None) -> AudioAttrs:
-        attrs = super().attrs_from_node(node)
-        attrs["preset"] = "master"
-        return attrs
-
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and clip to the production boundary."""
+        from .effects import build_named_effect_chain
+
         combined = await super().render_node()
         trimmed = self._trim_to_production_boundary(combined)
+        if trimmed.frame_count == 0:
+            return ProductionResult(audio=trimmed.audio)
+        master_chain = build_named_effect_chain("master")
+        await master_chain.render(trimmed.audio, sample_rate=self.config.resolved_output_sample_rate)
         return ProductionResult(audio=trimmed.audio)
 
     def _apply_node_render_geometry(self, result: RenderResult) -> RenderResult:
