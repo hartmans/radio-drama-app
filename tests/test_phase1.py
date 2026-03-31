@@ -1592,6 +1592,45 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
     np.testing.assert_allclose(result.audio[:, 1], np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32))
 
 
+def test_audio_plan_pan_expression_uses_linear_balance(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=2)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def render_with_pan(pan_expression: str) -> RenderResult:
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(
+                    audio=np.ones((2, 2), dtype=np.float32),
+                ),
+                attrs={"pan": pan_expression},
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    right_heavy = asyncio.run(render_with_pan("0.5"))
+    left_heavy = asyncio.run(render_with_pan("-0.5"))
+
+    np.testing.assert_allclose(right_heavy.audio[:, 0], np.full(2, 0.5, dtype=np.float32))
+    np.testing.assert_allclose(right_heavy.audio[:, 1], np.ones(2, dtype=np.float32))
+    np.testing.assert_allclose(left_heavy.audio[:, 0], np.ones(2, dtype=np.float32))
+    np.testing.assert_allclose(left_heavy.audio[:, 1], np.full(2, 0.5, dtype=np.float32))
+
+
 def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
     config = ProductionConfig(output_sample_rate=4, output_channels=1)
 

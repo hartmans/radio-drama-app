@@ -233,8 +233,7 @@ class AudioPlan(PlanningNode):
             coerce_array_exp,
         )
         pan = np.clip(pan_expression.to_size(updated_result.frame_count), -1.0, 1.0)
-        far_channel_gain = np.cos(np.abs(pan) * (np.pi / 2.0)).astype(np.float32, copy=False)
-        far_channel_gain[np.abs(pan) >= 1.0] = 0.0
+        far_channel_gain = (1.0 - np.abs(pan)).astype(np.float32, copy=False)
         left_gain = np.where(pan <= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
         right_gain = np.where(pan >= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
 
