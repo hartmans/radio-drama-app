@@ -641,10 +641,6 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
                 ),
             ),
             numpy_stage(
-                "phone_focus",
-                partial(_mid_side_mix, mid_gain=1.16, side_gain=0.15),
-            ),
-            numpy_stage(
                 "phone_hiss",
                 partial(_mix_white_noise, relative_db=-34.0),
             ),
