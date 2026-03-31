@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ _WHISPERX_SAMPLE_RATE = 16000
 _WHISPERX_REQUEST_BATCH_SIZE = 10
 _WHISPERX_TRANSCRIBE_BATCH_SIZE = 10
 _WHISPERX_ALIGNMENT_THREADS = 4
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,16 @@ class AlignedClause:
 class AlignmentResult:
     words: tuple[AlignedWord, ...]
     clauses: tuple[AlignedClause, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _WordMatchCandidate:
+    start_time: float | None
+    end_time: float | None
+    next_search_index: int
+    normalized_cost: float
+    exact_match_count: int
+    anchor_match_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,6 +509,8 @@ class ScriptSlice(AudioPlan):
 
     async def layout_node(self) -> None:
         aligned_result = await self.aligned_script_source.render()
+        self._log_nan_marker_if_used(aligned_result, self.start_marker, marker_name="start")
+        self._log_nan_marker_if_used(aligned_result, self.end_marker, marker_name="end")
         start_frame = aligned_result.marker_frames[self.start_marker]
         end_frame = max(start_frame, aligned_result.marker_frames[self.end_marker])
         self._raw_inner_last = self._frames_to_seconds(end_frame - start_frame)
@@ -510,6 +524,27 @@ class ScriptSlice(AudioPlan):
         return aligned_result.render_result.slice_frames(
             start_frame,
             end_frame,
+        )
+
+    def _log_nan_marker_if_used(
+        self,
+        aligned_result: AlignedScriptResult,
+        marker_index: int,
+        *,
+        marker_name: str,
+    ) -> None:
+        boundary = _boundary_info_for_marker(aligned_result.contents, marker_index)
+        if boundary is None:
+            return
+        boundary_pos, boundary_label = boundary
+        if not math.isnan(boundary_pos):
+            return
+        logger.error(
+            "Alignment produced NaN %s marker for %r at marker %d (%s); slice timing will fall back to 0",
+            marker_name,
+            self,
+            marker_index,
+            boundary_label,
         )
 
 
@@ -581,6 +616,19 @@ def _marker_frames_from_contents(
         min(frame_count, max(0, int(round(second * sample_rate))))
         for second in stabilized_seconds
     )
+
+
+def _boundary_info_for_marker(
+    contents: Sequence[DialogueContents],
+    marker_index: int,
+) -> tuple[float, str] | None:
+    if marker_index <= 0 or marker_index >= len(contents):
+        return None
+    previous = contents[marker_index - 1]
+    current = contents[marker_index]
+    if isinstance(previous, DialogueAudio):
+        return previous.start_pos, f"after {_content_debug_label(previous)}"
+    return current.start_pos, f"before {_content_debug_label(current)}"
 
 
 def _line_spans_from_alignment(
@@ -846,37 +894,160 @@ def _match_line_in_aligned_tokens(
     if not line_tokens:
         return None
 
+    max_length_slop = max(2, len(line_tokens) // 3)
+    min_candidate_length = max(1, len(line_tokens) - max_length_slop)
+    best_candidate: _WordMatchCandidate | None = None
+
     for candidate_index in range(start_index, len(aligned_tokens)):
-        if aligned_tokens[candidate_index][0] != line_tokens[0]:
-            continue
-
-        matched_end_index = _match_exact_token_run(
-            line_tokens,
-            aligned_tokens,
-            start_index=candidate_index,
+        max_candidate_length = min(
+            len(aligned_tokens) - candidate_index,
+            len(line_tokens) + max_length_slop,
         )
-        if matched_end_index is None:
+        if max_candidate_length < min_candidate_length:
             continue
 
-        start_time = aligned_tokens[candidate_index][1]
-        end_time = aligned_tokens[matched_end_index][2]
-        return start_time, end_time, matched_end_index + 1
-    return None
+        for candidate_length in range(min_candidate_length, max_candidate_length + 1):
+            candidate = _word_match_candidate_for_span(
+                line_tokens,
+                aligned_tokens,
+                candidate_index=candidate_index,
+                candidate_length=candidate_length,
+            )
+            if candidate is None:
+                continue
+            if best_candidate is None or _word_match_candidate_key(candidate) < _word_match_candidate_key(best_candidate):
+                best_candidate = candidate
+
+    if best_candidate is None:
+        return None
+    if best_candidate.normalized_cost > 0.35:
+        return None
+    if best_candidate.exact_match_count == 0:
+        return None
+    if best_candidate.anchor_match_count == 0:
+        return None
+    return (
+        best_candidate.start_time,
+        best_candidate.end_time,
+        best_candidate.next_search_index,
+    )
 
 
-def _match_exact_token_run(
+def _word_match_candidate_key(candidate: _WordMatchCandidate) -> tuple[float, int, int, int]:
+    return (
+        candidate.normalized_cost,
+        -candidate.anchor_match_count,
+        -candidate.exact_match_count,
+        candidate.next_search_index,
+    )
+
+
+def _word_match_candidate_for_span(
     line_tokens: Sequence[str],
     aligned_tokens: Sequence[tuple[str, float | None, float | None]],
     *,
-    start_index: int,
-) -> int | None:
-    end_index = start_index + len(line_tokens)
-    if end_index > len(aligned_tokens):
+    candidate_index: int,
+    candidate_length: int,
+) -> _WordMatchCandidate | None:
+    span = aligned_tokens[candidate_index: candidate_index + candidate_length]
+    span_tokens = [token for token, _, _ in span]
+    aligned_pairs, cost = _align_token_sequences(line_tokens, span_tokens)
+    if not aligned_pairs:
         return None
-    candidate_tokens = [token for token, _, _ in aligned_tokens[start_index:end_index]]
-    if list(line_tokens) != candidate_tokens:
-        return None
-    return end_index - 1
+
+    exact_match_count = sum(
+        1
+        for line_index, span_index in aligned_pairs
+        if line_tokens[line_index] == span_tokens[span_index]
+    )
+    first_pair = aligned_pairs[0]
+    last_pair = aligned_pairs[-1]
+    anchor_match_count = 0
+    if (
+        first_pair[0] == 0
+        and line_tokens[first_pair[0]] == span_tokens[first_pair[1]]
+    ):
+        anchor_match_count += 1
+    if (
+        last_pair[0] == len(line_tokens) - 1
+        and line_tokens[last_pair[0]] == span_tokens[last_pair[1]]
+    ):
+        anchor_match_count += 1
+
+    boundary_penalty = 0.0
+    if first_pair[0] != 0:
+        boundary_penalty += 0.75
+    if last_pair[0] != len(line_tokens) - 1:
+        boundary_penalty += 0.75
+    if anchor_match_count == 0:
+        boundary_penalty += 0.5
+
+    return _WordMatchCandidate(
+        start_time=span[first_pair[1]][1],
+        end_time=span[last_pair[1]][2],
+        next_search_index=candidate_index + last_pair[1] + 1,
+        normalized_cost=(cost + boundary_penalty) / max(len(line_tokens), 1),
+        exact_match_count=exact_match_count,
+        anchor_match_count=anchor_match_count,
+    )
+
+
+def _align_token_sequences(
+    source_tokens: Sequence[str],
+    target_tokens: Sequence[str],
+) -> tuple[list[tuple[int, int]], float]:
+    substitution_cost = 1.25
+    insertion_cost = 1.0
+    deletion_cost = 1.0
+    rows = len(source_tokens) + 1
+    cols = len(target_tokens) + 1
+    costs = [[0.0] * cols for _ in range(rows)]
+    steps: list[list[str | None]] = [[None] * cols for _ in range(rows)]
+
+    for row in range(1, rows):
+        costs[row][0] = row * deletion_cost
+        steps[row][0] = "up"
+    for col in range(1, cols):
+        costs[0][col] = col * insertion_cost
+        steps[0][col] = "left"
+
+    for row in range(1, rows):
+        for col in range(1, cols):
+            diagonal_cost = costs[row - 1][col - 1]
+            if source_tokens[row - 1] != target_tokens[col - 1]:
+                diagonal_cost += substitution_cost
+            up_cost = costs[row - 1][col] + deletion_cost
+            left_cost = costs[row][col - 1] + insertion_cost
+            best_cost = diagonal_cost
+            best_step = "diag"
+            if up_cost < best_cost:
+                best_cost = up_cost
+                best_step = "up"
+            if left_cost < best_cost:
+                best_cost = left_cost
+                best_step = "left"
+            costs[row][col] = best_cost
+            steps[row][col] = best_step
+
+    aligned_pairs: list[tuple[int, int]] = []
+    row = len(source_tokens)
+    col = len(target_tokens)
+    while row > 0 or col > 0:
+        step = steps[row][col]
+        if step == "diag":
+            aligned_pairs.append((row - 1, col - 1))
+            row -= 1
+            col -= 1
+            continue
+        if step == "up":
+            row -= 1
+            continue
+        if step == "left":
+            col -= 1
+            continue
+        break
+    aligned_pairs.reverse()
+    return aligned_pairs, costs[-1][-1]
 
 
 def _line_begins_with_clause(
@@ -967,6 +1138,12 @@ def _debug_line_preview(text: str) -> str:
     if len(normalized) <= 60:
         return repr(normalized)
     return f"{normalized[:30]!r} ... {normalized[-30:]!r}"
+
+
+def _content_debug_label(content: DialogueContents) -> str:
+    if isinstance(content, DialogueLine):
+        return _debug_line_preview(content.spoken_text)
+    return repr(content.audio_plan)
 
 
 def _debug_transcript_label(transcript: str) -> str:
