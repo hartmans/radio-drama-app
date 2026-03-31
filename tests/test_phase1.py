@@ -1732,6 +1732,58 @@ def test_loop_plan_loop_until_whole_extend_adjusts_loop_stop(tmp_path: Path):
     assert plan.inner_last == pytest.approx(1.75)
 
 
+def test_loop_plan_loop_until_can_target_later_automatic_mark(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            root = parse_production_string("<production />", source_name="loop-until-later-mark.xml")
+            loop_plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.arange(6, dtype=np.float32)),
+                attrs={
+                    "start": "0",
+                    "loop_beg": "0.5",
+                    "loop_end": "1.0",
+                    "loop_until": "inner_later",
+                },
+            )
+            later_plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.arange(16, dtype=np.float32)),
+                attrs={"last_mark": "later"},
+            )
+            compose_plan = await ainjector(
+                ComposeAudioPlan,
+                node=root,
+                audio_plans=[loop_plan, later_plan],
+            )
+            await compose_plan.layout()
+            return loop_plan, compose_plan
+        finally:
+            injector.close()
+
+    loop_plan, compose_plan = asyncio.run(runner())
+    assert isinstance(loop_plan, LoopPlan)
+    assert loop_plan.resolved_loop_stop == pytest.approx(4.0)
+    assert loop_plan.inner_last == pytest.approx(4.0)
+    assert compose_plan.audio_marks == ["later"]
+
+
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
     xml_path = tmp_path / "production.xml"
     xml_path.write_text("<production />", encoding="utf-8")

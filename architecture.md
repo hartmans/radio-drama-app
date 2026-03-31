@@ -78,7 +78,8 @@ Current planning contract:
   * `start`
   * `end`
   * `length`
-* every `AudioPlan.render(incoming_marks=...)` may receive marks in outer geometry, merge them into `audio_marks_inner`, derive `audio_marks_render`, and then apply node-level `gain` and `pan` during `post_render()`
+* every `AudioPlan` may receive parent-scope incoming marks after placement and before render; those inherited marks are available to render-time automation and, for plans such as `LoopPlan`, may also influence layout-time expression evaluation
+* explicit `start` is special: it establishes the mapping from parent outer time into the child's inner geometry, so it only sees outer-scope values and may not depend on child-local `natural_length` or `inner_*` names
 * productions are planned by walking element children in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
 
 Current plan types:
@@ -96,7 +97,7 @@ Current plan types:
 * `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, renders child audio into compose-local preset buses, applies each preset bus once, and then sums the buses into one shared timeline
-* `LoopPlan`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
+* `LoopPlan`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, may rebase parent-scope incoming marks into that same inner geometry for explicit-start loops, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
 * `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes and then applying the special `master` preset to the final trimmed production audio
 
 Current mark/cut contract:
@@ -126,6 +127,7 @@ Planning rule for presets:
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
 * the top-level production render is mastered through the named `master` preset after production trimming
+* `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
 
 `radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path` and do not override `InjectionKey("cache_dir")`, it also provides a production-scoped VibeVoice cache directory derived from that output path.
 
@@ -183,9 +185,8 @@ Current layout and render contract:
 * `length` is how much a child advances its parent's composition cursor
 * `start` and `end` are in the parent's geometry; `natural_length` is in the node's own natural sample geometry
 * `pre_gap` and `post_gap` are authored inputs that contribute to layout, but composition after layout uses resolved `start`, `end`, and `length`
-* `ProductionPlan.render()` is the only render entry point that may omit `incoming_marks`
-* other audio-plan renders conceptually receive `incoming_marks` in outer geometry
-* each node rebases incoming marks into `audio_marks_inner`, preserving local marks over inherited ones
+* `incoming_marks(...)` is the interface for parent-scope inherited marks
+* each node rebases incoming marks into render-time geometry, preserving local marks over inherited ones
 * each node derives `audio_marks_render` by rebasing `audio_marks_inner` through `inner_first`, so render-time automation sees natural sample geometry where `0 == inner_first`
 * `pan` expressions are evaluated against those render-time locals, coerced to an array-valued expression, clipped to `[-1, 1]`, and then applied as stereo attenuation where the near side stays at full scale and the far side follows a smooth cosine falloff to silence
 * mark bubbling for cutting still lives on `AudioPlan.audio_marks`, the set of surviving unambiguous mark ids visible through the plan tree
@@ -218,7 +219,10 @@ Current expression scopes:
 * loop expressions use three scopes:
   * `loop_beg` and `loop_end` evaluate in the wrapped plan's inner geometry
   * `loop_until` evaluates in the loop plan's own inner geometry
+  * for explicit-start loops, parent-scope marks from automatic siblings may be rebased into that same inner geometry and exposed under `inner_<mark>`
   * render-time controls on the loop plan use the loop plan's render geometry like any other plan
+* `start` is the exception to the usual left-side scope rules because it defines that inner/outer coordinate transform
+  it may therefore use `outer_<mark>` names but not child-local `natural_length` or `inner_*` names
 * unprefixed mark names are not populated specially and therefore fail as ordinary `NameError`s if referenced
 
 Current debug hooks:

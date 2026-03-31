@@ -137,12 +137,12 @@ Supported attributes:
 * `pan="EXPR"`: stereo automation evaluated against render-time mark positions
 * `first_mark="NAME"`: introduces a mark at the node's natural first boundary
 * `last_mark="NAME"`: introduces a mark at the node's natural last boundary
-* `loop_beg="EXPR"` / `loop_end="EXPR"`: wrapped-plan inner-geometry loop boundaries
+* `loop_beg="EXPR"` / `loop_end="EXPR"`: choose the inner-time slice that should repeat
 * `loop_loops="NUMBER"`: repeat count after the first pass through the loop body
-* `loop_until="EXPR"`: loop-plan inner-geometry stop point for repeated looping
+* `loop_until="EXPR"`: keep repeating until this inner-time position is reached
 * `loop_silence="SECONDS"`: silence inserted between loop iterations
 * `loop_outro="BOOL"`: append wrapped audio after `loop_end`
-* `loop_whole="extend|shorten|no"`: whole-cycle adjustment when `loop_until` is used
+* `loop_whole="extend|shorten|no"`: when `loop_until` lands mid-cycle, either extend to the next whole cycle, shorten to the previous whole cycle, or leave the partial cycle in place
 
 Current rules:
 
@@ -152,6 +152,7 @@ Current rules:
 * `length` must be non-negative
 * `pre_gap` and `post_gap` are measured in seconds and may be negative
 * `loop_silence` must be non-negative
+* `start` is special because it defines the mapping from parent time into the node's inner time, so `start` expressions may use `outer_<mark>` names but not child-local `natural_length` or `inner_<mark>` names
 * dialogue lines use `Speaker: text`
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
@@ -160,6 +161,8 @@ Current rules:
 * a script may also contain `<line speaker="...">...</line>` elements in document order
 * `<ignore>` dialogue is included in the speech-model render request and then sliced back out of the final script audio
 * nested preset-bearing audio nodes stay in the same compose scope; the nearest enclosing compose applies one preset bus per preset name before the final mix
+* `loop_until` is usually most useful on an explicit-start node that should keep looping under later automatic dialogue
+* in `loop_until`, use `inner_<mark>` names; when an explicit-start loop is laid out after automatic siblings, later parent-scope marks are rebased into the loop's own inner time under that `inner_` prefix
 
 Example:
 
@@ -170,6 +173,39 @@ Example:
   prosecutor: The state is ready, your honor.
 </script>
 ```
+
+Practical loop example:
+
+```xml
+<production>
+  <speaker-map>
+    narrator: judge2
+  </speaker-map>
+
+  <sound
+    ref="office_roomtone"
+    start="0"
+    loop_beg="0"
+    loop_end="3.2"
+    loop_until="inner_brennan_office"
+    loop_whole="extend"
+    preset="indoor2"
+  />
+
+  <script>
+    narrator: Brennan opened the folder and stopped talking for a moment.
+    <mark id="brennan_office" />
+    narrator: Then he finally looked up.
+  </script>
+</production>
+```
+
+That pattern means:
+
+* start the looping bed immediately
+* keep repeating the `0` to `3.2` second region
+* stop when the later `brennan_office` mark is reached in the parent composition
+* because `loop_until` is written in the loop's inner time, that later parent mark appears as `inner_brennan_office`
 
 ### `<ignore>`
 

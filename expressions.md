@@ -103,6 +103,32 @@ Typical uses:
 * drift a source from left to right with `pan="line(-1, 1)"`
 * pan a cue around an event mark with `pan="line(0, -1, cue, 1)"`
 
+## Looping
+
+`loop_beg`, `loop_end`, and `loop_until` also use the same expression syntax.
+
+The practical case for `loop_until` is usually:
+
+* give the looped node an explicit `start`
+* let later automatic siblings establish marks in the parent composition
+* refer to the stop point as `inner_<mark>` inside `loop_until`
+
+Example:
+
+```xml
+<sound
+  ref="roomtone"
+  start="0"
+  loop_beg="0"
+  loop_end="3.2"
+  loop_until="inner_brennan_office"
+/>
+```
+
+That `inner_brennan_office` name is deliberate. `loop_until` is measured in the
+looped node's own inner time, so later parent-scope marks are rebased into that
+inner coordinate system before the expression is evaluated.
+
 ## Available names
 
 The exact names available depend on where the expression is written.
@@ -124,6 +150,11 @@ Common names for authored expressions include:
 
 For render-time automation, mark names are exposed directly as names in the
 current scope.
+
+`start` is the special case. Because `start` defines how parent time maps into
+the node's own inner geometry, it only sees `outer_<mark>` names from the
+containing scope. It does not see child-local `natural_length` or `inner_*`
+names.
 
 ## Practical notes
 
