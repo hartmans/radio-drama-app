@@ -16,7 +16,7 @@ from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
 from .planning import DialogueLine, ScriptRenderRequest
-from .rendering import RenderResult
+from .rendering import RenderResult, ScriptRenderResult
 from .vibevoice import RegisteredRenderRequest
 
 
@@ -65,7 +65,7 @@ class QwenTtsResource(AsyncInjectable):
         return self._sample_rate
 
     def empty_result(self) -> RenderResult:
-        return RenderResult.empty(channels=self.config.resolved_output_channels)
+        return ScriptRenderResult.empty(channels=self.config.resolved_output_channels)
 
     async def register_request(
         self,
@@ -105,39 +105,51 @@ class QwenTtsResource(AsyncInjectable):
                     return
 
             try:
-                rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
+                rendered_results = await asyncio.to_thread(self._render_batch_sync, batch)
             except Exception as exc:
                 for registration in batch:
                     if not registration.future.done():
                         registration.future.set_exception(exc)
                 continue
 
-            for registration, audio in zip(batch, rendered_audios, strict=True):
+            for registration, result in zip(batch, rendered_results, strict=True):
                 if not registration.future.done():
-                    registration.future.set_result(RenderResult(audio=audio))
+                    registration.future.set_result(result)
 
     def _render_batch_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[np.ndarray]:
+    ) -> list[RenderResult]:
         generated = self._render_batch_native_sync(batch)
-        return [
-            convert_audio_format(
-                audio,
-                input_sample_rate=self.sample_rate,
-                output_sample_rate=self.config.resolved_output_sample_rate,
-                output_channels=self.config.resolved_output_channels,
+        rendered_results: list[RenderResult] = []
+        for generated_result in generated:
+            if isinstance(generated_result, ScriptRenderResult):
+                native_result = generated_result
+            else:
+                native_result = ScriptRenderResult(audio=generated_result)
+            rendered_results.append(
+                ScriptRenderResult(
+                    audio=convert_audio_format(
+                        native_result.audio,
+                        input_sample_rate=self.sample_rate,
+                        output_sample_rate=self.config.resolved_output_sample_rate,
+                        output_channels=self.config.resolved_output_channels,
+                    ),
+                    dialogue_line_start_positions=native_result.dialogue_line_start_positions,
+                )
             )
-            for audio in generated
-        ]
+        return rendered_results
 
     def _render_batch_native_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[np.ndarray]:
+    ) -> list[ScriptRenderResult]:
         parsed_scripts = [self._script_lines(registration.request) for registration in batch]
         if not any(parsed_scripts):
-            return [np.zeros(0, dtype=np.float32) for _ in batch]
+            return [
+                ScriptRenderResult(audio=np.zeros(0, dtype=np.float32), dialogue_line_start_positions=())
+                for _ in batch
+            ]
 
         voice_paths = {
             str(Path(line.speaker.resolved_path).expanduser().resolve())
@@ -159,16 +171,26 @@ class QwenTtsResource(AsyncInjectable):
                 line_targets.append(script_index)
 
         if not line_texts:
-            return [np.zeros(0, dtype=np.float32) for _ in batch]
+            return [
+                ScriptRenderResult(audio=np.zeros(0, dtype=np.float32), dialogue_line_start_positions=())
+                for _ in batch
+            ]
 
         native_lines = self._generate_line_batch_native_sync(line_texts, line_prompts)
         rendered_by_script: list[list[np.ndarray]] = [[] for _ in batch]
+        line_starts_by_script: list[list[float]] = [[] for _ in batch]
+        native_sample_rate = self.sample_rate
         for script_index, audio in zip(line_targets, native_lines, strict=True):
+            script_frames = sum(clip.shape[0] for clip in rendered_by_script[script_index])
+            line_starts_by_script[script_index].append(float(script_frames) / native_sample_rate)
             rendered_by_script[script_index].append(audio)
 
         return [
-            self._concatenate_script_audio(clips)
-            for clips in rendered_by_script
+            ScriptRenderResult(
+                audio=self._concatenate_script_audio(clips),
+                dialogue_line_start_positions=tuple(line_starts),
+            )
+            for clips, line_starts in zip(rendered_by_script, line_starts_by_script, strict=True)
         ]
 
     def _generate_line_batch_native_sync(

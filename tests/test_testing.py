@@ -13,7 +13,7 @@ from radio_drama.forced_alignment import copy_dialogue_contents
 from radio_drama.init import radio_drama_injector
 from radio_drama.planning import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import RenderResult
+from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.sound import SoundPlan
 from radio_drama.testing import CachedQwenTtsResource
 from radio_drama.testing import CachedVibeVoiceResource
@@ -92,6 +92,30 @@ class FakeCachedQwenTtsResource(CachedQwenTtsResource):
             np.full(self.native_frame_count, fill_value=index + 1, dtype=np.float32)
             for index, _ in enumerate(batch)
         ]
+
+
+class FakeCachedQwenTimedTtsResource(CachedQwenTtsResource):
+    def __init__(self, native_frame_count: int = 1200, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.native_frame_count = native_frame_count
+        self.native_call_count = 0
+
+    def _render_batch_native_sync(self, batch):
+        self.native_call_count += 1
+        results: list[ScriptRenderResult] = []
+        for index, registration in enumerate(batch):
+            line_count = len(registration.request.dialogue_lines)
+            if line_count == 0:
+                positions: tuple[float, ...] = ()
+            else:
+                positions = tuple(float(i) * 0.5 for i in range(line_count))
+            results.append(
+                ScriptRenderResult(
+                    audio=np.full(self.native_frame_count, fill_value=index + 1, dtype=np.float32),
+                    dialogue_line_start_positions=positions,
+                )
+            )
+        return results
 
 
 class FakeCachedWhisperXResource(CachedWhisperXResource):
@@ -242,6 +266,52 @@ def test_cached_qwen_resource_skips_when_cache_is_missing(
 
     with pytest.raises(pytest.skip.Exception):
         asyncio.run(runner())
+
+
+def test_cached_qwen_resource_replays_native_timing_metadata(
+    cached_qwen_resource_factory,
+    tmp_path: Path,
+):
+    config = ProductionConfig(output_sample_rate=48000, output_channels=2)
+    request = _request_from_normalized_script(
+        "Speaker 1: Hello there.\nSpeaker 2: General Kenobi.",
+        ("anna.wav", "ben.wav"),
+    )
+    cache_dir = tmp_path / "cache"
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            live_resource = await cached_qwen_resource_factory(
+                ainjector,
+                mode="live",
+                cache_dir=cache_dir,
+                resource_type=FakeCachedQwenTimedTtsResource,
+                native_frame_count=1200,
+            )
+            live_registration = await live_resource.register_request(request)
+            live_result = await live_registration.render()
+
+            cache_resource = await cached_qwen_resource_factory(
+                ainjector,
+                mode="cache",
+                cache_dir=cache_dir,
+                resource_type=FakeCachedQwenTimedTtsResource,
+                native_frame_count=1200,
+            )
+            cache_registration = await cache_resource.register_request(request)
+            cache_result = await cache_registration.render()
+            return live_resource, live_result, cache_resource, cache_result
+        finally:
+            injector.close()
+
+    live_resource, live_result, cache_resource, cache_result = asyncio.run(runner())
+    assert live_resource.native_call_count == 1
+    assert cache_resource.native_call_count == 0
+    assert isinstance(live_result, ScriptRenderResult)
+    assert isinstance(cache_result, ScriptRenderResult)
+    assert live_result.dialogue_line_start_positions == (0.0, 0.5)
+    assert cache_result.dialogue_line_start_positions == (0.0, 0.5)
 
 
 def test_cached_whisperx_resource_replays_cached_metadata(

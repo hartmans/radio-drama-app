@@ -54,7 +54,12 @@ class SpeakerVoiceReference:
 
 @dataclass(slots=True)
 class DialogueContents:
-    """One ordered item inside a script, later addressable by aligned time."""
+    """One ordered item inside a script, later addressable by aligned time.
+
+    ``start_pos`` is measured in seconds in the rendered script timeline.
+    It may remain ``NaN`` until alignment or backend-native script timing data
+    resolves it.
+    """
 
     start_pos: float = field(default=math.nan, kw_only=True)
 

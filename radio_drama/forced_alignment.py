@@ -26,7 +26,7 @@ from .planning import (
     PlanningNode,
     ScriptPlan,
 )
-from .rendering import RenderResult
+from .rendering import RenderResult, ScriptRenderResult
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -456,8 +456,21 @@ class AlignedScriptSource(PlanningNode):
 
     async def render_node(self) -> AlignedScriptResult:
         base_result = await self.script_plan.render()
-        resource = await self.ainjector.get_instance_async(WhisperXResource)
-        self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
+        if (
+            isinstance(base_result, ScriptRenderResult)
+            and base_result.dialogue_line_start_positions is not None
+        ):
+            self.contents = fill_start_positions_from_rendered_script(
+                self.script_plan.contents,
+                base_result.dialogue_line_start_positions,
+                duration_seconds=_audio_duration(
+                    base_result.audio,
+                    self.config.resolved_output_sample_rate,
+                ),
+            )
+        else:
+            resource = await self.ainjector.get_instance_async(WhisperXResource)
+            self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
         for content in self.contents:
             if not isinstance(content, DialogueLine):
                 continue
@@ -585,6 +598,33 @@ def fill_start_positions_from_alignment(
     for index, content in enumerate(copied_contents):
         if isinstance(content, DialogueAudio):
             content.start_pos = _dialogue_audio_start_pos(copied_contents, stabilized_line_spans, index)
+
+    return copied_contents
+
+
+def fill_start_positions_from_rendered_script(
+    contents: Sequence[DialogueContents],
+    dialogue_line_start_positions: Sequence[float],
+    *,
+    duration_seconds: float,
+) -> list[DialogueContents]:
+    copied_contents = copy_dialogue_contents(contents)
+    dialogue_lines = [content for content in copied_contents if isinstance(content, DialogueLine)]
+    if len(dialogue_lines) != len(dialogue_line_start_positions):
+        raise RuntimeError(
+            "Rendered script timing metadata must have one start position per DialogueLine"
+        )
+
+    line_starts = [float(position) for position in dialogue_line_start_positions]
+    line_spans: list[tuple[float, float]] = []
+    for index, line in enumerate(dialogue_lines):
+        line.start_pos = line_starts[index]
+        next_start = duration_seconds if index + 1 >= len(line_starts) else line_starts[index + 1]
+        line_spans.append((line.start_pos, next_start))
+
+    for index, content in enumerate(copied_contents):
+        if isinstance(content, DialogueAudio):
+            content.start_pos = _dialogue_audio_start_pos(copied_contents, line_spans, index)
 
     return copied_contents
 

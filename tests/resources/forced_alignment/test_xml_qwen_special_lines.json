@@ -1,0 +1,62 @@
+{
+  "name": "test_xml_qwen_special_lines",
+  "transcript": "Pan from left to right and we see how it goes.\nPhone call from the right loud and clear.\nThe wife talking on the left with nothing else going on.\nFrom left to right and then another right to left\nBouncing back and forth: it is my favorite after all.",
+  "duration_seconds": 17.463,
+  "whisperx_response": {
+    "decision": "aligned_word_matching",
+    "transcription_segments": [
+      {
+        "avg_logprob": -0.10667067164411911,
+        "end": 17.463,
+        "start": 0.031,
+        "text": " Pan from left to right, and we see how it goes. From left to right, and then another right to left."
+      }
+    ],
+    "aligned_segments": [
+      {
+        "avg_logprob": -0.10667067164411911,
+        "end": 3.257,
+        "start": 0.191,
+        "text": " Pan from left to right, and we see how it goes.",
+        "words": [
+          {"end": 0.612, "score": 0.942, "start": 0.191, "word": "Pan"},
+          {"end": 0.913, "score": 0.83, "start": 0.752, "word": "from"},
+          {"end": 1.193, "score": 0.775, "start": 0.973, "word": "left"},
+          {"end": 1.333, "score": 0.62, "start": 1.233, "word": "to"},
+          {"end": 1.634, "score": 0.755, "start": 1.394, "word": "right,"},
+          {"end": 2.155, "score": 0.931, "start": 2.075, "word": "and"},
+          {"end": 2.295, "score": 0.995, "start": 2.195, "word": "we"},
+          {"end": 2.596, "score": 0.847, "start": 2.355, "word": "see"},
+          {"end": 2.776, "score": 0.942, "start": 2.656, "word": "how"},
+          {"end": 2.896, "score": 0.756, "start": 2.836, "word": "it"},
+          {"end": 3.257, "score": 0.74, "start": 2.936, "word": "goes."}
+        ]
+      },
+      {
+        "avg_logprob": -0.10667067164411911,
+        "end": 5.481,
+        "start": 4.098,
+        "text": "From left to right, and then another right to left.",
+        "words": [
+          {"end": 4.239, "score": 0.56, "start": 4.098, "word": "From"},
+          {"end": 4.359, "score": 0.362, "start": 4.259, "word": "left"},
+          {"end": 4.419, "score": 0.0, "start": 4.379, "word": "to"},
+          {"end": 4.579, "score": 0.0, "start": 4.479, "word": "right,"},
+          {"end": 4.659, "score": 0.0, "start": 4.599, "word": "and"},
+          {"end": 4.78, "score": 0.052, "start": 4.68, "word": "then"},
+          {"end": 4.94, "score": 0.003, "start": 4.8, "word": "another"},
+          {"end": 5.18, "score": 0.738, "start": 5.0, "word": "right"},
+          {"end": 5.241, "score": 0.0, "start": 5.2, "word": "to"},
+          {"end": 5.481, "score": 0.336, "start": 5.261, "word": "left."}
+        ]
+      }
+    ]
+  },
+  "dialogue_lines": [
+    {"speaker": "blinddancer", "spoken_text": "Pan from left to right and we see how it goes.", "expected_start_seconds": 0.191},
+    {"speaker": "goodwing", "spoken_text": "Phone call from the right loud and clear.", "expected_start_seconds": null},
+    {"speaker": "wife", "spoken_text": "The wife talking on the left with nothing else going on.", "expected_start_seconds": null},
+    {"speaker": "blinddancer", "spoken_text": "From left to right and then another right to left", "expected_start_seconds": 4.098},
+    {"speaker": "obsidia", "spoken_text": "Bouncing back and forth: it is my favorite after all.", "expected_start_seconds": null}
+  ]
+}

@@ -14,6 +14,7 @@ from radio_drama.config import ProductionConfig
 from radio_drama.debug import debug_artifact_directory
 from radio_drama.document import parse_production_string
 from radio_drama.forced_alignment import (
+    AlignedScriptSource,
     AlignedClause,
     AlignedWord,
     AlignmentResult,
@@ -22,6 +23,7 @@ from radio_drama.forced_alignment import (
     WhisperXResource,
     _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
+    fill_start_positions_from_rendered_script,
 )
 from radio_drama.init import radio_drama_injector
 from radio_drama.planning import (
@@ -30,7 +32,7 @@ from radio_drama.planning import (
     ScriptRenderRequest,
     SpeakerVoiceReference,
 )
-from radio_drama.rendering import RenderResult
+from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
 
 
@@ -168,6 +170,78 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
     log_text = config.debug_log_path.read_text(encoding="utf-8")
     assert "[forced_alignment] 0.000s 'First line for alignment logging.'" in log_text
     assert "[forced_alignment] 0.500s 'Second line for alignment logging.'" in log_text
+
+
+def test_fill_start_positions_from_rendered_script_uses_native_line_starts():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="First line."),
+        DialogueAudio(audio_plan=object()),
+        DialogueLine(speaker=speaker, spoken_text="Second line."),
+    ]
+
+    filled = fill_start_positions_from_rendered_script(
+        contents,
+        (0.25, 1.0),
+        duration_seconds=2.5,
+    )
+
+    assert filled[0].start_pos == 0.25
+    assert filled[1].start_pos == 1.0
+    assert filled[2].start_pos == 1.0
+
+
+def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=tmp_path / "anna.wav",
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="First line."),
+        DialogueLine(speaker=speaker, spoken_text="Second line."),
+    ]
+
+    class FakeScriptPlan:
+        def __init__(self) -> None:
+            self.contents = contents
+
+        async def render(self) -> ScriptRenderResult:
+            return ScriptRenderResult(
+                audio=np.ones(8, dtype=np.float32),
+                dialogue_line_start_positions=(0.25, 1.0),
+            )
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            raise AssertionError("native script timing should bypass WhisperX")
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            aligned_source = await ainjector(
+                AlignedScriptSource,
+                node=None,
+                script_plan=FakeScriptPlan(),
+            )
+            return await aligned_source.render()
+        finally:
+            injector.close()
+
+    aligned_result = asyncio.run(runner())
+
+    assert aligned_result.marker_frames == (0, 4, 8)
+    assert [content.start_pos for content in aligned_result.contents] == [0.25, 1.0]
 
 
 def test_forced_alignment_uses_exact_clause_boundaries_without_word_alignment():
