@@ -451,6 +451,38 @@ _PRESET_CHAINS: Mapping[str, EffectChain] = {
             ),
         ),
     ),
+    "narrator_nofocus": EffectChain(
+        name="narrator_nofocus",
+        stages=(
+            scipy_signal_stage(
+                "highpass_cleanup",
+                partial(_filter_audio, btype="highpass", cutoff_hz=85.0),
+            ),
+            numpy_stage(
+                "leveling_compressor",
+                partial(
+                    _compress_audio,
+                    threshold_db=-28.0,
+                    ratio=2.8,
+                    attack_ms=5.0,
+                    release_ms=240.0,
+                    makeup_db=2.2,
+                ),
+            ),
+            numpy_stage(
+                "presence_tilt",
+                partial(_tilt_tone, low_band_db=-1.4, high_band_db=1.6),
+            ),
+            numpy_stage(
+                "cognitive_halo",
+                partial(
+                    _early_reflections,
+                    taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
+                    dry_mix=0.96,
+                ),
+            ),
+        ),
+    ),
     "thoughts": EffectChain(
         name="thoughts",
         stages=(
