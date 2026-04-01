@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 import logging
 import math
 import re
@@ -685,15 +686,16 @@ def _line_spans_from_alignment(
     if exact_clause_spans is not None:
         return exact_clause_spans
 
+    normalized_line_tokens = [tuple(_normalized_tokens(line.spoken_text)) for line in dialogue_lines]
     clause_starts = _clause_starts_by_token_offset(alignment.clauses)
     clause_endings = _clause_endings_by_token_offset(alignment.clauses)
     aligned_tokens = _aligned_word_tokens(alignment.words)
+    aligned_token_index = _aligned_token_positions_by_text(aligned_tokens)
     word_search_index = 0
     cumulative_line_tokens = 0
     spans: list[tuple[float | None, float | None]] = []
 
-    for line in dialogue_lines:
-        line_tokens = _normalized_tokens(line.spoken_text)
+    for line_tokens in normalized_line_tokens:
         line_start_offset = cumulative_line_tokens
         cumulative_line_tokens += len(line_tokens)
         start_time: float | None = None
@@ -701,6 +703,7 @@ def _line_spans_from_alignment(
         matched_word_span = _match_line_in_aligned_tokens(
             line_tokens,
             aligned_tokens,
+            aligned_token_index,
             start_index=word_search_index,
         )
         if matched_word_span is not None:
@@ -820,7 +823,7 @@ def _fallback_alignment_result(transcript: str, *, duration_seconds: float) -> A
     clauses: list[AlignedClause] = []
     words: list[AlignedWord] = []
     lines = [line.strip() for line in transcript.splitlines() if line.strip()]
-    line_tokens = [_normalized_tokens(line) or [""] for line in lines]
+    line_tokens = [list(_normalized_tokens(line)) or [""] for line in lines]
     total_tokens = max(sum(len(tokens) for tokens in line_tokens), 1)
     cursor = 0.0
 
@@ -880,6 +883,7 @@ def _line_spans_from_exact_clauses(
 
     clause_index = 0
     spans: list[tuple[float | None, float | None]] = []
+    clause_token_counts = [len(_normalized_tokens(clause.text)) for clause in clauses]
 
     for line_text in line_texts:
         target_token_count = len(_normalized_tokens(line_text))
@@ -889,8 +893,8 @@ def _line_spans_from_exact_clauses(
 
         while accumulated_tokens < target_token_count and clause_index < len(clauses):
             clause = clauses[clause_index]
+            clause_token_count = clause_token_counts[clause_index]
             clause_index += 1
-            clause_token_count = len(_normalized_tokens(clause.text))
             if clause_token_count == 0:
                 continue
             if line_start is None and clause.start is not None:
@@ -903,10 +907,7 @@ def _line_spans_from_exact_clauses(
             return None
         spans.append((line_start, line_end))
 
-    remaining_clause_tokens = sum(
-        len(_normalized_tokens(clause.text))
-        for clause in clauses[clause_index:]
-    )
+    remaining_clause_tokens = sum(clause_token_counts[clause_index:])
     if remaining_clause_tokens != 0:
         return None
     return spans
@@ -925,9 +926,22 @@ def _aligned_word_tokens(
     return aligned_tokens
 
 
+def _aligned_token_positions_by_text(
+    aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+) -> dict[str, tuple[int, ...]]:
+    positions: dict[str, list[int]] = {}
+    for index, (token, _, _) in enumerate(aligned_tokens):
+        positions.setdefault(token, []).append(index)
+    return {
+        token: tuple(token_positions)
+        for token, token_positions in positions.items()
+    }
+
+
 def _match_line_in_aligned_tokens(
     line_tokens: Sequence[str],
     aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+    aligned_token_index: dict[str, tuple[int, ...]],
     *,
     start_index: int,
 ) -> tuple[float | None, float | None, int] | None:
@@ -936,9 +950,54 @@ def _match_line_in_aligned_tokens(
 
     max_length_slop = max(2, len(line_tokens) // 3)
     min_candidate_length = max(1, len(line_tokens) - max_length_slop)
+
+    best_candidate = _best_word_match_candidate(
+        line_tokens,
+        aligned_tokens,
+        candidate_indexes=_candidate_start_indexes(
+            line_tokens,
+            aligned_tokens,
+            aligned_token_index,
+            start_index=start_index,
+        ),
+        min_candidate_length=min_candidate_length,
+        max_length_slop=max_length_slop,
+    )
+    if best_candidate is None:
+        best_candidate = _best_word_match_candidate(
+            line_tokens,
+            aligned_tokens,
+            candidate_indexes=range(start_index, len(aligned_tokens)),
+            min_candidate_length=min_candidate_length,
+            max_length_slop=max_length_slop,
+        )
+
+    if best_candidate is None:
+        return None
+    if best_candidate.normalized_cost > 0.35:
+        return None
+    if best_candidate.exact_match_count == 0:
+        return None
+    if best_candidate.anchor_match_count == 0:
+        return None
+    return (
+        best_candidate.start_time,
+        best_candidate.end_time,
+        best_candidate.next_search_index,
+    )
+
+
+def _best_word_match_candidate(
+    line_tokens: Sequence[str],
+    aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+    *,
+    candidate_indexes: Sequence[int] | range,
+    min_candidate_length: int,
+    max_length_slop: int,
+) -> _WordMatchCandidate | None:
     best_candidate: _WordMatchCandidate | None = None
 
-    for candidate_index in range(start_index, len(aligned_tokens)):
+    for candidate_index in candidate_indexes:
         max_candidate_length = min(
             len(aligned_tokens) - candidate_index,
             len(line_tokens) + max_length_slop,
@@ -958,19 +1017,7 @@ def _match_line_in_aligned_tokens(
             if best_candidate is None or _word_match_candidate_key(candidate) < _word_match_candidate_key(best_candidate):
                 best_candidate = candidate
 
-    if best_candidate is None:
-        return None
-    if best_candidate.normalized_cost > 0.35:
-        return None
-    if best_candidate.exact_match_count == 0:
-        return None
-    if best_candidate.anchor_match_count == 0:
-        return None
-    return (
-        best_candidate.start_time,
-        best_candidate.end_time,
-        best_candidate.next_search_index,
-    )
+    return best_candidate
 
 
 def _word_match_candidate_key(candidate: _WordMatchCandidate) -> tuple[float, int, int, int]:
@@ -991,7 +1038,12 @@ def _word_match_candidate_for_span(
 ) -> _WordMatchCandidate | None:
     span = aligned_tokens[candidate_index: candidate_index + candidate_length]
     span_tokens = [token for token, _, _ in span]
-    aligned_pairs, cost = _align_token_sequences(line_tokens, span_tokens)
+    max_normalized_cost = 0.35
+    aligned_pairs, cost = _align_token_sequences(
+        line_tokens,
+        span_tokens,
+        max_cost=max_normalized_cost * max(len(line_tokens), 1),
+    )
     if not aligned_pairs:
         return None
 
@@ -1035,29 +1087,32 @@ def _word_match_candidate_for_span(
 def _align_token_sequences(
     source_tokens: Sequence[str],
     target_tokens: Sequence[str],
+    *,
+    max_cost: float | None = None,
 ) -> tuple[list[tuple[int, int]], float]:
     substitution_cost = 1.25
     insertion_cost = 1.0
     deletion_cost = 1.0
     rows = len(source_tokens) + 1
     cols = len(target_tokens) + 1
-    costs = [[0.0] * cols for _ in range(rows)]
+    previous_row = [0.0] * cols
+    current_row = [0.0] * cols
     steps: list[list[str | None]] = [[None] * cols for _ in range(rows)]
 
-    for row in range(1, rows):
-        costs[row][0] = row * deletion_cost
-        steps[row][0] = "up"
     for col in range(1, cols):
-        costs[0][col] = col * insertion_cost
+        previous_row[col] = col * insertion_cost
         steps[0][col] = "left"
 
     for row in range(1, rows):
+        current_row[0] = row * deletion_cost
+        steps[row][0] = "up"
+        row_min_cost = current_row[0]
         for col in range(1, cols):
-            diagonal_cost = costs[row - 1][col - 1]
+            diagonal_cost = previous_row[col - 1]
             if source_tokens[row - 1] != target_tokens[col - 1]:
                 diagonal_cost += substitution_cost
-            up_cost = costs[row - 1][col] + deletion_cost
-            left_cost = costs[row][col - 1] + insertion_cost
+            up_cost = previous_row[col] + deletion_cost
+            left_cost = current_row[col - 1] + insertion_cost
             best_cost = diagonal_cost
             best_step = "diag"
             if up_cost < best_cost:
@@ -1066,8 +1121,13 @@ def _align_token_sequences(
             if left_cost < best_cost:
                 best_cost = left_cost
                 best_step = "left"
-            costs[row][col] = best_cost
+            current_row[col] = best_cost
             steps[row][col] = best_step
+            if best_cost < row_min_cost:
+                row_min_cost = best_cost
+        if max_cost is not None and row_min_cost > max_cost:
+            return [], float("inf")
+        previous_row, current_row = current_row, previous_row
 
     aligned_pairs: list[tuple[int, int]] = []
     row = len(source_tokens)
@@ -1087,7 +1147,73 @@ def _align_token_sequences(
             continue
         break
     aligned_pairs.reverse()
-    return aligned_pairs, costs[-1][-1]
+    return aligned_pairs, previous_row[-1]
+
+
+def _candidate_start_indexes(
+    line_tokens: Sequence[str],
+    aligned_tokens: Sequence[tuple[str, float | None, float | None]],
+    aligned_token_index: dict[str, tuple[int, ...]],
+    *,
+    start_index: int,
+) -> list[int]:
+    if start_index >= len(aligned_tokens):
+        return []
+
+    max_length_slop = max(2, len(line_tokens) // 3)
+    candidate_starts: set[int] = {start_index}
+    for line_anchor_index, aligned_positions in _line_anchor_candidates(
+        line_tokens,
+        aligned_token_index,
+        start_index=start_index,
+    ):
+        for aligned_position in aligned_positions:
+            candidate_index = aligned_position - line_anchor_index
+            if candidate_index < start_index or candidate_index >= len(aligned_tokens):
+                continue
+            candidate_starts.add(candidate_index)
+            for delta in range(1, max_length_slop + 1):
+                if candidate_index - delta >= start_index:
+                    candidate_starts.add(candidate_index - delta)
+                if candidate_index + delta < len(aligned_tokens):
+                    candidate_starts.add(candidate_index + delta)
+        if len(candidate_starts) > 1:
+            break
+
+    return sorted(candidate_starts)
+
+
+def _line_anchor_candidates(
+    line_tokens: Sequence[str],
+    aligned_token_index: dict[str, tuple[int, ...]],
+    *,
+    start_index: int,
+) -> list[tuple[int, tuple[int, ...]]]:
+    candidates: list[tuple[int, tuple[int, ...]]] = []
+    seen_indexes: set[int] = set()
+    token_counts: dict[str, int] = {}
+    for token in line_tokens:
+        token_counts[token] = token_counts.get(token, 0) + 1
+
+    for line_index, token in enumerate(line_tokens):
+        if line_index in seen_indexes:
+            continue
+        positions = aligned_token_index.get(token)
+        if not positions:
+            continue
+        filtered_positions = tuple(position for position in positions if position >= start_index)
+        if not filtered_positions:
+            continue
+        candidates.append((line_index, filtered_positions))
+        seen_indexes.add(line_index)
+
+    def anchor_sort_key(item: tuple[int, tuple[int, ...]]) -> tuple[int, int, int]:
+        line_index, positions = item
+        token = line_tokens[line_index]
+        anchor_distance = min(line_index, len(line_tokens) - 1 - line_index)
+        return (len(positions), token_counts[token], anchor_distance)
+
+    return sorted(candidates, key=anchor_sort_key)
 
 
 def _line_begins_with_clause(
@@ -1097,7 +1223,7 @@ def _line_begins_with_clause(
     clause_tokens = _normalized_tokens(clause.text)
     if not clause_tokens or len(clause_tokens) > len(line_tokens):
         return False
-    return list(line_tokens[: len(clause_tokens)]) == clause_tokens
+    return tuple(line_tokens[: len(clause_tokens)]) == clause_tokens
 
 
 def _line_ends_with_clause(
@@ -1107,11 +1233,12 @@ def _line_ends_with_clause(
     clause_tokens = _normalized_tokens(clause.text)
     if not clause_tokens or len(clause_tokens) > len(line_tokens):
         return False
-    return list(line_tokens[-len(clause_tokens) :]) == clause_tokens
+    return tuple(line_tokens[-len(clause_tokens) :]) == clause_tokens
 
 
-def _normalized_tokens(text: str) -> list[str]:
-    return [token.lower() for token in _TOKEN_RE.findall(text)]
+@lru_cache(maxsize=8192)
+def _normalized_tokens(text: str) -> tuple[str, ...]:
+    return tuple(token.lower() for token in _TOKEN_RE.findall(text))
 
 
 def _transcript_lines(transcript: str) -> list[str]:
