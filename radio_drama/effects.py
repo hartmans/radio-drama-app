@@ -641,9 +641,12 @@ class EffectMixer:
         *,
         sample_rate: int,
     ) -> None:
-        for preset_name in preset_key:
-            stage = build_named_effect_chain(preset_name)
-            stage.apply(audio, sample_rate=sample_rate)
+        def apply_preset_stack() -> None:
+            for preset_name in preset_key:
+                stage = build_named_effect_chain(preset_name)
+                stage.apply(audio, sample_rate=sample_rate)
+
+        await asyncio.to_thread(apply_preset_stack)
 
     def _mix_region_into_bus(self, bus: np.ndarray, region: _EffectRegion) -> None:
         if region.audio.shape[0] == 0:
