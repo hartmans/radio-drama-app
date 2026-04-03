@@ -99,7 +99,7 @@ class PresetAudioStore:
     async def _render_preset(self, preset_name: str) -> RenderResult:
         chain = build_named_effect_chain(preset_name)
         rendered = RenderResult(audio=np.array(self.base_result.audio, copy=True))
-        await chain.render(rendered.audio, sample_rate=self.sample_rate)
+        chain.apply(rendered.audio, sample_rate=self.sample_rate)
         return rendered
 
     def _normalize_preset_names(self, preset_names: Sequence[str]) -> tuple[str, ...]:

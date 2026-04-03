@@ -18,7 +18,7 @@ from radio_drama.config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from radio_drama.debug import debug_artifact_directory
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
-from radio_drama.effects import EffectChain, available_effect_chains, build_named_effect_chain
+from radio_drama.effects import EffectPipeline, available_effect_chains, build_named_effect_chain
 from radio_drama.forced_alignment import (
     AlignedScriptSource,
     ScriptSlice,
@@ -115,7 +115,7 @@ def _noop_master_chain(monkeypatch, request):
 
     def fake_build_named_effect_chain(name: str):
         if effects_module.normalize_effect_chain_name(name) == "master":
-            return EffectChain(name="master", stages=())
+            return EffectPipeline(())
         return original(name)
 
     monkeypatch.setattr(effects_module, "build_named_effect_chain", fake_build_named_effect_chain)
@@ -1066,7 +1066,7 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, m
     monkeypatch.setattr(
         effects_module,
         "build_named_effect_chain",
-        lambda name: EffectChain(name=name, stages=()),
+        lambda name: EffectPipeline(()),
     )
 
     async def runner():
@@ -1128,7 +1128,7 @@ def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Pa
     monkeypatch.setattr(
         effects_module,
         "build_named_effect_chain",
-        lambda name: EffectChain(name=name, stages=()),
+        lambda name: EffectPipeline(()),
     )
 
     async def runner():
@@ -1190,7 +1190,7 @@ def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, mo
     monkeypatch.setattr(
         effects_module,
         "build_named_effect_chain",
-        lambda name: EffectChain(name=name, stages=()),
+        lambda name: EffectPipeline(()),
     )
 
     async def runner():
@@ -1252,7 +1252,7 @@ def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path
     monkeypatch.setattr(
         effects_module,
         "build_named_effect_chain",
-        lambda name: EffectChain(name=name, stages=()),
+        lambda name: EffectPipeline(()),
     )
 
     async def runner():
@@ -2727,24 +2727,21 @@ def test_same_preset_children_share_one_compose_bus(tmp_path: Path, monkeypatch)
     call_count = 0
 
     class CountingStage:
-        name = "counting"
-        backend = "test"
-
-        def apply(self, audio: np.ndarray, *, sample_rate: int) -> np.ndarray:
+        def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
             nonlocal call_count
             del sample_rate
             call_count += 1
-            return audio + 1.0
+            audio += 1.0
 
     monkeypatch.setitem(
-        effects_module._PRESET_CHAINS,
+        effects_module._PRESETS,
         "narrator",
-        EffectChain(name="narrator", stages=(CountingStage(),)),
+        EffectPipeline((CountingStage(),)),
     )
     monkeypatch.setitem(
-        effects_module._PRESET_CHAINS,
+        effects_module._PRESETS,
         "master",
-        EffectChain(name="master", stages=()),
+        EffectPipeline(()),
     )
 
     class FakeVibeVoice:
@@ -3018,9 +3015,9 @@ def test_named_effect_chains_include_demo_presets():
         "phone",
         "thoughts",
     )
-    assert build_named_effect_chain("Narrator").name == "narrator"
-    assert build_named_effect_chain("Narrator1").name == "narrator"
-    assert build_named_effect_chain("Narrator2").name == "thoughts"
+    assert build_named_effect_chain("Narrator") is build_named_effect_chain("narrator")
+    assert build_named_effect_chain("Narrator1") is build_named_effect_chain("narrator")
+    assert build_named_effect_chain("Narrator2") is build_named_effect_chain("thoughts")
 
 
 def test_master_effect_chain_preserves_output_format():

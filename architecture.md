@@ -166,7 +166,7 @@ Current rendering contract:
 * `RenderResult.audio` is a contiguous `float32` numpy array
 * current internal render results are already in production format
 * `ProductionResult` is the top-level rendered output type
-* effect processing consumes and returns `RenderResult`, replacing the audio buffer but not carrying separate timing metadata in the result object
+* effect processing mutates the `RenderResult.audio` buffer in place and does not carry separate timing metadata in the result object
 * inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and composing the inserted sounds into the same timeline
 
 Current production behavior is layout-driven timeline composition of rendered script results.
@@ -188,7 +188,7 @@ Current layout and render contract:
 * `incoming_marks(...)` is the interface for parent-scope inherited marks
 * each node rebases incoming marks into render-time geometry, preserving local marks over inherited ones
 * each node derives `audio_marks_render` by rebasing `audio_marks_inner` through `inner_first`, so render-time automation sees natural sample geometry where `0 == inner_first`
-* `pan` expressions are evaluated against those render-time locals, coerced to an array-valued expression, clipped to `[-1, 1]`, and then applied as stereo attenuation where the near side stays at full scale and the far side follows a smooth cosine falloff to silence
+* `pan` expressions are evaluated against those render-time locals, coerced to an array-valued expression, clipped to `[-1, 1]`, and then applied as stereo attenuation where the near side stays at full scale and the far side follows the current linear falloff to silence
 * mark bubbling for cutting still lives on `AudioPlan.audio_marks`, the set of surviving unambiguous mark ids visible through the plan tree
 * the final production result is then passed through the `master` preset
 
@@ -238,9 +238,12 @@ Preset support is intentionally narrow at the interface boundary and flexible in
 
 Current effects contract:
 
-* `EffectChain` is a named ordered sequence of stages
-* each stage receives stereo production-format numpy audio plus the output sample rate
+* `EffectStage` is the stable DSP interface; it mutates one production-format numpy buffer in place when given the output sample rate
+* stage composition uses `|`, and the result is itself an `EffectStage`
+* presets are named `EffectStage` singletons rather than a separate chain wrapper type
+* most reusable stage factories are registered in `radio_drama.effects.effect_stages` so later expression-driven effect evaluation can use them as eval locals
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
+* render-time automation such as `gain` and `pan` is implemented as ordinary effect stages in `radio_drama.effects`
 * preset names are validated while processing audio attrs and are consumed later by `ComposeAudioPlan` render-time bus mixing
 * unknown preset names are document errors attached to the originating audio node
 
@@ -262,7 +265,7 @@ Current backend contract:
 * `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`
 * the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
 * the preview backend also exposes a dry `none` option that returns slices from the unprocessed base render
-* preset preparation runs concurrently and reuses the same `EffectChain` interface as document-driven render-time presets
+* preset preparation runs concurrently and reuses the same `EffectStage` interface as document-driven render-time presets
 * audio slice requests address a prepared preset plus a playback time, and the backend responds with a WAV stream starting at that point in the production
 
 The backend exists to make preset evaluation easier. It should stay narrow and should not grow a second planning or rendering path separate from the main Python interfaces.

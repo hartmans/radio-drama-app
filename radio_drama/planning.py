@@ -20,7 +20,7 @@ from carthage.dependency_injection import (
 from .config import ProductionConfig
 from .debug import write_debug_message
 from .errors import DocumentError
-from .expressions import coerce_array_exp, coerce_real, eval_expression, validate_expression
+from .expressions import coerce_real, eval_expression, validate_expression
 from .rendering import ProductionResult, RenderResult
 from .audio import SUPPORTED_AUDIO_EXTENSIONS
 
@@ -207,38 +207,32 @@ class AudioPlan(PlanningNode):
         raise NotImplementedError
 
     async def post_render(self, result: RenderResult) -> RenderResult:
+        from .effects import gain, pan
+
         updated_result = self._apply_node_render_geometry(result)
         if updated_result.frame_count == 0:
             return updated_result
+        variables = self.render_time_variables()
+        post_stage = None
         if self.gain_expression is not None:
-            gain_expression = eval_expression(
-                self.gain_expression,
-                self.render_time_variables(),
-                coerce_array_exp,
-            )
-            gain_db = gain_expression.to_size(updated_result.frame_count)
-            gain_multiplier = np.float32(10.0) ** (
-                gain_db.astype(np.float32, copy=False) / np.float32(20.0)
-            )
-            if updated_result.audio.ndim == 1:
-                updated_result.audio *= gain_multiplier
-            else:
-                updated_result.audio *= gain_multiplier[:, np.newaxis]
+            post_stage = gain(self.gain_expression, variables=variables)
         if self.pan_expression is None or updated_result.audio.ndim != 2 or updated_result.audio.shape[1] < 2:
+            if post_stage is None:
+                return updated_result
+        else:
+            pan_stage = pan(self.pan_expression, variables=variables)
+            post_stage = pan_stage if post_stage is None else post_stage | pan_stage
+        if post_stage is None:
             return updated_result
-
-        pan_expression = eval_expression(
-            self.pan_expression,
-            self.render_time_variables(),
-            coerce_array_exp,
-        )
-        pan = np.clip(pan_expression.to_size(updated_result.frame_count), -1.0, 1.0)
-        far_channel_gain = (1.0 - np.abs(pan)).astype(np.float32, copy=False)
-        left_gain = np.where(pan <= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
-        right_gain = np.where(pan >= 0.0, 1.0, far_channel_gain).astype(np.float32, copy=False)
-
-        updated_result.audio[:, 0] *= left_gain
-        updated_result.audio[:, 1] *= right_gain
+        try:
+            post_stage.apply(
+                updated_result.audio,
+                sample_rate=self.config.resolved_output_sample_rate,
+            )
+        except Exception as exc:
+            raise self.document_error(
+                f"{self.node.display_name} render-time effect failed: {exc}"
+            ) from exc
         return updated_result
 
     def leaf_audio_plans(self) -> list["AudioPlan"]:
@@ -1805,7 +1799,10 @@ class ProductionPlan(ComposeAudioPlan):
         if trimmed.frame_count == 0:
             return ProductionResult(audio=trimmed.audio)
         master_chain = build_named_effect_chain("master")
-        await master_chain.render(trimmed.audio, sample_rate=self.config.resolved_output_sample_rate)
+        master_chain.apply(
+            trimmed.audio,
+            sample_rate=self.config.resolved_output_sample_rate,
+        )
         return ProductionResult(audio=trimmed.audio)
 
     def _apply_node_render_geometry(self, result: RenderResult) -> RenderResult:
