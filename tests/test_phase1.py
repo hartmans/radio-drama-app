@@ -3010,6 +3010,7 @@ def test_named_effect_chains_include_demo_presets():
         "indoor2",
         "master",
         "narrator",
+        "narrator_nofocus",
         "outdoor1",
         "outdoor2",
         "phone",

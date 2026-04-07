@@ -431,17 +431,9 @@ def pan(
 
     return stage
 
-
-def _master_preset() -> EffectStage:
-    @ffmpeg_filter_stage
-    def stage() -> str:
-        return "loudnorm=I=-16:TP=-1.5:LRA=11"
-
-    return stage
-
-
-def _narrator_preset() -> EffectStage:
-    return (
+_PRESETS: Mapping[str, EffectStage] = {
+    "master": ffmpeg_filter_stage(lambda: "loudnorm=I=-16:TP=-1.5:LRA=11"),
+    "narrator": (
         filter_audio(btype="highpass", cutoff_hz=85.0)
         | compress_audio(
             threshold_db=-28.0,
@@ -456,11 +448,23 @@ def _narrator_preset() -> EffectStage:
             taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
             dry_mix=0.96,
         )
-    )
-
-
-def _thoughts_preset() -> EffectStage:
-    return (
+    ),
+    "narrator_nofocus": (
+        filter_audio(btype="highpass", cutoff_hz=85.0)
+        | compress_audio(
+            threshold_db=-28.0,
+            ratio=2.8,
+            attack_ms=5.0,
+            release_ms=240.0,
+            makeup_db=2.2,
+        )
+        | tilt_tone(low_band_db=-1.4, high_band_db=1.6)
+        | early_reflections(
+            taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
+            dry_mix=0.96,
+        )
+    ),
+    "thoughts": (
         filter_audio(btype="highpass", cutoff_hz=90.0)
         | compress_audio(
             threshold_db=-30.0,
@@ -479,11 +483,8 @@ def _thoughts_preset() -> EffectStage:
             wet_gain=0.08,
             dry_mix=0.96,
         )
-    )
-
-
-def _outdoor1_preset() -> EffectStage:
-    return (
+    ),
+    "outdoor1": (
         filter_audio(btype="highpass", cutoff_hz=100.0)
         | tilt_tone(low_band_db=-0.6, high_band_db=1.0)
         | mid_side_mix(mid_gain=0.98, side_gain=1.18)
@@ -492,11 +493,8 @@ def _outdoor1_preset() -> EffectStage:
             taps=((24.0, 0.04, 0.05), (46.0, 0.03, 0.025)),
             dry_mix=0.99,
         )
-    )
-
-
-def _outdoor2_preset() -> EffectStage:
-    return (
+    ),
+    "outdoor2": (
         filter_audio(btype="highpass", cutoff_hz=115.0)
         | mid_side_mix(mid_gain=0.97, side_gain=1.12)
         | mix_white_noise(relative_db=-24.0)
@@ -509,11 +507,8 @@ def _outdoor2_preset() -> EffectStage:
             dry_mix=0.94,
         )
         | tilt_tone(low_band_db=-0.8, high_band_db=1.2)
-    )
-
-
-def _indoor1_preset() -> EffectStage:
-    return (
+    ),
+    "indoor1": (
         filter_audio(btype="highpass", cutoff_hz=80.0)
         | early_reflections(
             taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)),
@@ -522,11 +517,8 @@ def _indoor1_preset() -> EffectStage:
         | mid_side_mix(mid_gain=1.08, side_gain=0.74)
         | tilt_tone(low_band_db=0.8, high_band_db=-0.6)
         | filter_audio(btype="lowpass", cutoff_hz=8200.0)
-    )
-
-
-def _indoor2_preset() -> EffectStage:
-    return (
+    ),
+    "indoor2": (
         filter_audio(btype="highpass", cutoff_hz=85.0)
         | compress_audio(
             threshold_db=-27.0,
@@ -541,11 +533,8 @@ def _indoor2_preset() -> EffectStage:
         )
         | mid_side_mix(mid_gain=1.1, side_gain=0.66)
         | filter_audio(btype="lowpass", cutoff_hz=6500.0)
-    )
-
-
-def _phone_preset() -> EffectStage:
-    return (
+    ),
+    "phone": (
         filter_audio(btype="highpass", cutoff_hz=320.0)
         | filter_audio(btype="lowpass", cutoff_hz=3200.0)
         | compress_audio(
@@ -556,18 +545,7 @@ def _phone_preset() -> EffectStage:
             makeup_db=3.0,
         )
         | mix_white_noise(relative_db=-34.0)
-    )
-
-
-_PRESETS: Mapping[str, EffectStage] = {
-    "master": _master_preset(),
-    "narrator": _narrator_preset(),
-    "thoughts": _thoughts_preset(),
-    "outdoor1": _outdoor1_preset(),
-    "outdoor2": _outdoor2_preset(),
-    "indoor1": _indoor1_preset(),
-    "indoor2": _indoor2_preset(),
-    "phone": _phone_preset(),
+    ),
 }
 
 _PRESET_ALIASES = {

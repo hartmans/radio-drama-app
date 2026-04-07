@@ -251,6 +251,7 @@ Current built-in presets:
 
 * `master`: the production-level mastering pass, currently just FFmpeg `loudnorm`
 * `narrator`, `thoughts`: inner-monologue or produced narration variants with center-focused stereo, stronger leveling, and abstract ambience
+* `narrator_nofocus`: the `narrator` voicing without the center-focusing mid/side stage, useful when later automation such as `pan` should control image placement
 * `outdoor1`: a lighter open-air variant with extra width and sparse reflections
 * `outdoor2`: a deliberately obvious outdoor diagnostic variant with wider stereo, audible noise bed, and a strong echo tail
 * `indoor1`, `indoor2`: room-bound variants with stronger early reflections and a slightly more centered image
