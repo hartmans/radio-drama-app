@@ -15,7 +15,7 @@ from .audio import convert_audio_format
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
-from .planning import DialogueLine, ScriptRenderRequest
+from .dialogue import DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult, ScriptRenderResult
 from .vibevoice import RegisteredRenderRequest
 

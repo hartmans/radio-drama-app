@@ -25,7 +25,7 @@ from .audio import convert_audio_format
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .model_loading import shared_model_load
-from .planning import DialogueLine, ScriptRenderRequest
+from .dialogue import DialogueLine, ScriptRenderRequest
 from .rendering import RenderResult
 
 

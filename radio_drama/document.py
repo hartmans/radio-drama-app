@@ -245,7 +245,7 @@ class SpeakerMapNode(ElementNode):
     allow_text: ClassVar[bool] = True
 
     async def plan(self, ainjector):
-        from .planning import SpeakerMapPlan
+        from .dialogue import SpeakerMapPlan
 
         return await ainjector(SpeakerMapPlan, node=self)
 
@@ -278,7 +278,7 @@ class ScriptNode(ElementNode):
         return normalized
 
     async def plan(self, ainjector):
-        from .planning import ScriptPlan
+        from .dialogue import ScriptPlan
 
         return await ScriptPlan.from_node(ainjector, self)
 
@@ -335,7 +335,7 @@ class MarkNode(AttributeOrTextValueNode):
         return self.value_from_attribute_or_text
 
     async def plan(self, ainjector):
-        from .planning import MarkPlan
+        from .audio import MarkPlan
 
         return await ainjector(MarkPlan, node=self, id=self.id)
 
@@ -367,7 +367,9 @@ class ProductionNode(ElementNode):
     async def plan(self, ainjector):
         """Plan the production in a child injector with shared production resources."""
         from .init import radio_drama_injector
-        from .planning import PRODUCTION_PLANNING_INJECTOR_KEY, AudioPlan, ProductionPlan
+        from .audio import AudioPlan
+        from .planning import PRODUCTION_PLANNING_INJECTOR_KEY
+        from .production import ProductionPlan
         from .sound import ProductionDocumentPath
 
         production_injector = radio_drama_injector(

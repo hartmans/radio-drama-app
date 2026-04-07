@@ -26,12 +26,7 @@ from radio_drama.forced_alignment import (
     fill_start_positions_from_rendered_script,
 )
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import (
-    DialogueAudio,
-    DialogueLine,
-    ScriptRenderRequest,
-    SpeakerVoiceReference,
-)
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
 

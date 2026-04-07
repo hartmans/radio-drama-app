@@ -10,9 +10,10 @@ from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.config import ProductionConfig
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import DialogueAudio, DialogueLine, SpeakerVoiceReference
+from radio_drama.dialogue import DialogueAudio, DialogueLine, SpeakerVoiceReference
 from radio_drama.rendering import RenderResult
-from radio_drama.sound import SoundPlan
+
+from phase1_helpers import PlaceholderAudioPlan
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +62,7 @@ def _build_fixture_request() -> tuple[list, RenderResult, list[float], int]:
 
     contents = [
         *(DialogueLine(speaker=girl_speaker, spoken_text=str(segment["text"]).strip()) for segment in girl_segments),
-        DialogueAudio(audio_plan=SoundPlan(node=None)),
+        DialogueAudio(audio_plan=PlaceholderAudioPlan()),
         *(DialogueLine(speaker=lawyer_speaker, spoken_text=str(segment["text"]).strip()) for segment in lawyer_segments),
     ]
     expected_starts = [

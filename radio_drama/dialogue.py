@@ -1,0 +1,567 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+import math
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence
+
+import yaml
+from carthage.dependency_injection import ExistingProvider, Injector, inject
+
+from .audio import AudioPlan, ComposeAudioPlan, SUPPORTED_AUDIO_EXTENSIONS
+from .config import ProductionConfig
+from .planning import AudioAttrValue, PRODUCTION_PLANNING_INJECTOR_KEY, PlanningNode
+from .rendering import RenderResult
+
+
+if TYPE_CHECKING:
+    from .document import (
+        DocumentNode,
+        GroupNode,
+        IgnoreNode,
+        LineNode,
+        ScriptNode,
+        SpeakerMapNode,
+        TextNode,
+    )
+
+
+_SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
+
+
+@dataclass(frozen=True, slots=True)
+class SpeakerVoiceReference:
+    """Resolved voice reference for one canonical speaker name."""
+
+    authored_name: str
+    voice_name: str
+    resolved_path: Path
+
+
+@dataclass(slots=True)
+class DialogueContents:
+    """One ordered item inside a script, later addressable by aligned time.
+
+    ``start_pos`` is measured in seconds in the rendered script timeline.
+    It may remain ``NaN`` until alignment or backend-native script timing data
+    resolves it.
+    """
+
+    start_pos: float = field(default=math.nan, kw_only=True)
+
+
+@dataclass(slots=True)
+class DialogueLine(DialogueContents):
+    """Normalized dialogue stanza belonging to one resolved speaker."""
+
+    speaker: SpeakerVoiceReference
+    spoken_text: str
+    handling: Literal["normal", "ignore", "special"] = "normal"
+    node: DocumentNode | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptRenderRequest:
+    """Semantic render request sent to a speech resource."""
+
+    dialogue_lines: list[DialogueLine]
+    first_words: str = ""
+
+
+@dataclass(slots=True)
+class DialogueAudio(DialogueContents):
+    """Inline zero-duration audio insertion point within a script."""
+
+    audio_plan: AudioPlan
+
+
+@inject(config=ProductionConfig)
+class SpeakerMapPlan(PlanningNode):
+    """Validated speaker map with canonical lookup into resolved voice files."""
+
+    def __init__(self, node: SpeakerMapNode, **kwargs) -> None:
+        super().__init__(node=node, **kwargs)
+        self._voices_by_key: dict[str, SpeakerVoiceReference] = {}
+
+    async def async_ready(self):
+        """Parse YAML, validate entries, and resolve voice references."""
+
+        loaded = yaml.safe_load(self.node.normalized_text_content)
+        if not isinstance(loaded, dict):
+            raise self.document_error(
+                "The <speaker-map> YAML must be a mapping of speaker names to voice names"
+            )
+        if not loaded:
+            raise self.document_error("The <speaker-map> did not define any speakers")
+
+        voices_by_key: dict[str, SpeakerVoiceReference] = {}
+        for speaker_name, voice_name in loaded.items():
+            if not isinstance(speaker_name, str) or not isinstance(voice_name, str):
+                raise self.document_error(
+                    "Speaker names and voice names in <speaker-map> must be strings"
+                )
+            normalized_speaker = speaker_name.strip()
+            normalized_voice = voice_name.strip()
+            if not normalized_speaker or not normalized_voice:
+                raise self.document_error(
+                    "Speaker names and voice names in <speaker-map> cannot be empty"
+                )
+            key = normalized_speaker.lower()
+            if key in voices_by_key:
+                raise self.document_error(
+                    f"Speaker {speaker_name!r} is defined more than once in <speaker-map>"
+                )
+            voices_by_key[key] = SpeakerVoiceReference(
+                authored_name=normalized_speaker,
+                voice_name=normalized_voice,
+                resolved_path=self._resolve_voice_path(normalized_speaker, normalized_voice),
+            )
+
+        self._voices_by_key = voices_by_key
+        production_injector = self._production_injector()
+        if production_injector is not None:
+            try:
+                production_injector.add_provider(self)
+            except ExistingProvider as exc:
+                raise self.document_error("A <production> may contain only one <speaker-map>") from exc
+        return await super().async_ready()
+
+    def _production_injector(self) -> Injector | None:
+        provider_injector = self.ainjector.injector.injector_containing(PRODUCTION_PLANNING_INJECTOR_KEY)
+        if provider_injector is None:
+            return None
+        return provider_injector.get_instance(PRODUCTION_PLANNING_INJECTOR_KEY)
+
+    def lookup(self, speaker_name: str) -> SpeakerVoiceReference:
+        return self._voices_by_key[speaker_name.strip().lower()]
+
+    @property
+    def voices_by_key(self) -> Mapping[str, SpeakerVoiceReference]:
+        return self._voices_by_key
+
+    def _resolve_voice_path(self, speaker_name: str, voice_name: str) -> Path:
+        direct_candidates = [
+            Path(voice_name).expanduser(),
+            (self.config.resolved_voice_directory / voice_name).expanduser(),
+        ]
+        for candidate in direct_candidates:
+            if candidate.is_file():
+                return candidate
+
+        voice_catalog = self._load_voice_catalog()
+        candidate_keys = [
+            voice_name,
+            Path(voice_name).name,
+            Path(voice_name).stem,
+            voice_name.lower(),
+            Path(voice_name).name.lower(),
+            Path(voice_name).stem.lower(),
+        ]
+        for candidate in candidate_keys:
+            resolved = voice_catalog.get(candidate)
+            if resolved is not None:
+                return resolved
+
+        available = ", ".join(sorted({path.name for path in voice_catalog.values()}))
+        raise self.document_error(
+            f"Voice {voice_name!r} for speaker {speaker_name!r} was not found in "
+            f"{self.config.resolved_voice_directory}. Available voices: {available}"
+        )
+
+    def _load_voice_catalog(self) -> dict[str, Path]:
+        voice_directory = self.config.resolved_voice_directory
+        if not voice_directory.is_dir():
+            raise self.document_error(f"Voice directory does not exist: {voice_directory}")
+
+        catalog: dict[str, Path] = {}
+        for child in sorted(voice_directory.iterdir()):
+            if not child.is_file() or child.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+                continue
+            catalog.setdefault(child.name, child)
+            catalog.setdefault(child.stem, child)
+            catalog.setdefault(child.name.lower(), child)
+            catalog.setdefault(child.stem.lower(), child)
+
+        if not catalog:
+            raise self.document_error(f"No supported voice files were found in {voice_directory}")
+        return catalog
+
+    async def render_node(self):
+        return None
+
+
+@inject(config=ProductionConfig)
+class ScriptPlan(AudioPlan):
+    """Plan for one script element and its eventual speech render request."""
+
+    def __init__(self, node: ScriptNode, **kwargs) -> None:
+        super().__init__(node=node, **kwargs)
+        self.speaker_map_plan: SpeakerMapPlan | None = None
+        self.contents: list[DialogueContents] = []
+        self.ordered_speakers: list[SpeakerVoiceReference] = []
+        self.render_request: ScriptRenderRequest | None = None
+        self._registered_request = None
+
+    def __repr__(self) -> str:
+        line = self.node.location.line
+        first_words = self._preferred_first_words(self.dialogue_lines)
+        if line is None:
+            if first_words:
+                return f"ScriptPlan(line=unknown, first_words={first_words!r})"
+            return "ScriptPlan(line=unknown)"
+        if first_words:
+            return f"ScriptPlan(line={line}, first_words={first_words!r})"
+        return f"ScriptPlan(line={line})"
+
+    async def async_ready(self):
+        """Normalize dialogue and register the request with the shared resource."""
+
+        self.speaker_map_plan = self._require_speaker_map_plan()
+        self.contents = await self._parse_contents()
+        self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
+        if self.dialogue_lines:
+            first_words = self._preferred_first_words(self.dialogue_lines)
+            self.render_request = ScriptRenderRequest(
+                dialogue_lines=list(self.dialogue_lines),
+                first_words=first_words,
+            )
+        resource = await self.ainjector.get_instance_async(self._tts_resource_type())
+        self._registered_request = await resource.register_request(self.render_request)
+        return await super().async_ready()
+
+    def _tts_resource_type(self):
+        if self.node.tts == "qwen":
+            from .qwen_tts import QwenTtsResource
+
+            return QwenTtsResource
+        from .vibevoice import VibeVoiceResource
+
+        return VibeVoiceResource
+
+    def _require_speaker_map_plan(self) -> SpeakerMapPlan:
+        provider_injector = self.ainjector.injector.injector_containing(SpeakerMapPlan)
+        if provider_injector is None:
+            raise self.document_error(
+                "A <script> requires a <speaker-map> to be planned before it"
+            )
+        return provider_injector.get_instance(SpeakerMapPlan)
+
+    async def render_node(self) -> RenderResult:
+        return await self._registered_request.render()
+
+    async def layout_node(self) -> None:
+        result = await self._registered_request.render()
+        self._raw_inner_last = self._frames_to_seconds(result.frame_count)
+        self._raw_length = self._raw_inner_last
+
+    @property
+    def dialogue_lines(self) -> list[DialogueLine]:
+        return [content for content in self.contents if isinstance(content, DialogueLine)]
+
+    @property
+    def dialogue_audios(self) -> list[DialogueAudio]:
+        return [content for content in self.contents if isinstance(content, DialogueAudio)]
+
+    @classmethod
+    async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
+        node.tts
+        script_plan = await ainjector(
+            cls,
+            node=node,
+            attrs={} if node.element_children else None,
+        )
+        audio_plan: AudioPlan = script_plan
+
+        if script_plan.needs_forced_alignment():
+            audio_plan = await cls._build_aligned_audio_plan(
+                ainjector,
+                node,
+                script_plan,
+                attrs=type(script_plan).attrs_from_node(node),
+            )
+        return audio_plan
+
+    @classmethod
+    async def _build_aligned_audio_plan(
+        cls,
+        ainjector,
+        node: ScriptNode,
+        script_plan: ScriptPlan,
+        *,
+        attrs: Mapping[str, AudioAttrValue],
+    ) -> AudioPlan:
+        from .forced_alignment import AlignedScriptSource, ScriptSlice
+
+        aligned_script_source = await ainjector(
+            AlignedScriptSource,
+            node=node,
+            script_plan=script_plan,
+        )
+        audio_plans: list[AudioPlan] = []
+        content_index = 0
+
+        while content_index < len(script_plan.contents):
+            content = script_plan.contents[content_index]
+            if isinstance(content, DialogueAudio):
+                audio_plans.append(content.audio_plan)
+                content_index += 1
+                continue
+            if content.handling == "special":
+                audio_plans.append(
+                    await ainjector(
+                        ScriptSlice,
+                        node=content.node,
+                        aligned_script_source=aligned_script_source,
+                        start_marker=content_index,
+                        end_marker=content_index + 1,
+                        name=content.spoken_text[:30] or content.speaker.authored_name,
+                    )
+                )
+                content_index += 1
+                continue
+            if content.handling != "normal":
+                content_index += 1
+                continue
+            end_index = script_plan.advance_normal_dialogue_slice_end(content_index)
+            audio_plans.append(
+                await ainjector(
+                    ScriptSlice,
+                    node=node,
+                    attrs={},
+                    aligned_script_source=aligned_script_source,
+                    start_marker=content_index,
+                    end_marker=end_index,
+                    name=cls._script_slice_name(script_plan.contents, content_index),
+                )
+            )
+            content_index = end_index
+
+        if not audio_plans:
+            audio_plans.append(
+                await ainjector(
+                    ScriptSlice,
+                    node=node,
+                    attrs={},
+                    aligned_script_source=aligned_script_source,
+                    start_marker=len(script_plan.contents),
+                    end_marker=len(script_plan.contents),
+                    name="ignored script",
+                )
+            )
+        return await ainjector(
+            ComposeAudioPlan,
+            node=node,
+            audio_plans=audio_plans,
+            attrs=attrs,
+        )
+
+    @staticmethod
+    def _script_slice_name(
+        contents: Sequence[DialogueContents],
+        marker_index: int,
+    ) -> str:
+        if marker_index >= len(contents):
+            return "script end"
+        for content in contents[marker_index:]:
+            if isinstance(content, DialogueLine) and content.handling == "normal":
+                return content.spoken_text[:30]
+            if isinstance(content, DialogueAudio):
+                return repr(content.audio_plan)
+        return "ignored script"
+
+    async def _parse_contents(self) -> list[DialogueContents]:
+        from .document import GroupNode, IgnoreNode, LineNode, TextNode
+        from .forced_alignment import ScriptSlice
+
+        contents: list[DialogueContents] = []
+        pending_text: list[str] = []
+
+        def flush_pending_text() -> None:
+            if not pending_text:
+                return
+            contents.extend(self._parse_dialogue_text("".join(pending_text)))
+            pending_text.clear()
+
+        for child in self.node.children:
+            if isinstance(child, TextNode):
+                pending_text.append(child.text)
+                continue
+            flush_pending_text()
+            if isinstance(child, IgnoreNode):
+                contents.extend(
+                    self._parse_dialogue_text(
+                        child.text_content,
+                        handling="ignore",
+                    )
+                )
+                continue
+            if isinstance(child, GroupNode):
+                contents.extend(
+                    self._parse_dialogue_text(
+                        child.text_content,
+                        handling="special",
+                        node=child,
+                    )
+                )
+                continue
+            if isinstance(child, LineNode):
+                line_attrs = ScriptSlice.attrs_from_node(child)
+                handling: Literal["normal", "special"] = "special" if line_attrs else "normal"
+                contents.append(
+                    DialogueLine(
+                        speaker=self.speaker_map_plan.lookup(child.speaker),
+                        spoken_text=child.normalized_text_content,
+                        handling=handling,
+                        node=child if handling == "special" else None,
+                    )
+                )
+                continue
+            contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
+        flush_pending_text()
+        return contents
+
+    def _parse_dialogue_text(
+        self,
+        text: str,
+        *,
+        handling: Literal["normal", "ignore", "special"] = "normal",
+        node: DocumentNode | None = None,
+    ) -> list[DialogueLine]:
+        """Parse dialogue text into speaker-scoped lines.
+
+        A new ``DialogueLine`` starts only when the parser encounters a
+        non-empty line of the form ``speaker: ...`` and that speaker resolves
+        in the current ``SpeakerMapPlan``. Blank lines end only the current
+        paragraph, not the current ``DialogueLine``; continuation lines are
+        folded into the current speaker's text. The current ``DialogueLine``
+        is therefore finalized only by a new recognized speaker stanza or by
+        reaching the end of this text chunk.
+        """
+
+        text = re.sub(r"^\s*\n", "", text)
+        text = re.sub(r"\n\s*$", "", text)
+        if not text:
+            return []
+
+        lines: list[DialogueLine] = []
+        current_speaker: SpeakerVoiceReference | None = None
+        current_paragraph: list[str] = []
+        current_paragraphs: list[str] = []
+
+        def flush_paragraph() -> None:
+            if current_paragraph:
+                current_paragraphs.append(" ".join(current_paragraph).strip())
+                current_paragraph.clear()
+
+        def flush_stanza() -> None:
+            flush_paragraph()
+            if current_speaker is None:
+                return
+            spoken_text = " ".join(paragraph for paragraph in current_paragraphs if paragraph).strip()
+            current_paragraphs.clear()
+            if spoken_text:
+                lines.append(
+                    DialogueLine(
+                        speaker=current_speaker,
+                        spoken_text=spoken_text,
+                        handling=handling,
+                        node=node,
+                    )
+                )
+
+        for raw_line in text.splitlines():
+            stripped_line = raw_line.strip()
+            if not stripped_line:
+                flush_paragraph()
+                continue
+            match = _SPEAKER_LINE_RE.match(stripped_line)
+            if match is not None:
+                candidate_speaker = match.group(1).strip()
+                try:
+                    speaker_ref = self.speaker_map_plan.lookup(candidate_speaker)
+                except KeyError:
+                    speaker_ref = None
+                if speaker_ref is not None:
+                    flush_stanza()
+                    current_speaker = speaker_ref
+                    current_paragraph.append(match.group(2).strip())
+                    continue
+            if current_speaker is None:
+                raise self.document_error(
+                    "Scripts may begin only with a recognized `speaker:` stanza"
+                )
+            current_paragraph.append(stripped_line)
+
+        flush_stanza()
+        return lines
+
+    def needs_forced_alignment(self) -> bool:
+        return any(
+            isinstance(content, DialogueAudio)
+            or (isinstance(content, DialogueLine) and content.handling != "normal")
+            for content in self.contents
+        )
+
+    def next_non_audio_index(self, start_index: int) -> int:
+        index = start_index
+        while index < len(self.contents) and isinstance(self.contents[index], DialogueAudio):
+            index += 1
+        return index
+
+    def advance_normal_dialogue_slice_end(self, start_index: int) -> int:
+        index = start_index
+        while index < len(self.contents):
+            content = self.contents[index]
+            if isinstance(content, DialogueAudio):
+                break
+            if not isinstance(content, DialogueLine) or content.handling != "normal":
+                break
+            index += 1
+        return index
+
+    def _ordered_unique_speakers(
+        self,
+        dialogue_lines: Sequence[DialogueLine],
+    ) -> list[SpeakerVoiceReference]:
+        seen: set[str] = set()
+        ordered: list[SpeakerVoiceReference] = []
+        for line in dialogue_lines:
+            key = line.speaker.authored_name.lower()
+            if key not in seen:
+                seen.add(key)
+                ordered.append(line.speaker)
+        return ordered
+
+    @staticmethod
+    def _preferred_first_words(
+        dialogue_lines: Sequence[DialogueLine],
+    ) -> str:
+        preferred_line = next(
+            (
+                line
+                for line in dialogue_lines
+                if line.handling == "normal" and line.spoken_text.strip()
+            ),
+            None,
+        )
+        if preferred_line is None:
+            preferred_line = next(
+                (line for line in dialogue_lines if line.spoken_text.strip()),
+                None,
+            )
+        if preferred_line is None:
+            return "empty-script"
+        label = " ".join(preferred_line.spoken_text.split()).strip()
+        return label[:40] or "empty-script"
+
+
+__all__ = [
+    "DialogueAudio",
+    "DialogueContents",
+    "DialogueLine",
+    "ScriptPlan",
+    "ScriptRenderRequest",
+    "SpeakerMapPlan",
+    "SpeakerVoiceReference",
+]

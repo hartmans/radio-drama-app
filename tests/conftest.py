@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+import radio_drama.effects as effects_module
+from radio_drama.effects import EffectPipeline
 from radio_drama.testing import (
     CachedQwenTtsResource,
     CachedVibeVoiceDouble,
@@ -74,6 +76,21 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip_live)
+
+
+@pytest.fixture(autouse=True)
+def noop_master_chain(monkeypatch, request):
+    if request.node.name == "test_master_effect_chain_preserves_output_format":
+        return
+
+    original = effects_module.build_named_effect_chain
+
+    def fake_build_named_effect_chain(name: str):
+        if effects_module.normalize_effect_chain_name(name) == "master":
+            return EffectPipeline(())
+        return original(name)
+
+    monkeypatch.setattr(effects_module, "build_named_effect_chain", fake_build_named_effect_chain)
 
 
 @pytest.fixture

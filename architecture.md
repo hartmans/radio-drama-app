@@ -59,6 +59,13 @@ Current planning contract:
 * every plan has a `render()` path, even if rendering is a no-op
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
+* `radio_drama.planning` now holds the shared planning substrate:
+  * `PlanningNode`
+  * typed audio-attribute aliases such as `AudioAttrs`
+  * the production-planning injector key used to publish production-scoped plans while planning is still in progress
+* `radio_drama.audio` now holds reusable audio-plan primitives and audio-format helpers
+* `radio_drama.dialogue` now holds speaker-map resolution, normalized dialogue data types, and script planning
+* `radio_drama.production` now holds the top-level production compose plan
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * `AudioPlan` also owns layout state and exposes a memoized `layout()` pass before render-time mixing or DSP
 * document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
@@ -84,21 +91,21 @@ Current planning contract:
 
 Current plan types:
 
-* `SpeakerMapPlan`: validates and resolves speaker names to voice references
+* `SpeakerMapPlan` in `radio_drama.dialogue`: validates and resolves speaker names to voice references
   once ready, it registers itself in the production injector so later scripts can find it
-* `ScriptPlan`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
+* `ScriptPlan` in `radio_drama.dialogue`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
   `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
   `DialogueLine` holds spoken text plus a handling mode such as `normal`, `ignore`, or `special`
   `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
   `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
-* `SoundPlan`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
-* `MarkPlan`: renders zero frames of silence and introduces one named audio mark into plan composition
+* `SoundPlan` in `radio_drama.sound`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
+* `MarkPlan` in `radio_drama.audio`: renders zero frames of silence and introduces one named audio mark into plan composition
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and content-boundary marker frames used by script-local slicing
-* `ScriptSlice`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
-* `SlicePlan`: renders a time slice of an already-rendered `RenderResult`
-* `ComposeAudioPlan`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, renders child audio into compose-local preset buses, applies each preset bus once, and then sums the buses into one shared timeline
-* `LoopPlan`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, may rebase parent-scope incoming marks into that same inner geometry for explicit-start loops, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
-* `ProductionPlan`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes and then applying the special `master` preset to the final trimmed production audio
+* `ScriptSlice` in `radio_drama.forced_alignment`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
+* `SlicePlan` in `radio_drama.audio`: renders a time slice of an already-rendered `RenderResult`
+* `ComposeAudioPlan` in `radio_drama.audio`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, renders child audio into compose-local preset buses, applies each preset bus once, and then sums the buses into one shared timeline
+* `LoopPlan` in `radio_drama.audio`: wraps another `AudioPlan`, evaluates `loop_beg` and `loop_end` in the wrapped plan's inner geometry, evaluates `loop_until` in the loop plan's own inner geometry, may rebase parent-scope incoming marks into that same inner geometry for explicit-start loops, repeats the chosen interval with optional inter-loop silence and optional outro rendering, and suppresses wrapped marks from the repeated region while preserving pre-loop and boundary marks
+* `ProductionPlan` in `radio_drama.production`: the top-level `ComposeAudioPlan`, preserving child order across all production-level audio nodes and then applying the special `master` preset to the final trimmed production audio
 
 Current mark/cut contract:
 

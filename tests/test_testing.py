@@ -9,15 +9,18 @@ import pytest
 from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.config import ProductionConfig
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.forced_alignment import copy_dialogue_contents
 from radio_drama.init import radio_drama_injector
-from radio_drama.planning import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import RenderResult, ScriptRenderResult
-from radio_drama.sound import SoundPlan
 from radio_drama.testing import CachedQwenTtsResource
 from radio_drama.testing import CachedVibeVoiceResource
 from radio_drama.testing import CachedWhisperXResource
+
+from phase1_helpers import PlaceholderAudioPlan
+from phase1_helpers import make_async_injector as shared_make_async_injector
+from phase1_helpers import request_from_normalized_script
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,11 +29,7 @@ _TEST_SPEAKER_LINE_RE = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.*)$")
 
 
 async def _make_async_injector(config: ProductionConfig) -> tuple:
-    injector = radio_drama_injector(
-        config=config,
-        event_loop=asyncio.get_running_loop(),
-    )
-    return injector, injector(AsyncInjector)
+    return await shared_make_async_injector(config)
 
 
 def _request_from_normalized_script(
@@ -39,31 +38,11 @@ def _request_from_normalized_script(
     *,
     first_words: str = "",
 ) -> ScriptRenderRequest:
-    speaker_refs: dict[int, SpeakerVoiceReference] = {}
-    dialogue_lines: list[DialogueLine] = []
-    for raw_line in normalized_script.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        match = _TEST_SPEAKER_LINE_RE.match(line)
-        assert match is not None, line
-        speaker_number = int(match.group(1))
-        voice_sample = voice_samples[speaker_number - 1]
-        speaker_refs.setdefault(
-            speaker_number,
-            SpeakerVoiceReference(
-                authored_name=f"Speaker {speaker_number}",
-                voice_name=Path(voice_sample).name,
-                resolved_path=Path(voice_sample),
-            ),
-        )
-        dialogue_lines.append(
-            DialogueLine(
-                speaker=speaker_refs[speaker_number],
-                spoken_text=match.group(2).strip(),
-            )
-        )
-    return ScriptRenderRequest(dialogue_lines=dialogue_lines, first_words=first_words)
+    return request_from_normalized_script(
+        normalized_script,
+        voice_samples,
+        first_words=first_words,
+    )
 
 
 class FakeCachedVibeVoiceResource(CachedVibeVoiceResource):
@@ -326,7 +305,7 @@ def test_cached_whisperx_resource_replays_cached_metadata(
     )
     contents = [
         DialogueLine(speaker=speaker, spoken_text="Hello there."),
-        DialogueAudio(audio_plan=SoundPlan(node=None)),
+        DialogueAudio(audio_plan=PlaceholderAudioPlan()),
         DialogueLine(speaker=speaker, spoken_text="General Kenobi."),
     ]
     result = RenderResult(audio=np.zeros((128, 2), dtype=np.float32))

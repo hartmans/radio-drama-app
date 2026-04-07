@@ -14,7 +14,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import SUPPORTED_AUDIO_EXTENSIONS, normalize_audio_array
 from .config import ProductionConfig
 from .document import AttributeOrTextValueNode, AudioPlanContext, ElementContext
-from .planning import AudioPlan
+from .audio import AudioPlan
 from .rendering import RenderResult
 
 

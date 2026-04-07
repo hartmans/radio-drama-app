@@ -10,8 +10,8 @@ from typing import Callable, Sequence
 import numpy as np
 
 from .audio import convert_audio_format
+from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
 from .forced_alignment import WhisperXResource, copy_dialogue_contents
-from .planning import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
 from .qwen_tts import QwenTtsResource
 from .rendering import RenderResult, ScriptRenderResult
 from .vibevoice import RegisteredRenderRequest, VibeVoiceResource
