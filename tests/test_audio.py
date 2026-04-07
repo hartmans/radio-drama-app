@@ -206,6 +206,182 @@ def test_sound_plan_rejects_to_before_from(tmp_path: Path):
         asyncio.run(runner())
 
 
+def test_sound_plan_prefers_shallowest_relative_match(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    exact_match = tmp_path / "sounds" / "foley" / "door.wav"
+    deeper_match = tmp_path / "sounds" / "archive" / "foley" / "door.wav"
+    exact_match.parent.mkdir(parents=True, exist_ok=True)
+    deeper_match.parent.mkdir(parents=True, exist_ok=True)
+    exact_match.write_bytes(b"exact")
+    deeper_match.write_bytes(b"deeper")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.full(2, float(len(sound_path.parts)), dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Open it.
+                    <sound ref="foley/door" />
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            sound_plan = await root.script_nodes[0].child_elements_named("sound")[0].plan(ainjector)
+            await sound_plan.render()
+            return sound_plan.resolved_path
+        finally:
+            injector.close()
+
+    resolved_path = asyncio.run(runner())
+    assert resolved_path == exact_match
+
+
+def test_sound_plan_rejects_ambiguous_relative_matches(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    left_match = tmp_path / "sounds" / "left" / "door.wav"
+    right_match = tmp_path / "sounds" / "right" / "door.wav"
+    left_match.parent.mkdir(parents=True, exist_ok=True)
+    right_match.parent.mkdir(parents=True, exist_ok=True)
+    left_match.write_bytes(b"left")
+    right_match.write_bytes(b"right")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            return asyncio.create_task(asyncio.sleep(0, result=np.zeros(1, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Open it.
+                    <sound ref="door" />
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            await root.script_nodes[0].child_elements_named("sound")[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="matched multiple files"):
+        asyncio.run(runner())
+
+
+def test_sound_plan_follows_symlinked_sound_directories(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    external_bank = tmp_path / "external-bank"
+    external_file = external_bank / "chime.wav"
+    external_file.parent.mkdir(parents=True, exist_ok=True)
+    external_file.write_bytes(b"chime")
+    (tmp_path / "sounds").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "sounds" / "library").symlink_to(external_bank, target_is_directory=True)
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            return asyncio.create_task(asyncio.sleep(0, result=np.ones(1, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Listen.
+                    <sound ref="library/chime" />
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            sound_plan = await root.script_nodes[0].child_elements_named("sound")[0].plan(ainjector)
+            await sound_plan.render()
+            return sound_plan.resolved_path
+        finally:
+            injector.close()
+
+    resolved_path = asyncio.run(runner())
+    assert resolved_path.resolve() == external_file.resolve()
+
+
+def test_sound_plan_prefers_configured_sounds_directory(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    configured_sounds = tmp_path / "example_sounds"
+    configured_file = configured_sounds / "court" / "gavel.wav"
+    configured_file.parent.mkdir(parents=True, exist_ok=True)
+    configured_file.write_bytes(b"gavel")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        sounds_directory=configured_sounds,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == configured_file
+            return asyncio.create_task(asyncio.sleep(0, result=np.ones(1, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    Anna: Order.
+                    <sound ref="court/gavel" />
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            sound_plan = await root.script_nodes[0].child_elements_named("sound")[0].plan(ainjector)
+            await sound_plan.render()
+            return sound_plan.resolved_path
+        finally:
+            injector.close()
+
+    resolved_path = asyncio.run(runner())
+    assert resolved_path == configured_file
+
+
 def test_mark_plan_emits_zero_length_audio_and_one_mark(tmp_path: Path):
     config = ProductionConfig(output_sample_rate=4, output_channels=1)
 
