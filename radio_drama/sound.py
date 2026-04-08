@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import soundfile as sf
 from carthage.dependency_injection import AsyncInjectable, inject
@@ -121,18 +121,8 @@ class SoundPlan(AudioPlan):
     @classmethod
     def attrs_from_node(cls, node) -> dict[str, float | str | bool]:
         attrs = super().attrs_from_node(node)
-        trim_from = cls._timing_attribute_seconds(
-            node,
-            "from",
-            allow_negative=False,
-            allow_missing=True,
-        )
-        trim_to = cls._timing_attribute_seconds(
-            node,
-            "to",
-            allow_negative=False,
-            allow_missing=True,
-        )
+        trim_from = cls._expression_attribute(node, "from")
+        trim_to = cls._expression_attribute(node, "to")
         if trim_from is not None:
             attrs["from"] = trim_from
         if trim_to is not None:
@@ -145,6 +135,8 @@ class SoundPlan(AudioPlan):
         sound_cache: NormalizedSoundCache | None = None,
         **kwargs,
     ) -> None:
+        self.file_from_expression: str | None = None
+        self.file_to_expression: str | None = None
         self.file_from = 0.0
         self.file_to: float | None = None
         super().__init__(node=node, **kwargs)
@@ -158,12 +150,11 @@ class SoundPlan(AudioPlan):
 
     def process_attrs(self, attrs) -> None:
         super().process_attrs(attrs)
-        self.file_from = float(attrs.get("from", 0.0))
-        self.file_to = float(attrs["to"]) if "to" in attrs else None
-        if self.file_to is not None and self.file_to < self.file_from:
-            raise self.document_error(
-                f"{self.node.display_name} to must be greater than or equal to from"
-            )
+        self.file_from_expression = cast(str | None, attrs.get("from"))
+        self.file_to_expression = cast(str | None, attrs.get("to"))
+        self.file_from = self._constant_trim_value(self.file_from_expression, default=0.0)
+        self.file_to = self._constant_trim_value(self.file_to_expression, default=None)
+        self._validate_resolved_trim_bounds(self.file_from, self.file_to)
 
     async def async_ready(self):
         if self.resolved_path is None:
@@ -173,6 +164,7 @@ class SoundPlan(AudioPlan):
     async def layout_node(self) -> None:
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
+        self._resolve_trim_expressions(total_frames=audio.shape[0])
         trimmed_audio = self._trimmed_audio(audio)
         self._raw_inner_last = self._frames_to_seconds(trimmed_audio.shape[0])
         self._raw_length = self._raw_inner_last
@@ -251,6 +243,69 @@ class SoundPlan(AudioPlan):
         else:
             end_frame = min(max(0, self._seconds_to_frames(self.file_to)), total_frames)
         return start_frame, max(start_frame, end_frame)
+
+    def _resolve_trim_expressions(self, *, total_frames: int) -> None:
+        variables = self._trim_variables(total_frames=total_frames)
+        resolved_from = (
+            0.0
+            if self.file_from_expression is None
+            else self.evaluate_expression(
+                self.file_from_expression,
+                variables,
+                attribute_name="from",
+            )
+        )
+        resolved_to = (
+            None
+            if self.file_to_expression is None
+            else self.evaluate_expression(
+                self.file_to_expression,
+                variables,
+                attribute_name="to",
+            )
+        )
+        self._validate_resolved_trim_bounds(resolved_from, resolved_to)
+        self.file_from = resolved_from
+        self.file_to = resolved_to
+
+    def _trim_variables(self, *, total_frames: int) -> dict[str, float]:
+        variables = {
+            "natural_length": self._frames_to_seconds(total_frames),
+        }
+        for mark_id, position in self._incoming_marks_inner.items():
+            variables[f"inner_{mark_id}"] = position
+        return variables
+
+    def _constant_trim_value(
+        self,
+        expression: str | None,
+        *,
+        default: float | None,
+    ) -> float | None:
+        if expression is None:
+            return default
+        try:
+            return float(expression)
+        except ValueError:
+            return default
+
+    def _validate_resolved_trim_bounds(
+        self,
+        resolved_from: float,
+        resolved_to: float | None,
+    ) -> None:
+        if resolved_from < 0:
+            raise self.document_error(
+                f"{self.node.display_name} from must be non-negative seconds"
+            )
+        if resolved_to is not None and resolved_to < 0:
+            raise self.document_error(
+                f"{self.node.display_name} to must be non-negative seconds"
+            )
+        if resolved_to is not None and resolved_to < resolved_from:
+            raise self.document_error(
+                f"{self.node.display_name} to must be greater than or equal to from"
+            )
 
 
 def _iter_sound_files(sounds_root: Path):

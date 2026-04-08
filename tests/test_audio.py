@@ -206,6 +206,55 @@ def test_sound_plan_rejects_to_before_from(tmp_path: Path):
         asyncio.run(runner())
 
 
+def test_explicit_start_sound_trim_can_use_rebased_inner_marks(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    leadin_file = tmp_path / "sounds" / "leadin.wav"
+    door_file = tmp_path / "sounds" / "door.wav"
+    leadin_file.parent.mkdir(parents=True, exist_ok=True)
+    leadin_file.write_bytes(b"leadin")
+    door_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            if sound_path == leadin_file:
+                return asyncio.create_task(
+                    asyncio.sleep(0, result=np.array([1.0, 2.0], dtype=np.float32))
+                )
+            assert sound_path == door_file
+            return asyncio.create_task(
+                asyncio.sleep(0, result=np.array([10.0, 11.0, 12.0, 13.0, 14.0, 15.0], dtype=np.float32))
+            )
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="leadin" last_mark="cut" />
+                  <sound ref="door" start="0" from="inner_cut" to="inner_cut + 0.5" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            compose_plan = await root.plan(ainjector)
+            target_sound_plan = compose_plan.audio_plans[1]
+            await compose_plan.layout()
+            return target_sound_plan, await target_sound_plan.render()
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    assert isinstance(plan, SoundPlan)
+    assert plan.file_from == pytest.approx(0.5)
+    assert plan.file_to == pytest.approx(1.0)
+    assert plan.natural_length == pytest.approx(0.5)
+    np.testing.assert_array_equal(result.audio, np.array([12.0, 13.0], dtype=np.float32))
+
+
 def test_sound_plan_prefers_shallowest_relative_match(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
