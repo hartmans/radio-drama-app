@@ -97,12 +97,7 @@ class CachedVibeVoiceDouble:
         )
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
-        payload = json.dumps(
-            _serialize_render_request(request),
-            sort_keys=True,
-            ensure_ascii=True,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return request.cache_hash()
 
 
 class CachedVibeVoiceResource(VibeVoiceResource):
@@ -242,12 +237,7 @@ class CachedVibeVoiceResource(VibeVoiceResource):
         )
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
-        payload = json.dumps(
-            _serialize_render_request(request),
-            sort_keys=True,
-            ensure_ascii=True,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return request.cache_hash()
 
 
 class CachedQwenTtsResource(QwenTtsResource):
@@ -382,12 +372,7 @@ class CachedQwenTtsResource(QwenTtsResource):
         )
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
-        payload = json.dumps(
-            _serialize_render_request(request),
-            sort_keys=True,
-            ensure_ascii=True,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return request.cache_hash()
 
 
 class CachedWhisperXResource(WhisperXResource):
@@ -514,16 +499,4 @@ def _serialize_dialogue_content(content: DialogueContents) -> dict[str, object]:
 
 
 def _serialize_render_request(request: ScriptRenderRequest) -> dict[str, object]:
-    return {
-        "dialogue_lines": [
-            {
-                "speaker": line.speaker.authored_name,
-                "voice_name": line.speaker.voice_name,
-                "voice_path": str(line.speaker.resolved_path),
-                "spoken_text": line.spoken_text,
-                "handling": line.handling,
-            }
-            for line in request.dialogue_lines
-        ],
-        "first_words": request.first_words,
-    }
+    return request.serialize_cache_request()

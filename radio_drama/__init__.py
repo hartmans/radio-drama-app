@@ -8,6 +8,7 @@ from .audio import (
     convert_channel_count,
     resample_audio,
 )
+from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
 from .config import ProductionConfig
 from .dialogue import (
     DialogueAudio,
@@ -76,6 +77,10 @@ __all__ = [
     "AudioPlan",
     "available_effect_chains",
     "build_named_effect_chain",
+    "CacheCollection",
+    "CacheKey",
+    "CacheManager",
+    "CachableResource",
     "ComposeAudioPlan",
     "DialogueAudio",
     "DialogueContents",

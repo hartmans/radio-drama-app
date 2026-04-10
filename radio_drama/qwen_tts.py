@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import weakref
 from pathlib import Path
@@ -8,10 +9,12 @@ from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
+import soundfile as sf
 import torch
 from carthage.dependency_injection import AsyncInjectable, inject
 
 from .audio import convert_audio_format
+from .cache import CacheCollection, CacheKey, CacheManager
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
@@ -39,13 +42,23 @@ class _PendingRender:
         return self.registration_ref()
 
 
-@inject(config=ProductionConfig, whisperx_resource=WhisperXResource)
+@inject(
+    config=ProductionConfig,
+    whisperx_resource=WhisperXResource,
+    cache_manager=CacheManager,
+)
 class QwenTtsResource(AsyncInjectable):
     """Shared Qwen voice-clone resource for script-level render requests."""
 
-    def __init__(self, whisperx_resource: WhisperXResource, **kwargs) -> None:
+    def __init__(
+        self,
+        whisperx_resource: WhisperXResource,
+        cache_manager: CacheManager | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self.whisperx_resource = whisperx_resource
+        self.cache_manager = cache_manager
         self.device = self._normalize_device(self.config.resolved_device)
         self._model: Qwen3TTSModel | None = None
         self._sample_rate: int | None = None
@@ -120,18 +133,14 @@ class QwenTtsResource(AsyncInjectable):
         self,
         batch: Sequence[RegisteredRenderRequest],
     ) -> list[RenderResult]:
-        generated = self._render_batch_native_sync(batch)
+        generated = self._render_batch_with_cache_sync(batch)
         rendered_results: list[RenderResult] = []
-        for generated_result in generated:
-            if isinstance(generated_result, ScriptRenderResult):
-                native_result = generated_result
-            else:
-                native_result = ScriptRenderResult(audio=generated_result)
+        for native_result, sample_rate in generated:
             rendered_results.append(
                 ScriptRenderResult(
                     audio=convert_audio_format(
                         native_result.audio,
-                        input_sample_rate=self.sample_rate,
+                        input_sample_rate=sample_rate,
                         output_sample_rate=self.config.resolved_output_sample_rate,
                         output_channels=self.config.resolved_output_channels,
                     ),
@@ -139,6 +148,55 @@ class QwenTtsResource(AsyncInjectable):
                 )
             )
         return rendered_results
+
+    def _render_batch_with_cache_sync(
+        self,
+        batch: Sequence[RegisteredRenderRequest],
+    ) -> list[tuple[ScriptRenderResult, int]]:
+        cache_collection = None if self.cache_manager is None else self.cache_manager["qwentts"]
+        if cache_collection is None or not cache_collection.enabled:
+            return [
+                (result, self.sample_rate)
+                for result in self._render_batch_native_sync(batch)
+            ]
+
+        cached_outputs: dict[int, tuple[ScriptRenderResult, int]] = {}
+        uncached_batch: list[tuple[int, RegisteredRenderRequest]] = []
+
+        for index, registration in enumerate(batch):
+            hit = cache_collection.find(
+                registration.request,
+                validate=lambda hit, request=registration.request: (
+                    self._validate_cached_native_result(request, hit)
+                ),
+            )
+            if hit is not None:
+                cached_outputs[index] = self._load_cached_native_result(hit)
+                continue
+            uncached_batch.append((index, registration))
+
+        if uncached_batch:
+            rendered = self._render_batch_native_sync(
+                [registration for _, registration in uncached_batch]
+            )
+            for (index, registration), result in zip(uncached_batch, rendered, strict=True):
+                hit = cache_collection.get_or_create(
+                    registration.request,
+                    lambda key, collection, request=registration.request, cached_result=result: (
+                        self._store_cached_native_result(
+                            key,
+                            collection,
+                            request,
+                            cached_result,
+                        )
+                    ),
+                    validate=lambda hit, request=registration.request: (
+                        self._validate_cached_native_result(request, hit)
+                    ),
+                )
+                cached_outputs[index] = self._load_cached_native_result(hit)
+
+        return [cached_outputs[index] for index in range(len(batch))]
 
     def _render_batch_native_sync(
         self,
@@ -192,6 +250,62 @@ class QwenTtsResource(AsyncInjectable):
             )
             for clips, line_starts in zip(rendered_by_script, line_starts_by_script, strict=True)
         ]
+
+    def _validate_cached_native_result(
+        self,
+        request: ScriptRenderRequest,
+        hit: dict[str, Path],
+    ) -> bool:
+        if not request.validate_cache_hit(hit):
+            return False
+        try:
+            payload = json.loads(hit["json"].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        positions = payload.get("dialogue_line_start_positions")
+        if positions is None:
+            return False
+        return len(positions) == len(self._script_lines(request))
+
+    def _load_cached_native_result(
+        self,
+        hit: dict[str, Path],
+    ) -> tuple[ScriptRenderResult, int]:
+        payload = json.loads(hit["json"].read_text(encoding="utf-8"))
+        audio, sample_rate = sf.read(hit["wav"], dtype="float32", always_2d=False)
+        positions = tuple(float(position) for position in payload["dialogue_line_start_positions"])
+        return (
+            ScriptRenderResult(
+                audio=self._normalize_audio_array(audio),
+                dialogue_line_start_positions=positions,
+            ),
+            int(sample_rate),
+        )
+
+    def _store_cached_native_result(
+        self,
+        key: CacheKey,
+        collection: CacheCollection,
+        request: ScriptRenderRequest,
+        result: ScriptRenderResult,
+    ) -> None:
+        wav_path = collection.path_for_subtype(key, "wav")
+        json_path = collection.path_for_subtype(key, "json")
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(wav_path, result.audio, self.sample_rate)
+        json_path.write_text(
+            json.dumps(
+                request.build_cache_payload(
+                    frame_count=int(result.audio.shape[0]),
+                    sample_rate=self.sample_rate,
+                    dialogue_line_start_positions=tuple(result.dialogue_line_start_positions),
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def _generate_line_batch_native_sync(
         self,

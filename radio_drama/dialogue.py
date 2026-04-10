@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 import math
@@ -63,10 +65,69 @@ class DialogueLine(DialogueContents):
 
 @dataclass(frozen=True, slots=True)
 class ScriptRenderRequest:
-    """Semantic render request sent to a speech resource."""
+    """Semantic render request sent to a speech resource.
+
+    The request is also the stable cache identity for script-level speech
+    output. It owns the semantic serialization that both speech backends use
+    when deriving cache filenames and adjacent JSON metadata.
+    """
 
     dialogue_lines: list[DialogueLine]
     first_words: str = ""
+
+    def cache_first_words(self) -> str:
+        """Return the human-authored cache label prior to filename sanitization."""
+
+        label = " ".join(self.first_words.split()).strip()
+        if not label:
+            label = self._fallback_cache_label()
+        return label[:40] or "empty-script"
+
+    def cache_hash(self) -> str:
+        """Return the stable semantic hash used for cache filenames."""
+
+        payload = json.dumps(
+            self.serialize_cache_request(),
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def validate_cache_hit(self, hit: Mapping[str, Path]) -> bool:
+        """Require the common render cache artifacts for one script request."""
+
+        return {"json", "wav"}.issubset(hit)
+
+    def serialize_cache_request(self) -> dict[str, object]:
+        """Return the stable request payload shared by both speech backends."""
+
+        return {
+            "dialogue_lines": [
+                {
+                    "speaker": line.speaker.authored_name,
+                    "voice_name": line.speaker.voice_name,
+                    "voice_path": str(line.speaker.resolved_path),
+                    "spoken_text": line.spoken_text,
+                    "handling": line.handling,
+                }
+                for line in self.dialogue_lines
+            ],
+            "first_words": self.first_words,
+        }
+
+    def build_cache_payload(self, **metadata: object) -> dict[str, object]:
+        """Return the adjacent JSON payload for one cached render result."""
+
+        payload = self.serialize_cache_request()
+        payload.update(metadata)
+        return payload
+
+    def _fallback_cache_label(self) -> str:
+        for line in self.dialogue_lines:
+            stripped_line = " ".join(line.spoken_text.split()).strip()
+            if stripped_line:
+                return stripped_line
+        return ""
 
 
 @dataclass(slots=True)

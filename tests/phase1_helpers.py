@@ -27,11 +27,13 @@ async def make_async_injector(
     config: ProductionConfig,
     *,
     document_path: Path | None = None,
+    output_path: Path | None = None,
 ) -> tuple[Injector, AsyncInjector]:
     injector = radio_drama_injector(
         config=config,
         event_loop=asyncio.get_running_loop(),
         document_path=document_path,
+        output_path=output_path,
     )
     return injector, injector(AsyncInjector)
 

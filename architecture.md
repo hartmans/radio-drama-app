@@ -136,7 +136,7 @@ Planning rule for presets:
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
 
-`radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path` and do not override `InjectionKey("cache_dir")`, it also provides a production-scoped VibeVoice cache directory derived from that output path.
+`radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path`, it also installs the production-scoped `CacheManager`, which derives the shared speech-cache root from that output path unless the caller overrides `InjectionKey("cache_dir")` directly.
 
 ## Resource layer
 
@@ -147,12 +147,17 @@ Current resource contract:
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
 * `ScriptRenderRequest` carries ordered `DialogueLine` objects plus a short leading-text label for cache/debug artifacts
+* `ScriptRenderRequest` is also the shared speech-cache identity: it owns the stable semantic hash, the human-readable first-words label used in filenames, the common hit validator requiring adjacent `wav` and `json` artifacts, and the shared JSON payload builder used by both speech backends
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
-* when `InjectionKey("cache_dir")` is present, `VibeVoiceResource` persists model-native WAV output plus adjacent JSON metadata keyed by the semantic render request, and touches cache mtimes whenever cached output is reused
+* `CacheManager` is the production-scoped mapping from cache type names such as `vibevoice` and `qwentts` to `CacheCollection` objects
+* `CacheManager` derives the shared cache root from the production `output_path`, while still allowing a direct `InjectionKey("cache_dir")` override for callers that need to place the cache elsewhere
+* `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
+* both speech resources persist model-native WAV output plus adjacent JSON metadata keyed by the semantic render request, and cache reuse touches artifact mtimes
+* cache lookup may run a validator over the discovered subtype-to-path mapping; validation failures delete the stale files before the miss path repopulates the cache
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup

@@ -5,10 +5,11 @@ from pathlib import Path
 
 from carthage.dependency_injection import InjectionKey, Injector
 
+from .cache import CACHE_OUTPUT_PATH_KEY, CacheManager
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .qwen_tts import QwenTtsResource
-from .vibevoice import CACHE_DIRECTORY_KEY, VibeVoiceResource
+from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
 
 
@@ -36,14 +37,16 @@ def radio_drama_injector(
             InjectionKey(ProductionDocumentPath),
             ProductionDocumentPath(Path(document_path)),
         )
-    if output_path is not None and injector.injector_containing(CACHE_DIRECTORY_KEY) is None:
-        injector.add_provider(CACHE_DIRECTORY_KEY, Path(f"{output_path}.cache"))
+    if output_path is not None and injector.injector_containing(CACHE_OUTPUT_PATH_KEY) is None:
+        injector.add_provider(CACHE_OUTPUT_PATH_KEY, Path(output_path))
     if event_loop is not None:
         injector.replace_provider(
             InjectionKey(asyncio.AbstractEventLoop),
             event_loop,
             close=False,
         )
+    if injector.injector_containing(CacheManager) is None:
+        injector.add_provider(CacheManager)
     if injector.injector_containing(VibeVoiceResource) is None:
         injector.add_provider(VibeVoiceResource)
     if injector.injector_containing(QwenTtsResource) is None:

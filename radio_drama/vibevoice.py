@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import json
-import os
 import re
 import weakref
 from dataclasses import dataclass
@@ -15,21 +13,19 @@ from typing import Sequence
 import numpy as np
 import soundfile as sf
 import torch
-from carthage.dependency_injection import AsyncInjectable, InjectionKey, inject
+from carthage.dependency_injection import AsyncInjectable, inject
 from vibevoice.modular.modeling_vibevoice_inference import (
     VibeVoiceForConditionalGenerationInference,
 )
 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
 from .audio import convert_audio_format
+from .cache import CACHE_DIRECTORY_KEY, CacheCollection, CacheKey, CacheManager
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .model_loading import shared_model_load
-from .dialogue import DialogueLine, ScriptRenderRequest
+from .dialogue import ScriptRenderRequest
 from .rendering import RenderResult
-
-
-CACHE_DIRECTORY_KEY = InjectionKey("cache_dir")
 
 
 @dataclass(slots=True, weakref_slot=True)
@@ -52,7 +48,7 @@ class _PendingRender:
         return self.registration_ref()
 
 
-@inject(config=ProductionConfig)
+@inject(config=ProductionConfig, cache_manager=CacheManager)
 class VibeVoiceResource(AsyncInjectable):
     """Shared VibeVoice model resource for script-level render requests.
 
@@ -61,14 +57,13 @@ class VibeVoiceResource(AsyncInjectable):
     lazily, and return production-format audio to each waiting plan.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, cache_manager: CacheManager | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.device = self._normalize_device(self.config.resolved_device)
+        self.cache_manager = cache_manager
         self._processor: VibeVoiceProcessor | None = None
         self._model: VibeVoiceForConditionalGenerationInference | None = None
         self._sample_rate: int | None = None
-        self._cache_directory: Path | None = None
-        self._cache_directory_resolved = False
         self._pending: list[_PendingRender] = []
         self._pending_lock = asyncio.Lock()
         self._drain_task: asyncio.Task | None = None
@@ -162,13 +157,23 @@ class VibeVoiceResource(AsyncInjectable):
         self,
         batch: Sequence[RegisteredRenderRequest],
     ) -> list[tuple[np.ndarray, int]]:
+        cache_collection = None if self.cache_manager is None else self.cache_manager["vibevoice"]
+        if cache_collection is None or not cache_collection.enabled:
+            return [
+                (audio, self.sample_rate)
+                for audio in self._render_batch_native_sync(batch)
+            ]
+
         cached_outputs: dict[int, tuple[np.ndarray, int]] = {}
         uncached_batch: list[tuple[int, RegisteredRenderRequest]] = []
 
         for index, registration in enumerate(batch):
-            cached_audio = self._load_cached_native_audio(registration.request)
-            if cached_audio is not None:
-                cached_outputs[index] = cached_audio
+            hit = cache_collection.find(
+                registration.request,
+                validate=registration.request.validate_cache_hit,
+            )
+            if hit is not None:
+                cached_outputs[index] = self._load_cached_native_audio(hit)
                 continue
             uncached_batch.append((index, registration))
 
@@ -177,8 +182,19 @@ class VibeVoiceResource(AsyncInjectable):
                 [registration for _, registration in uncached_batch]
             )
             for (index, registration), audio in zip(uncached_batch, rendered, strict=True):
-                self._store_cached_native_audio(registration.request, audio)
-                cached_outputs[index] = (audio, self.sample_rate)
+                hit = cache_collection.get_or_create(
+                    registration.request,
+                    lambda key, collection, request=registration.request, cached_audio=audio: (
+                        self._store_cached_native_audio(
+                            key,
+                            collection,
+                            request,
+                            cached_audio,
+                        )
+                    ),
+                    validate=registration.request.validate_cache_hit,
+                )
+                cached_outputs[index] = self._load_cached_native_audio(hit)
 
         return [cached_outputs[index] for index in range(len(batch))]
 
@@ -449,93 +465,44 @@ class VibeVoiceResource(AsyncInjectable):
         return live_batch
 
     def _debug_request_label(self, request: ScriptRenderRequest) -> str:
-        label = " ".join(request.first_words.split()).strip()
-        if not label:
-            label = self._fallback_debug_label(request.dialogue_lines)
-        return label[:40] or "empty-script"
-
-    def _fallback_debug_label(self, dialogue_lines: Sequence[DialogueLine]) -> str:
-        for line in dialogue_lines:
-            stripped_line = " ".join(line.spoken_text.split()).strip()
-            if stripped_line:
-                return stripped_line
-        return ""
+        return request.cache_first_words()
 
     def _sanitize_debug_label(self, text: str) -> str:
         sanitized = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_").lower()
         return sanitized or "audio"
 
-    def _cache_directory_path(self) -> Path | None:
-        if self._cache_directory_resolved:
-            return self._cache_directory
-        provider_injector = self.ainjector.injector.injector_containing(CACHE_DIRECTORY_KEY)
-        self._cache_directory_resolved = True
-        if provider_injector is None:
-            self._cache_directory = None
-            return None
-        self._cache_directory = Path(provider_injector.get_instance(CACHE_DIRECTORY_KEY)).expanduser()
-        return self._cache_directory
-
     def _load_cached_native_audio(
         self,
-        request: ScriptRenderRequest,
-    ) -> tuple[np.ndarray, int] | None:
-        cache_dir = self._cache_directory_path()
-        if cache_dir is None:
-            return None
-        wav_path, json_path = self._cache_paths(cache_dir, request)
-        if not wav_path.is_file() or not json_path.is_file():
-            return None
+        hit: dict[str, Path],
+    ) -> tuple[np.ndarray, int]:
+        wav_path = hit["wav"]
         audio, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
-        self._touch_cache_files(wav_path, json_path)
         normalized = self._normalize_audio_array(audio)
         return normalized, int(sample_rate)
 
     def _store_cached_native_audio(
         self,
+        key: CacheKey,
+        collection: CacheCollection,
         request: ScriptRenderRequest,
         audio: np.ndarray,
     ) -> None:
-        cache_dir = self._cache_directory_path()
-        if cache_dir is None:
-            return
-        wav_path, json_path = self._cache_paths(cache_dir, request)
+        wav_path = collection.path_for_subtype(key, "wav")
+        json_path = collection.path_for_subtype(key, "json")
         wav_path.parent.mkdir(parents=True, exist_ok=True)
         sf.write(wav_path, audio, self.sample_rate)
         json_path.write_text(
             json.dumps(
-                {
-                    "dialogue_lines": self._serialize_dialogue_lines(request.dialogue_lines),
-                    "first_words": request.first_words,
-                    "frame_count": int(audio.shape[0]),
-                    "sample_rate": self.sample_rate,
-                },
+                request.build_cache_payload(
+                    frame_count=int(audio.shape[0]),
+                    sample_rate=self.sample_rate,
+                ),
                 indent=2,
                 sort_keys=True,
             )
             + "\n",
             encoding="utf-8",
         )
-
-    def _cache_paths(
-        self,
-        cache_dir: Path,
-        request: ScriptRenderRequest,
-    ) -> tuple[Path, Path]:
-        stem = self._cache_stem(request)
-        return cache_dir / f"{stem}.wav", cache_dir / f"{stem}.json"
-
-    def _cache_stem(self, request: ScriptRenderRequest) -> str:
-        label = self._sanitize_debug_label(self._debug_request_label(request))
-        return f"vibevoice_{label}_{self._cache_sha256(request)}"
-
-    def _cache_sha256(self, request: ScriptRenderRequest) -> str:
-        payload = json.dumps(
-            self._serialize_request(request),
-            sort_keys=True,
-            ensure_ascii=True,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _normalized_script_and_voice_samples(
         self,
@@ -573,31 +540,5 @@ class VibeVoiceResource(AsyncInjectable):
         if current_paragraph:
             paragraphs.append(" ".join(current_paragraph))
         return paragraphs or ([" ".join(spoken_text.split()).strip()] if spoken_text.strip() else [])
-
-    def _serialize_request(self, request: ScriptRenderRequest) -> dict[str, object]:
-        return {
-            "dialogue_lines": self._serialize_dialogue_lines(request.dialogue_lines),
-            "first_words": request.first_words,
-        }
-
-    def _serialize_dialogue_lines(
-        self,
-        dialogue_lines: Sequence[DialogueLine],
-    ) -> list[dict[str, object]]:
-        return [
-            {
-                "speaker": line.speaker.authored_name,
-                "voice_name": line.speaker.voice_name,
-                "voice_path": str(line.speaker.resolved_path),
-                "spoken_text": line.spoken_text,
-                "handling": line.handling,
-            }
-            for line in dialogue_lines
-        ]
-
-    def _touch_cache_files(self, *paths: Path) -> None:
-        for path in paths:
-            os.utime(path, None)
-
 
 __all__ = ["CACHE_DIRECTORY_KEY", "RegisteredRenderRequest", "VibeVoiceResource"]
