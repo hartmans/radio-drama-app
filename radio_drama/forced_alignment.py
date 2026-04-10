@@ -447,8 +447,6 @@ class AlignedScriptSource(PlanningNode):
         self.script_plan = script_plan
         self.contents: list[DialogueContents] = copy_dialogue_contents(script_plan.contents)
 
-    async def render(self) -> AlignedScriptResult:
-        return await super().render()
 
     async def render_node(self) -> AlignedScriptResult:
         base_result = await self.script_plan.render()
