@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import logging
@@ -447,6 +448,8 @@ class AlignedScriptSource(PlanningNode):
         self.script_plan = script_plan
         self.contents: list[DialogueContents] = copy_dialogue_contents(script_plan.contents)
 
+    def child_plans(self) -> Iterable[PlanningNode]:
+        return (self.script_plan,)
 
     async def render_node(self) -> AlignedScriptResult:
         base_result = await self.script_plan.render()
@@ -504,6 +507,9 @@ class ScriptSlice(AudioPlan):
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.name = name
+
+    def child_plans(self) -> Iterable[PlanningNode]:
+        return (self.aligned_script_source,)
 
     def __repr__(self) -> str:
         if self.name is not None:

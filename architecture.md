@@ -59,6 +59,7 @@ Current planning contract:
 * every plan has a `render()` path, even if rendering is a no-op
 * plans retain the source document node that produced them
 * `render()` is memoized per plan instance so duplicate callers share work
+* every plan may expose `child_plans()` for traversal, and `all_plans()` walks the reachable plan graph once by identity so shared subplans such as one `AlignedScriptSource` are not revisited through multiple `ScriptSlice`s
 * `radio_drama.planning` now holds the shared planning substrate:
   * `PlanningNode`
   * typed audio-attribute aliases such as `AudioAttrs`

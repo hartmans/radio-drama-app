@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from carthage.dependency_injection import AsyncInjectable, InjectionKey
@@ -47,6 +48,22 @@ class PlanningNode(AsyncInjectable):
 
     async def render_node(self):
         return None
+
+    def child_plans(self) -> Iterable["PlanningNode"]:
+        return ()
+
+    def all_plans(self) -> Iterable["PlanningNode"]:
+        seen: set[int] = set()
+        yield from self._all_plans_seen(seen)
+
+    def _all_plans_seen(self, seen: set[int]) -> Iterable["PlanningNode"]:
+        identity = id(self)
+        if identity in seen:
+            return
+        seen.add(identity)
+        yield self
+        for child in self.child_plans():
+            yield from child._all_plans_seen(seen)
 
 
 def __getattr__(name: str):

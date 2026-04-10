@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from math import gcd
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import numpy as np
@@ -771,6 +772,9 @@ class ComposeAudioPlan(AudioPlan):
     def _mark_children(self) -> Sequence[AudioPlan]:
         return getattr(self, "audio_plans", ())
 
+    def child_plans(self) -> Iterable[PlanningNode]:
+        return self.audio_plans
+
     def leaf_audio_plans(self) -> list[AudioPlan]:
         flattened: list[AudioPlan] = []
         for audio_plan in self.audio_plans:
@@ -1028,6 +1032,9 @@ class LoopPlan(AudioPlan):
 
     def _mark_children(self) -> Sequence[AudioPlan]:
         return (self.__dict__["audio_plan"],) if "audio_plan" in self.__dict__ else ()
+
+    def child_plans(self) -> Iterable[PlanningNode]:
+        return (self.audio_plan,)
 
     def __getattr__(self, name: str):
         return getattr(self.audio_plan, name)
