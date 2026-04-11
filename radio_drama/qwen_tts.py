@@ -50,15 +50,9 @@ class _PendingRender:
 class QwenTtsResource(AsyncInjectable):
     """Shared Qwen voice-clone resource for script-level render requests."""
 
-    def __init__(
-        self,
-        whisperx_resource: WhisperXResource,
-        cache_manager: CacheManager | None = None,
-        **kwargs,
-    ) -> None:
+    def __init__(self, whisperx_resource: WhisperXResource, **kwargs) -> None:
         super().__init__(**kwargs)
         self.whisperx_resource = whisperx_resource
-        self.cache_manager = cache_manager
         self.device = self._normalize_device(self.config.resolved_device)
         self._model: Qwen3TTSModel | None = None
         self._sample_rate: int | None = None
@@ -153,8 +147,8 @@ class QwenTtsResource(AsyncInjectable):
         self,
         batch: Sequence[RegisteredRenderRequest],
     ) -> list[tuple[ScriptRenderResult, int]]:
-        cache_collection = None if self.cache_manager is None else self.cache_manager["qwentts"]
-        if cache_collection is None or not cache_collection.enabled:
+        cache_collection = self.cache_manager["qwentts"]
+        if not cache_collection.enabled:
             return [
                 (result, self.sample_rate)
                 for result in self._render_batch_native_sync(batch)

@@ -57,10 +57,9 @@ class VibeVoiceResource(AsyncInjectable):
     lazily, and return production-format audio to each waiting plan.
     """
 
-    def __init__(self, cache_manager: CacheManager | None = None, **kwargs) -> None:
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.device = self._normalize_device(self.config.resolved_device)
-        self.cache_manager = cache_manager
         self._processor: VibeVoiceProcessor | None = None
         self._model: VibeVoiceForConditionalGenerationInference | None = None
         self._sample_rate: int | None = None
@@ -157,8 +156,8 @@ class VibeVoiceResource(AsyncInjectable):
         self,
         batch: Sequence[RegisteredRenderRequest],
     ) -> list[tuple[np.ndarray, int]]:
-        cache_collection = None if self.cache_manager is None else self.cache_manager["vibevoice"]
-        if cache_collection is None or not cache_collection.enabled:
+        cache_collection = self.cache_manager["vibevoice"]
+        if not cache_collection.enabled:
             return [
                 (audio, self.sample_rate)
                 for audio in self._render_batch_native_sync(batch)

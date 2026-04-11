@@ -6,11 +6,13 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from carthage.dependency_injection import InjectionKey
+from carthage.dependency_injection import AsyncInjector, InjectionKey
 
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference
 from radio_drama.document import parse_production_string
+from radio_drama.forced_alignment import WhisperXResource
+from radio_drama.init import radio_drama_injector
 from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.training_samples import chunk_training_intervals, export_training_samples_from_plan
 from radio_drama.vibevoice import VibeVoiceResource
@@ -175,3 +177,86 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
     assert bob_rate == 4
     assert alice_audio.shape == (4,)
     assert bob_audio.shape == (4,)
+
+
+def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    output_dir = tmp_path / "samples"
+    cache_output = tmp_path / "render.wav"
+
+    class FakeCachedVibeVoiceResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.native_call_count = 0
+            self._sample_rate = 4
+
+        def _render_batch_native_sync(self, batch):
+            self.native_call_count += 1
+            return [np.arange(8, dtype=np.float32) for _ in batch]
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            line_index = 0
+            for content in contents:
+                if isinstance(content, DialogueLine):
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            node=content.node,
+                            start_pos=float(line_index),
+                        )
+                    )
+                    line_index += 1
+                else:
+                    updated.append(content)
+            return updated
+
+    async def export_once():
+        injector = radio_drama_injector(
+            config=ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
+            event_loop=asyncio.get_running_loop(),
+            document_path=xml_path,
+            output_path=cache_output,
+        )
+        try:
+            ainjector = injector(AsyncInjector)
+            resource = await ainjector(FakeCachedVibeVoiceResource)
+            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Alice: anna.wav
+                  </speaker-map>
+                  <script>
+                    Alice: First line.
+                    Alice: Second line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            written = await export_training_samples_from_plan(
+                production_plan,
+                output_dir,
+                sample_rate=4,
+            )
+            return resource.native_call_count, written
+        finally:
+            injector.close()
+
+    first_calls, first_written = asyncio.run(export_once())
+    second_calls, second_written = asyncio.run(export_once())
+
+    assert first_calls == 1
+    assert second_calls == 0
+    assert first_written == 2
+    assert second_written == 2

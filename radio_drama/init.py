@@ -37,8 +37,14 @@ def radio_drama_injector(
             InjectionKey(ProductionDocumentPath),
             ProductionDocumentPath(Path(document_path)),
         )
-    if output_path is not None and injector.injector_containing(CACHE_OUTPUT_PATH_KEY) is None:
-        injector.add_provider(CACHE_OUTPUT_PATH_KEY, Path(output_path))
+    if injector.injector_containing(CACHE_OUTPUT_PATH_KEY) is None:
+        resolved_output_path = None
+        if output_path is not None:
+            resolved_output_path = Path(output_path)
+        elif document_path is not None:
+            resolved_output_path = Path(document_path).with_suffix(".wav")
+        if resolved_output_path is not None:
+            injector.add_provider(CACHE_OUTPUT_PATH_KEY, resolved_output_path)
     if event_loop is not None:
         injector.replace_provider(
             InjectionKey(asyncio.AbstractEventLoop),
