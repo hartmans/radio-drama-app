@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import math
 import re
@@ -12,14 +11,12 @@ from itertools import pairwise
 from pathlib import Path
 
 import soundfile as sf
-from carthage.dependency_injection import AsyncInjector
 
-from .config import ProductionConfig
+from .cli import build_injector_from_namespace, initialize_arg_parser
 from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
 from .document import parse_production_file
 from .errors import DocumentError
 from .forced_alignment import AlignedScriptSource
-from .init import radio_drama_injector
 from .planning import PlanningNode
 from .rendering import RenderResult
 
@@ -29,6 +26,7 @@ class TrainingChunk:
     speaker_name: str
     start_marker: int
     end_marker: int
+    slug: str
 
 
 def _sanitize_path_component(text: str) -> str:
@@ -71,11 +69,14 @@ def chunk_training_intervals(
         speaker_names = {line.speaker.authored_name for line in dialogue_lines}
         if len(speaker_names) != 1:
             continue
+        slug = " ".join(dialogue_lines[0].spoken_text.split()).strip()
+        if slug: slug = _sanitize_path_component(slug[0:40])
         chunks.append(
             TrainingChunk(
                 speaker_name=dialogue_lines[0].speaker.authored_name,
                 start_marker=start_marker,
                 end_marker=end_marker,
+                slug=slug
             )
         )
     return chunks
@@ -85,29 +86,40 @@ async def export_training_samples(
     production_path: str | Path,
     output_directory: str | Path,
     *,
-    config: ProductionConfig | None = None,
+    injector=None,
+    sample_rate: int | None = None,
+    output_path: str | Path | None = None,
 ) -> int:
     production_path = Path(production_path)
     output_directory = Path(output_directory)
-    config = config or ProductionConfig()
     production_node = parse_production_file(production_path)
     output_directory.mkdir(parents=True, exist_ok=True)
 
-    injector = radio_drama_injector(
-        config=config,
-        event_loop=asyncio.get_running_loop(),
-        document_path=production_path,
-    )
+    created_injector = injector
+    if created_injector is None:
+        from .config import ProductionConfig
+        from .init import radio_drama_injector
+        from carthage.dependency_injection import AsyncInjector
+
+        created_injector = radio_drama_injector(
+            config=ProductionConfig(),
+            event_loop=asyncio.get_running_loop(),
+            document_path=production_path,
+            output_path=Path(output_path) if output_path is not None else None,
+        )
     try:
-        ainjector = injector(AsyncInjector)
+        from carthage.dependency_injection import AsyncInjector
+
+        ainjector = created_injector(AsyncInjector)
         production_plan = await production_node.plan(ainjector)
         return await export_training_samples_from_plan(
             production_plan,
             output_directory,
-            sample_rate=config.resolved_output_sample_rate,
+            sample_rate=sample_rate or production_plan.config.resolved_output_sample_rate,
         )
     finally:
-        injector.close()
+        if injector is None:
+            await shutdown_injector(created_injector)
 
 
 async def export_training_samples_from_plan(
@@ -146,7 +158,9 @@ async def export_training_samples_from_plan(
             counters[chunk.speaker_name] += 1
             speaker_directory = output_directory / _sanitize_path_component(chunk.speaker_name)
             speaker_directory.mkdir(parents=True, exist_ok=True)
-            output_path = speaker_directory / f"chunk_{counters[chunk.speaker_name]:06d}.wav"
+            slug = chunk.slug
+            if slug: slug += "_"
+            output_path = speaker_directory / f"chunk_{slug}{counters[chunk.speaker_name]:06d}.wav"
             sf.write(output_path, result.audio, sample_rate)
             written += 1
     return written
@@ -164,62 +178,38 @@ def _slice_training_chunk(
     )
 
 
-def build_config(args: argparse.Namespace) -> ProductionConfig:
-    return ProductionConfig(
-        voice_directory=Path(args.voice_dir) if args.voice_dir is not None else None,
-        sounds_directory=Path(args.sounds_dir) if args.sounds_dir is not None else None,
-        model_name=args.model_file,
-        output_sample_rate=args.output_sample_rate,
-        output_channels=args.output_channels,
-        batch_size=args.batch_size,
-        device=args.device,
-        cfg_scale=args.cfg_scale,
-        disable_prefill=args.disable_prefill,
-        ddpm_inference_steps=args.ddpm_inference_steps,
-    )
-
-
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Export per-speaker training WAV chunks from a production XML file."
+    parser = initialize_arg_parser(
+        "Export per-speaker training WAV chunks from a production XML file.",
+        output_help=(
+            "Output WAV path used to locate the shared speech cache. "
+            "Defaults to the input path with a .wav extension."
+        ),
     )
-    parser.add_argument("file", help="Input XML file.")
     parser.add_argument("output_dir", help="Directory that will receive speaker subdirectories.")
-    parser.add_argument("--voice-dir", default=None, help="Directory containing reference voice files.")
-    parser.add_argument("--sounds-dir", default=None, help="Directory containing sound files for relative <sound> references.")
-    parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
-    parser.add_argument("--output-sample-rate", type=int, default=None, help="Output WAV sample rate override.")
-    parser.add_argument("--output-channels", type=int, default=None, help="Output WAV channel count override.")
-    parser.add_argument("--batch-size", type=int, default=None, help="Maximum speech backend batch size override.")
-    parser.add_argument("--device", default=None, help="Preferred torch device override.")
-    parser.add_argument("--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override.")
-    parser.add_argument(
-        "--disable-prefill",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Disable VibeVoice prefill.",
-    )
-    parser.add_argument(
-        "--ddpm-inference-steps",
-        type=int,
-        default=None,
-        help="VibeVoice DDPM inference steps override.",
-    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
-    config = build_config(args)
     try:
-        written = asyncio.run(
-            export_training_samples(
-                args.file,
-                args.output_dir,
-                config=config,
+        async def runner() -> int:
+            injector, config, production_path, output_path = build_injector_from_namespace(
+                args,
+                event_loop=asyncio.get_running_loop(),
             )
-        )
+            try:
+                return await export_training_samples(
+                    production_path,
+                    args.output_dir,
+                    injector=injector,
+                    sample_rate=config.resolved_output_sample_rate,
+                    output_path=output_path,
+                )
+            finally:
+                injector.close()
+
+        written = asyncio.run(runner())
     except DocumentError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from None
