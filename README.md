@@ -327,7 +327,8 @@ Built-in render-time presets:
 * `outdoor2`
 * `indoor1`
 * `indoor2`
-* `phone`
+* `phone`: for people on the other side of a phone call
+* `background`: Very side-heavy mix for conversations in the background, especially under narration
 
 `master` is reserved for the final production render. The preview frontend/backend expose `none` plus the other seven presets.
 
