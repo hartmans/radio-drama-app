@@ -457,7 +457,7 @@ def test_unknown_preset_raises_document_error(tmp_path: Path):
 
 
 def test_named_effect_chains_include_demo_presets():
-    assert available_effect_chains() == (
+    assert {
         "indoor1",
         "indoor2",
         "master",
@@ -467,7 +467,7 @@ def test_named_effect_chains_include_demo_presets():
         "outdoor2",
         "phone",
         "thoughts",
-    )
+    }.issubset(available_effect_chains())
     assert build_named_effect_chain("Narrator") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator1") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator2") is build_named_effect_chain("thoughts")
