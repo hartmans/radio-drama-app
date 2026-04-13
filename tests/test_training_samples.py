@@ -168,8 +168,11 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
     assert written == 3
     alice_files = sorted((output_dir / "Alice").glob("chunk_*.wav"))
     bob_files = sorted((output_dir / "Bob").glob("chunk_*.wav"))
-    assert [path.name for path in alice_files] == ["chunk_000001.wav", "chunk_000002.wav"]
-    assert [path.name for path in bob_files] == ["chunk_000001.wav"]
+    assert [path.name for path in alice_files] == [
+        "chunk_First_line_000001.wav",
+        "chunk_Second_line_000002.wav",
+    ]
+    assert [path.name for path in bob_files] == ["chunk_Third_line_000001.wav"]
 
     alice_audio, alice_rate = sf.read(alice_files[0], dtype="float32")
     bob_audio, bob_rate = sf.read(bob_files[0], dtype="float32")
@@ -177,6 +180,121 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
     assert bob_rate == 4
     assert alice_audio.shape == (4,)
     assert bob_audio.shape == (4,)
+
+
+def test_export_training_samples_from_plan_resamples_output(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    output_dir = tmp_path / "samples"
+
+    class FakeTimedVibeVoice:
+        async def register_request(self, request):
+            class Registered:
+                async def render(self_nonlocal) -> ScriptRenderResult:
+                    return ScriptRenderResult(
+                        audio=np.array([0.0, 1.0, 0.0, -1.0], dtype=np.float32),
+                        dialogue_line_start_positions=(0.0,),
+                    )
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
+            document_path=xml_path,
+        )
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeTimedVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Alice: anna.wav
+                  </speaker-map>
+                  <script>
+                    Alice: First line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return await export_training_samples_from_plan(
+                production_plan,
+                output_dir,
+                sample_rate=8,
+            )
+        finally:
+            injector.close()
+
+    written = asyncio.run(runner())
+    assert written == 1
+    output_path = next((output_dir / "Alice").glob("chunk_*.wav"))
+    audio, sample_rate = sf.read(output_path, dtype="float32")
+    assert sample_rate == 8
+    assert audio.shape == (8,)
+
+
+def test_export_training_samples_from_plan_defaults_to_backend_sample_rate(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    output_dir = tmp_path / "samples"
+
+    class FakeNativeRateVibeVoice:
+        sample_rate = 4
+
+        async def register_request(self, request):
+            class Registered:
+                def __init__(self, resource):
+                    self.resource = resource
+
+                async def render(self_nonlocal) -> ScriptRenderResult:
+                    return ScriptRenderResult(
+                        audio=np.array([0.0, 1.0, 0.0, -1.0], dtype=np.float32),
+                        dialogue_line_start_positions=(0.0,),
+                    )
+
+            return Registered(self)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=tmp_path, output_channels=1),
+            document_path=xml_path,
+        )
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeNativeRateVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Alice: anna.wav
+                  </speaker-map>
+                  <script>
+                    Alice: First line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return await export_training_samples_from_plan(
+                production_plan,
+                output_dir,
+                sample_rate=None,
+            )
+        finally:
+            injector.close()
+
+    written = asyncio.run(runner())
+    assert written == 1
+    output_path = next((output_dir / "Alice").glob("chunk_*.wav"))
+    audio, sample_rate = sf.read(output_path, dtype="float32")
+    assert sample_rate == 4
+    assert audio.shape == (4,)
 
 
 def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):

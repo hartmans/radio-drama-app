@@ -12,6 +12,7 @@ from pathlib import Path
 
 import soundfile as sf
 
+from .audio import resample_audio
 from .cli import build_injector_from_namespace, initialize_arg_parser
 from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
 from .document import parse_production_file
@@ -115,18 +116,18 @@ async def export_training_samples(
         return await export_training_samples_from_plan(
             production_plan,
             output_directory,
-            sample_rate=sample_rate or production_plan.config.resolved_output_sample_rate,
+            sample_rate=sample_rate,
         )
     finally:
         if injector is None:
-            await shutdown_injector(created_injector)
+            created_injector.close()
 
 
 async def export_training_samples_from_plan(
     production_plan: PlanningNode,
     output_directory: Path,
     *,
-    sample_rate: int,
+    sample_rate: int | None,
 ) -> int:
     aligned_by_script: dict[int, AlignedScriptSource] = {}
     script_plans: list[ScriptPlan] = []
@@ -135,6 +136,13 @@ async def export_training_samples_from_plan(
             aligned_by_script[id(plan.script_plan)] = plan
         elif isinstance(plan, ScriptPlan):
             script_plans.append(plan)
+
+    if sample_rate is None:
+        sample_rate = _default_sample_rate(script_plans)
+        production_plan.config.output_sample_rate = sample_rate
+    render_sample_rate = production_plan.config.resolved_output_sample_rate
+    if sample_rate is None:
+        sample_rate = render_sample_rate
 
     counters: defaultdict[str, int] = defaultdict(int)
     written = 0
@@ -155,13 +163,20 @@ async def export_training_samples_from_plan(
             )
             if result.frame_count == 0:
                 continue
+            chunk_audio = result.audio
+            if sample_rate != render_sample_rate:
+                chunk_audio = resample_audio(
+                    chunk_audio,
+                    input_sample_rate=render_sample_rate,
+                    output_sample_rate=sample_rate,
+                )
             counters[chunk.speaker_name] += 1
             speaker_directory = output_directory / _sanitize_path_component(chunk.speaker_name)
             speaker_directory.mkdir(parents=True, exist_ok=True)
             slug = chunk.slug
             if slug: slug += "_"
             output_path = speaker_directory / f"chunk_{slug}{counters[chunk.speaker_name]:06d}.wav"
-            sf.write(output_path, result.audio, sample_rate)
+            sf.write(output_path, chunk_audio, sample_rate)
             written += 1
     return written
 
@@ -176,6 +191,17 @@ def _slice_training_chunk(
         marker_frames[chunk.start_marker],
         marker_frames[chunk.end_marker],
     )
+
+
+def _default_sample_rate(script_plans: list[ScriptPlan]) -> int | None:
+    sample_rates = {
+        script_plan._registered_request.resource.sample_rate
+        for script_plan in script_plans
+        if script_plan._registered_request is not None
+    }
+    if len(sample_rates) == 1:
+        return next(iter(sample_rates))
+    return None
 
 
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
