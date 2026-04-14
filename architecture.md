@@ -152,6 +152,7 @@ Current resource contract:
 * that script-render cache is intentionally production-facing rather than purely implementation-facing: once the director accepts how a production sounds, the cached `ScriptRenderRequest` artifacts may effectively become part of the accepted production assets, so cache-key stability is allowed to be higher there than in purely derived global caches
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
+* both speech backends currently preprocess incoming reference voice audio through one internal voice-preprocess chain before handing it to the model; that chain is implementation-facing and currently corresponds to ffmpeg `loudnorm` defaults
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout

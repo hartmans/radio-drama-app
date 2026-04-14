@@ -16,7 +16,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import convert_audio_format
 from .cache import CacheCollection, CacheKey, CacheManager
 from .config import ProductionConfig
-from .effects import VOICE_PREPROCESS_VERSION
+from .effects import VOICE_PREPROCESS_VERSION, load_preprocessed_voice_reference
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
 from .dialogue import DialogueLine, ScriptRenderRequest
@@ -374,14 +374,24 @@ class QwenTtsResource(AsyncInjectable):
         voice_path: str,
     ) -> list[VoiceClonePromptItem]:
         model = self._ensure_loaded()
-        transcript = self.whisperx_resource.transcribe_audio_sample_sync(voice_path)
+        reference_audio, sample_rate = self._preprocessed_voice_reference_sync(voice_path)
+        transcript = self.whisperx_resource.transcribe_audio_sample_sync(
+            reference_audio,
+            sample_rate,
+        )
         return list(
             model.create_voice_clone_prompt(
-                ref_audio=voice_path,
+                ref_audio=(reference_audio, sample_rate),
                 ref_text=transcript,
                 x_vector_only_mode=False,
             )
         )
+
+    def _preprocessed_voice_reference_sync(
+        self,
+        voice_path: str,
+    ) -> tuple[np.ndarray, int]:
+        return load_preprocessed_voice_reference(voice_path)
 
     def _serialize_prompt_items(
         self,

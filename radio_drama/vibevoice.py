@@ -23,6 +23,7 @@ from .audio import convert_audio_format
 from .cache import CACHE_DIRECTORY_KEY, CacheCollection, CacheKey, CacheManager
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
+from .effects import load_preprocessed_voice_reference
 from .model_loading import shared_model_load
 from .dialogue import ScriptRenderRequest
 from .rendering import RenderResult
@@ -205,7 +206,10 @@ class VibeVoiceResource(AsyncInjectable):
         requests = [registration.request for registration in batch]
         processor, model = self._ensure_loaded()
         normalized_requests = [
-            self._normalized_script_and_voice_samples(request)
+            self._normalized_script_and_voice_samples(
+                request,
+                voice_sample_rate=int(processor.audio_processor.sampling_rate),
+            )
             for request in requests
         ]
         inputs = processor(
@@ -506,9 +510,12 @@ class VibeVoiceResource(AsyncInjectable):
     def _normalized_script_and_voice_samples(
         self,
         request: ScriptRenderRequest,
-    ) -> tuple[str, list[str]]:
+        *,
+        voice_sample_rate: int,
+    ) -> tuple[str, list[np.ndarray]]:
         speaker_numbers: dict[str, int] = {}
-        voice_samples: list[str] = []
+        loaded_voice_samples: dict[Path, np.ndarray] = {}
+        voice_samples: list[np.ndarray] = []
         normalized_lines: list[str] = []
 
         for line in request.dialogue_lines:
@@ -517,11 +524,31 @@ class VibeVoiceResource(AsyncInjectable):
             if speaker_number is None:
                 speaker_number = len(voice_samples) + 1
                 speaker_numbers[speaker_key] = speaker_number
-                voice_samples.append(str(line.speaker.resolved_path))
+                resolved_path = Path(line.speaker.resolved_path).expanduser().resolve()
+                voice_sample = loaded_voice_samples.get(resolved_path)
+                if voice_sample is None:
+                    voice_sample = self._preprocessed_voice_sample_sync(
+                        resolved_path,
+                        output_sample_rate=voice_sample_rate,
+                    )
+                    loaded_voice_samples[resolved_path] = voice_sample
+                voice_samples.append(voice_sample)
             for paragraph in self._normalized_script_paragraphs(line.spoken_text):
                 normalized_lines.append(f"Speaker {speaker_number}: {paragraph}")
 
         return "\n".join(normalized_lines).replace("’", "'"), voice_samples
+
+    def _preprocessed_voice_sample_sync(
+        self,
+        voice_path: Path,
+        *,
+        output_sample_rate: int,
+    ) -> np.ndarray:
+        voice_sample, _ = load_preprocessed_voice_reference(
+            voice_path,
+            output_sample_rate=output_sample_rate,
+        )
+        return voice_sample
 
     def _normalized_script_paragraphs(self, spoken_text: str) -> list[str]:
         paragraphs: list[str] = []

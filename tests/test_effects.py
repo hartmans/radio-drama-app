@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 from carthage.dependency_injection import InjectionKey, inject
 
 import radio_drama.effects as effects_module
@@ -13,7 +14,12 @@ from radio_drama.audio import AudioPlan, ComposeAudioPlan
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import ScriptPlan, ScriptRenderRequest
 from radio_drama.document import parse_production_string
-from radio_drama.effects import EffectPipeline, available_effect_chains, build_named_effect_chain
+from radio_drama.effects import (
+    EffectPipeline,
+    available_effect_chains,
+    build_named_effect_chain,
+    load_preprocessed_voice_reference,
+)
 from radio_drama.errors import DocumentError
 from radio_drama.rendering import RenderResult
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
@@ -471,6 +477,43 @@ def test_named_effect_chains_include_demo_presets():
     assert build_named_effect_chain("Narrator") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator1") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator2") is build_named_effect_chain("thoughts")
+
+
+def test_load_preprocessed_voice_reference_downmixes_and_resamples(
+    monkeypatch,
+    tmp_path: Path,
+):
+    voice_path = tmp_path / "voice.wav"
+    sf.write(
+        voice_path,
+        np.full((4, 2), [0.0, 1.0], dtype=np.float32),
+        4,
+    )
+
+    class FakeStage:
+        def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+            assert sample_rate == 4
+            audio += 0.25
+
+    monkeypatch.setattr(
+        effects_module,
+        "build_voice_preprocess_chain",
+        lambda: FakeStage(),
+    )
+    monkeypatch.setattr(
+        effects_module,
+        "resample_audio",
+        lambda audio, *, input_sample_rate, output_sample_rate: np.repeat(audio, 2),
+    )
+
+    audio, sample_rate = load_preprocessed_voice_reference(
+        voice_path,
+        output_sample_rate=8,
+    )
+
+    assert sample_rate == 8
+    assert audio.shape == (8,)
+    np.testing.assert_allclose(audio, np.full(8, 0.75, dtype=np.float32), atol=1e-4)
 
 
 def test_master_effect_chain_preserves_output_format():

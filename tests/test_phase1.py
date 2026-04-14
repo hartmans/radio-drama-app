@@ -653,6 +653,9 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
         def _normalize_audio_array(self, audio):
             return np.asarray(audio, dtype=np.float32)
 
+        def _preprocessed_voice_sample_sync(self, voice_path: Path, *, output_sample_rate: int):
+            return np.zeros(240, dtype=np.float32)
+
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=48000, output_channels=2)
 
     async def fake_to_thread(func, *args, **kwargs):
@@ -721,6 +724,9 @@ def test_vibevoice_resource_prefixes_each_dialogue_paragraph_with_speaker(
 
         def _normalize_audio_array(self, audio):
             return np.asarray(audio, dtype=np.float32)
+
+        def _preprocessed_voice_sample_sync(self, voice_path: Path, *, output_sample_rate: int):
+            return np.zeros(240, dtype=np.float32)
 
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=48000, output_channels=2)
 

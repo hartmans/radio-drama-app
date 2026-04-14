@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Callable, Mapping, Protocol, Sequence, TypeVar
 
 import numpy as np
+import soundfile as sf
 from scipy.signal import butter, sosfiltfilt
 
-from .audio import normalize_audio_array
+from .audio import normalize_audio_array, resample_audio
 from .expressions import coerce_array_exp, eval_expression
 
 
@@ -180,6 +181,64 @@ def normalize_effect_chain_name(name: str) -> str:
 
 def build_named_effect_chain(name: str) -> EffectStage:
     return _PRESETS[normalize_effect_chain_name(name)]
+
+
+def build_voice_preprocess_chain() -> EffectStage:
+    """Return the internal effect chain for reference voice preprocessing.
+
+    This chain is intentionally separate from document-authored presets. It is
+    part of backend implementation rather than a user-facing production preset.
+    """
+
+    return _VOICE_PREPROCESS
+
+
+def preprocess_voice_reference(
+    audio: np.ndarray,
+    *,
+    sample_rate: int,
+) -> np.ndarray:
+    """Return one mono reference-voice clip after backend preprocessing.
+
+    Reference voices stay mono throughout preprocessing. Backends that require
+    a specific prompt sample rate can resample after this function returns.
+    """
+
+    processed = np.asarray(audio, dtype=np.float32)
+    if processed.ndim == 2:
+        processed = processed.mean(axis=1)
+    if processed.ndim != 1:
+        raise ValueError(f"Expected mono or stereo voice audio, got {processed.shape!r}")
+    processed = normalize_audio_array(processed)
+    build_voice_preprocess_chain().apply(processed, sample_rate=sample_rate)
+    return normalize_audio_array(processed)
+
+
+def load_preprocessed_voice_reference(
+    voice_path: str | Path,
+    *,
+    output_sample_rate: int | None = None,
+) -> tuple[np.ndarray, int]:
+    """Load, preprocess, and optionally resample one reference voice file."""
+
+    loaded_audio, loaded_sample_rate = sf.read(
+        str(Path(voice_path).expanduser()),
+        dtype="float32",
+        always_2d=False,
+    )
+    processed_audio = preprocess_voice_reference(
+        np.asarray(loaded_audio, dtype=np.float32),
+        sample_rate=int(loaded_sample_rate),
+    )
+    sample_rate = int(loaded_sample_rate)
+    if output_sample_rate is not None and output_sample_rate != sample_rate:
+        processed_audio = resample_audio(
+            processed_audio,
+            input_sample_rate=sample_rate,
+            output_sample_rate=output_sample_rate,
+        )
+        sample_rate = output_sample_rate
+    return processed_audio, sample_rate
 
 
 def _copy_back(target: np.ndarray, source: np.ndarray) -> None:
@@ -571,6 +630,8 @@ _PRESET_ALIASES = {
     "narrator1": "narrator",
     "narrator2": "thoughts",
 }
+
+_VOICE_PREPROCESS = ffmpeg_filter_stage(lambda: "loudnorm")
 
 
 @dataclass(slots=True)

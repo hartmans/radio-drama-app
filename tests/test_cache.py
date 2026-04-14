@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+from carthage.dependency_injection import InjectionKey
 
 from radio_drama.cache import CacheCollection
 from radio_drama.config import ProductionConfig
 from radio_drama.effects import VOICE_PREPROCESS_VERSION
+from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
@@ -177,3 +179,101 @@ def test_qwentts_prompt_cache_path_includes_voice_preprocess_version(tmp_path: P
 
     cache_path = asyncio.run(runner())
     assert cache_path.parts[-2:] == (VOICE_PREPROCESS_VERSION, "anna.wav.pt")
+
+
+def test_qwentts_resource_preprocesses_reference_voice_before_prompt_build(
+    tmp_path: Path,
+):
+    voice_directory = tmp_path / "voices"
+    voice_directory.mkdir()
+    voice_path = voice_directory / "anna.wav"
+    voice_path.write_bytes(b"fake")
+    seen: dict[str, object] = {}
+
+    class FakeWhisperX:
+        def transcribe_audio_sample_sync(self, audio, sample_rate=None):
+            seen["transcribe_audio"] = np.array(audio, copy=True)
+            seen["transcribe_sample_rate"] = sample_rate
+            return "reference transcript"
+
+    class FakeModel:
+        def create_voice_clone_prompt(self, *, ref_audio, ref_text, x_vector_only_mode):
+            seen["ref_audio"] = ref_audio
+            seen["ref_text"] = ref_text
+            seen["x_vector_only_mode"] = x_vector_only_mode
+            return [object()]
+
+    class FakeQwenTtsResource(QwenTtsResource):
+        def _ensure_loaded(self):
+            return FakeModel()
+
+        def _preprocessed_voice_reference_sync(self, voice_path: str):
+            seen["voice_path"] = voice_path
+            return np.array([0.25, -0.25], dtype=np.float32), 12345
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=voice_directory),
+        )
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            resource = await ainjector(FakeQwenTtsResource)
+            return resource._build_prompt_items_for_voice_sync(str(voice_path))
+        finally:
+            injector.close()
+
+    prompt_items = asyncio.run(runner())
+    assert len(prompt_items) == 1
+    assert seen["voice_path"] == str(voice_path)
+    np.testing.assert_allclose(seen["transcribe_audio"], np.array([0.25, -0.25], dtype=np.float32))
+    assert seen["transcribe_sample_rate"] == 12345
+    ref_audio, ref_sample_rate = seen["ref_audio"]
+    np.testing.assert_allclose(ref_audio, np.array([0.25, -0.25], dtype=np.float32))
+    assert ref_sample_rate == 12345
+    assert seen["ref_text"] == "reference transcript"
+    assert seen["x_vector_only_mode"] is False
+
+
+def test_vibevoice_resource_preprocesses_unique_reference_voices_per_request(
+    tmp_path: Path,
+):
+    voice_path = tmp_path / "anna.wav"
+    other_voice_path = tmp_path / "ben.wav"
+    request = request_from_normalized_script(
+        "Speaker 1: Hello there.\nSpeaker 1: Welcome back.\nSpeaker 2: General Kenobi.",
+        (str(voice_path), str(other_voice_path)),
+    )
+    seen_paths: list[tuple[Path, int]] = []
+
+    class FakeVibeVoiceResource(VibeVoiceResource):
+        def _preprocessed_voice_sample_sync(self, voice_path: Path, *, output_sample_rate: int):
+            seen_paths.append((voice_path, output_sample_rate))
+            value = float(len(seen_paths))
+            return np.full(3, value, dtype=np.float32)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=tmp_path),
+        )
+        try:
+            resource = await ainjector(FakeVibeVoiceResource)
+            return resource._normalized_script_and_voice_samples(
+                request,
+                voice_sample_rate=16000,
+            )
+        finally:
+            injector.close()
+
+    normalized_script, voice_samples = asyncio.run(runner())
+    assert normalized_script == (
+        "Speaker 1: Hello there.\n"
+        "Speaker 1: Welcome back.\n"
+        "Speaker 2: General Kenobi."
+    )
+    assert seen_paths == [
+        (voice_path.expanduser().resolve(), 16000),
+        (other_voice_path.expanduser().resolve(), 16000),
+    ]
+    assert len(voice_samples) == 2
+    np.testing.assert_allclose(voice_samples[0], np.full(3, 1.0, dtype=np.float32))
+    np.testing.assert_allclose(voice_samples[1], np.full(3, 2.0, dtype=np.float32))
