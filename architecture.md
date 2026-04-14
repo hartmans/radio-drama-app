@@ -149,6 +149,7 @@ Current resource contract:
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
 * `ScriptRenderRequest` carries ordered `DialogueLine` objects plus a short leading-text label for cache/debug artifacts
 * `ScriptRenderRequest` is also the shared speech-cache identity: it owns the stable semantic hash, the human-readable first-words label used in filenames, the common hit validator requiring adjacent `wav` and `json` artifacts, and the shared JSON payload builder used by both speech backends
+* that script-render cache is intentionally production-facing rather than purely implementation-facing: once the director accepts how a production sounds, the cached `ScriptRenderRequest` artifacts may effectively become part of the accepted production assets, so cache-key stability is allowed to be higher there than in purely derived global caches
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
 * requests are registered during planning and may remain pending until some caller renders one of them
@@ -159,6 +160,7 @@ Current resource contract:
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
 * both speech resources persist model-native WAV output plus adjacent JSON metadata keyed by the semantic render request, and cache reuse touches artifact mtimes
 * cache lookup may run a validator over the discovered subtype-to-path mapping; validation failures delete the stale files before the miss path repopulates the cache
+* Qwen also keeps a separate global prompt-feature cache for reference voices; unlike the production script-render cache, that prompt cache is implementation-facing and therefore includes the current reference-voice preprocessing version in its cache key
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup

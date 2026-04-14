@@ -16,6 +16,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import convert_audio_format
 from .cache import CacheCollection, CacheKey, CacheManager
 from .config import ProductionConfig
+from .effects import VOICE_PREPROCESS_VERSION
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
 from .dialogue import DialogueLine, ScriptRenderRequest
@@ -467,7 +468,8 @@ class QwenTtsResource(AsyncInjectable):
             relative = voice_path.relative_to(self.config.resolved_voice_directory.resolve())
         except ValueError:
             relative = Path("external") / voice_path.relative_to(voice_path.anchor)
-        return _QWEN_PROMPT_CACHE_DIRECTORY / relative.with_suffix(
+        versioned_relative = Path(VOICE_PREPROCESS_VERSION) / relative
+        return _QWEN_PROMPT_CACHE_DIRECTORY / versioned_relative.with_suffix(
             f"{relative.suffix}.pt"
         )
 

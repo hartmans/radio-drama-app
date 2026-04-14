@@ -15,6 +15,9 @@ from .audio import normalize_audio_array
 from .expressions import coerce_array_exp, eval_expression
 
 
+VOICE_PREPROCESS_VERSION = "loudnorm-v1"
+
+
 class EffectStage(Protocol):
     """Audio transformation that mutates one production-format buffer in place."""
 

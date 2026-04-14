@@ -8,6 +8,7 @@ import numpy as np
 
 from radio_drama.cache import CacheCollection
 from radio_drama.config import ProductionConfig
+from radio_drama.effects import VOICE_PREPROCESS_VERSION
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
@@ -157,3 +158,22 @@ def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Pat
     assert payload["frame_count"] == 6
     assert payload["sample_rate"] == 24000
     assert payload["dialogue_line_start_positions"] == [0.0, 0.5]
+
+
+def test_qwentts_prompt_cache_path_includes_voice_preprocess_version(tmp_path: Path):
+    voice_directory = tmp_path / "voices"
+    voice_directory.mkdir()
+    voice_path = voice_directory / "anna.wav"
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=voice_directory),
+        )
+        try:
+            resource = await ainjector(QwenTtsResource)
+            return resource._prompt_cache_path(voice_path)
+        finally:
+            injector.close()
+
+    cache_path = asyncio.run(runner())
+    assert cache_path.parts[-2:] == (VOICE_PREPROCESS_VERSION, "anna.wav.pt")
