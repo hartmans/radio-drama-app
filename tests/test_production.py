@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 import numpy as np
+import pytest
 from carthage.dependency_injection import InjectionKey
 
 import radio_drama.effects as effects_module
@@ -11,6 +12,7 @@ from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueAudio, ScriptRenderRequest
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectPipeline
+from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.production import ProductionPlan
 from radio_drama.rendering import RenderResult
@@ -369,7 +371,7 @@ def test_production_plan_mixes_overlapping_scripts(tmp_path: Path):
                 """
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
-                  <script length="0">Anna: Line 1</script>
+                  <script length="natural_length - natural_length">Anna: Line 1</script>
                   <script>Anna: Line 2</script>
                 </production>
                 """,
@@ -383,6 +385,41 @@ def test_production_plan_mixes_overlapping_scripts(tmp_path: Path):
     plan, result = asyncio.run(runner())
     assert isinstance(plan, ProductionPlan)
     assert result.audio.tolist() == [11.0, 22.0]
+
+
+def test_script_length_expression_must_resolve_non_negative(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script length="0 - natural_length">Anna: Line 1</script>
+                </production>
+                """,
+                source_name="negative-length-expression.xml",
+            )
+            plan = await root.plan(ainjector)
+            await plan.render()
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="<script> length must be non-negative seconds"):
+        asyncio.run(runner())
 
 
 def test_production_plan_trims_audio_before_zero(tmp_path: Path):

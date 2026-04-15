@@ -538,8 +538,17 @@ def test_script_length_must_be_non_negative(tmp_path: Path):
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(voice_directory=tmp_path)
 
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+
+            return Registered()
+
     async def runner():
         injector, ainjector = await _make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -550,7 +559,8 @@ def test_script_length_must_be_non_negative(tmp_path: Path):
                 """,
                 source_name="negative-length.xml",
             )
-            await root.plan(ainjector)
+            plan = await root.plan(ainjector)
+            await plan.render()
         finally:
             injector.close()
 

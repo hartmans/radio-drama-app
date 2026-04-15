@@ -258,12 +258,7 @@ class AudioPlan(PlanningNode):
             allow_negative=True,
             allow_missing=True,
         )
-        length = cls._timing_attribute_seconds(
-            node,
-            "length",
-            allow_negative=False,
-            allow_missing=True,
-        )
+        length = cls._expression_attribute(node, "length")
         loop_beg = cls._expression_attribute(node, "loop_beg")
         loop_end = cls._expression_attribute(node, "loop_end")
         loop_until = cls._expression_attribute(node, "loop_until")
@@ -957,6 +952,10 @@ class ComposeAudioPlan(AudioPlan):
                 ),
                 attribute_name="length",
             )
+            if resolved_length < 0:
+                raise audio_plan.document_error(
+                    f"{audio_plan.node.display_name} length must be non-negative seconds"
+                )
         elif audio_plan.post_gap_expression is not None:
             post_gap = audio_plan.evaluate_expression(
                 audio_plan.post_gap_expression,
