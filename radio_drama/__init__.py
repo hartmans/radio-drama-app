@@ -11,6 +11,7 @@ from .audio import (
 from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
 from .config import ProductionConfig
 from .dialogue import (
+    AudioScriptPlan,
     DialogueContent,
     DialogueAudio,
     DialogueLine,
@@ -32,7 +33,9 @@ from .document import (
     LineNode,
     MarkNode,
     ProductionNode,
+    ScriptGapNode,
     ScriptNode,
+    SoundScriptNode,
     SpeakerMapNode,
     TextNode,
     parse_production_file,
@@ -77,6 +80,7 @@ from .vibevoice import VibeVoiceResource
 __all__ = [
     "ArrayExpression",
     "AudioPlan",
+    "AudioScriptPlan",
     "available_effect_chains",
     "build_named_effect_chain",
     "CacheCollection",
@@ -135,9 +139,11 @@ __all__ = [
     "RenderResult",
     "ScriptNode",
     "ScriptEvent",
+    "ScriptGapNode",
     "ScriptGap",
     "ScriptPlan",
     "ScriptRenderRequest",
+    "SoundScriptNode",
     "ScriptSlice",
     "SlicePlan",
     "SoundNode",

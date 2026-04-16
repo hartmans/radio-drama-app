@@ -284,6 +284,55 @@ class ScriptNode(ElementNode):
 
 
 @dataclass(slots=True)
+class ScriptGapNode(ElementNode):
+    """Document node for an explicit omitted region inside a sound-backed script."""
+
+    tag_name: ClassVar[str] = "script-gap"
+    allow_text: ClassVar[bool] = False
+
+    @property
+    def label(self) -> str:
+        raw_label = self.attributes.get("label", "")
+        return raw_label.strip()
+
+
+@dataclass(slots=True)
+class SoundScriptNode(ScriptNode):
+    """Document node for a script aligned against an authored sound asset."""
+
+    tag_name: ClassVar[str] = "sound-script"
+
+    @property
+    def ref(self) -> str:
+        raw_ref = self.attributes.get("ref")
+        if raw_ref is None:
+            raise self.error("<sound-script> requires a ref attribute")
+        normalized = raw_ref.strip()
+        if not normalized:
+            raise self.error("<sound-script> ref attribute cannot be empty")
+        return normalized
+
+    async def plan(self, ainjector):
+        from .dialogue import AudioScriptPlan
+        from .sound import SoundPlan
+
+        base_audio_plan = await ainjector(
+            SoundPlan,
+            node=self,
+            attrs=SoundPlan.attrs_from_node(self),
+        )
+        return await AudioScriptPlan.from_node(
+            ainjector,
+            self,
+            base_audio_plan=base_audio_plan,
+        )
+
+    def validate_document(self) -> None:
+        self.ref
+        return ElementNode.validate_document(self)
+
+
+@dataclass(slots=True)
 class IgnoreNode(ElementNode):
     """Document node for dialogue guidance that is rendered and discarded."""
 
@@ -343,6 +392,10 @@ class MarkNode(AttributeOrTextValueNode):
 _register_allowed_child(ScriptNode, IgnoreNode)
 _register_allowed_child(ScriptNode, GroupNode)
 _register_allowed_child(ScriptNode, LineNode)
+_register_allowed_child(SoundScriptNode, IgnoreNode)
+_register_allowed_child(SoundScriptNode, GroupNode)
+_register_allowed_child(SoundScriptNode, LineNode)
+_register_allowed_child(SoundScriptNode, ScriptGapNode)
 
 
 @dataclass(slots=True)
@@ -362,7 +415,11 @@ class ProductionNode(ElementNode):
 
     @property
     def script_nodes(self) -> list[ScriptNode]:
-        return self.child_elements_named("script")
+        return [
+            child
+            for child in self.element_children
+            if isinstance(child, ScriptNode)
+        ]
 
     async def plan(self, ainjector):
         """Plan the production in a child injector with shared production resources."""

@@ -72,6 +72,7 @@ def __getattr__(name: str):
 
         return getattr(audio, name)
     if name in {
+        "AudioScriptPlan",
         "DialogueContent",
         "DialogueAudio",
         "DialogueLine",
@@ -96,6 +97,7 @@ __all__ = [
     "AudioAttrs",
     "AudioAttrValue",
     "AudioPlan",
+    "AudioScriptPlan",
     "ComposeAudioPlan",
     "DialogueContent",
     "DialogueAudio",

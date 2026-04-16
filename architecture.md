@@ -94,13 +94,14 @@ Current plan types:
 
 * `SpeakerMapPlan` in `radio_drama.dialogue`: validates and resolves speaker names to voice references
   once ready, it registers itself in the production injector so later scripts can find it
-* `ScriptPlan` in `radio_drama.dialogue`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
+* `ScriptPlan` in `radio_drama.dialogue`: parses dialogue stanzas, normalizes a script-level render request, prepares the base audio render path during `async_ready()`, and renders either synthesized speech or another base-audio source depending on the concrete subclass
   `ScriptPlan.script_events` is the ordered authored script timeline
   `DialogueContent` is the subset of `ScriptEvent` entries that participates in synthesis or forced-alignment timing
   `DialogueLine` holds spoken text plus a handling mode such as `normal`, `ignore`, or `special`
   `ScriptGap` is a non-spoken dialogue-content boundary that tells forced alignment to resynchronize across omitted recorded material
   `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
   `DialogueAudio` is a non-dialogue `ScriptEvent` that wraps an inner `AudioPlan` such as `SoundPlan`
+* `AudioScriptPlan` in `radio_drama.dialogue`: a `ScriptPlan` whose base audio comes from another `AudioPlan` instead of a TTS resource; `sound-script` currently uses this with a wrapped `SoundPlan`
 * `SoundPlan` in `radio_drama.sound`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
 * `MarkPlan` in `radio_drama.audio`: renders zero frames of silence and introduces one named audio mark into plan composition
 * `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `ScriptEvent` timeline, and content-boundary marker frames used by script-local slicing
@@ -120,14 +121,15 @@ Current mark/cut contract:
 * `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules
 Planning rule for presets:
 
-* `ScriptNode.plan()` remains the public entry point, but `ScriptPlan.from_node()` performs most script-specific plan construction
-* a plain script produces a `ScriptPlan`
-* if a script contains `DialogueAudio` or any non-`normal` `DialogueLine`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of `ScriptSlice` plans and any inline audio plans that survive script-local filtering
-* marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.contents`, not to absolute times
+* `ScriptNode.plan()` and `SoundScriptNode.plan()` remain the public entry points, but `ScriptPlan.from_node()` performs most script-specific plan construction
+* a plain script produces a `ScriptPlan`, while `sound-script` produces an `AudioScriptPlan` backed by a `SoundPlan`
+* if a script contains `DialogueAudio`, `ScriptGap`, or any non-`normal` `DialogueLine`, planning constructs one shared `AlignedScriptSource` plus a `ComposeAudioPlan` of `ScriptSlice` plans and any inline audio plans that survive script-local filtering
+* marker indexes are assigned during `ScriptPlan.from_node()` and refer to boundaries in the original `ScriptPlan.script_events`, not to absolute times
 * `<ignore>` content is rendered as part of the dry script request but omitted from the composed output by slicing around its content boundaries
 * a `<line>` with no audio attrs is just another `normal` `DialogueLine` and merges into adjacent normal dialogue slices
 * a `<line>` whose `ScriptSlice.attrs_from_node(line_node)` result is non-empty becomes a `special` `DialogueLine`; aligned planning then emits a dedicated `ScriptSlice` for only that line, using the line node as the slice node so its audio attrs are consumed by that outermost slice
 * dialogue text parsed from `<group>` becomes `special` `DialogueLine`s whose `node` is the group node; aligned planning therefore emits one dedicated `ScriptSlice` per resulting grouped line, with the group's audio attrs consumed by each slice
+* `<script-gap>` is currently available inside `sound-script`; it creates a `ScriptGap` boundary in the authored script timeline but does not contribute spoken transcript text
 * if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
 * `preset` stays on that outermost audio plan as metadata rather than introducing another wrapper plan
 * when a `ComposeAudioPlan` renders, each child contributes its rendered audio to either the child's own preset bus or, if the child is otherwise dry, the compose node's own preset bus
@@ -136,6 +138,7 @@ Planning rule for presets:
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
+* a `sound-script` uses the same script parsing and aligned-slicing rules as `script`, but its base audio is the wrapped `SoundPlan` rather than synthesized speech
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
 

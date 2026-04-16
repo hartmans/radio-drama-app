@@ -23,7 +23,9 @@ if TYPE_CHECKING:
         GroupNode,
         IgnoreNode,
         LineNode,
+        ScriptGapNode,
         ScriptNode,
+        SoundScriptNode,
         SpeakerMapNode,
         TextNode,
     )
@@ -311,7 +313,7 @@ class ScriptPlan(AudioPlan):
         return f"ScriptPlan(line={line})"
 
     async def async_ready(self):
-        """Normalize dialogue and register the request with the shared resource."""
+        """Normalize dialogue and prepare the base audio render path."""
 
         self.speaker_map_plan = self._require_speaker_map_plan()
         self.script_events = await self._parse_script_events()
@@ -325,8 +327,7 @@ class ScriptPlan(AudioPlan):
                 dialogue_contents=list(self.dialogue_contents),
                 first_words=first_words,
             )
-        resource = await self.ainjector.get_instance_async(self._tts_resource_type())
-        self._registered_request = await resource.register_request(self.render_request)
+        await self.register_render_request()
         return await super().async_ready()
 
     def _tts_resource_type(self):
@@ -346,11 +347,18 @@ class ScriptPlan(AudioPlan):
             )
         return provider_injector.get_instance(SpeakerMapPlan)
 
-    async def render_node(self) -> RenderResult:
+    async def register_render_request(self) -> None:
+        resource = await self.ainjector.get_instance_async(self._tts_resource_type())
+        self._registered_request = await resource.register_request(self.render_request)
+
+    async def render_base_audio(self) -> RenderResult:
         return await self._registered_request.render()
 
+    async def render_node(self) -> RenderResult:
+        return await self.render_base_audio()
+
     async def layout_node(self) -> None:
-        result = await self._registered_request.render()
+        result = await self.render_base_audio()
         self._raw_inner_last = self._frames_to_seconds(result.frame_count)
         self._raw_length = self._raw_inner_last
 
@@ -363,12 +371,13 @@ class ScriptPlan(AudioPlan):
         return [content for content in self.script_events if isinstance(content, DialogueAudio)]
 
     @classmethod
-    async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
+    async def from_node(cls, ainjector, node: ScriptNode, **kwargs) -> AudioPlan:
         node.tts
         script_plan = await ainjector(
             cls,
             node=node,
             attrs={} if node.element_children else None,
+            **kwargs,
         )
         audio_plan: AudioPlan = script_plan
 
@@ -475,7 +484,7 @@ class ScriptPlan(AudioPlan):
         return "ignored script"
 
     async def _parse_script_events(self) -> list[ScriptEvent]:
-        from .document import GroupNode, IgnoreNode, LineNode, TextNode
+        from .document import GroupNode, IgnoreNode, LineNode, ScriptGapNode, TextNode
         from .forced_alignment import ScriptSlice
 
         contents: list[ScriptEvent] = []
@@ -520,6 +529,9 @@ class ScriptPlan(AudioPlan):
                         node=child if handling == "special" else None,
                     )
                 )
+                continue
+            if isinstance(child, ScriptGapNode):
+                contents.append(ScriptGap(label=child.label))
                 continue
             contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
         flush_pending_text()
@@ -661,7 +673,27 @@ class ScriptPlan(AudioPlan):
         return label[:40] or "empty-script"
 
 
+@inject(config=ProductionConfig)
+class AudioScriptPlan(ScriptPlan):
+    """Script plan whose base audio comes from another ``AudioPlan``."""
+
+    def __init__(self, node: SoundScriptNode, *, base_audio_plan: AudioPlan, **kwargs) -> None:
+        super().__init__(node=node, **kwargs)
+        self.base_audio_plan = base_audio_plan
+
+    def child_plans(self) -> Sequence[PlanningNode]:
+        return (self.base_audio_plan,)
+
+    async def register_render_request(self) -> None:
+        self._registered_request = None
+
+    async def render_base_audio(self) -> RenderResult:
+        await self.base_audio_plan.layout()
+        return await self.base_audio_plan.render()
+
+
 __all__ = [
+    "AudioScriptPlan",
     "DialogueContent",
     "DialogueAudio",
     "DialogueLine",

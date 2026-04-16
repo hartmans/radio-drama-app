@@ -9,7 +9,7 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.audio import ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderRequest
+from radio_drama.dialogue import AudioScriptPlan, DialogueAudio, DialogueLine, ScriptGap, ScriptRenderRequest
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
@@ -330,6 +330,146 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
     )
     assert sound_result.frame_count == 0
     assert sound_result.channel_count == 2
+
+
+def test_sound_script_renders_wrapped_sound_without_tts_registration(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+    base_audio = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            raise AssertionError("sound-script should not register a speech render request")
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=base_audio))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <sound-script ref="door" from="natural_length / 2">
+                    Anna: Transcript only.
+                  </sound-script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
+            script_plan = await root.script_nodes[0].plan(ainjector)
+            return script_plan, await script_plan.render()
+        finally:
+            injector.close()
+
+    script_plan, render_result = asyncio.run(runner())
+    assert isinstance(script_plan, AudioScriptPlan)
+    assert render_result.audio.tolist() == pytest.approx([0.3, 0.4])
+
+
+def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+    base_audio = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            raise AssertionError("sound-script should not register a speech render request")
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            assert result.audio.tolist() == pytest.approx(base_audio.tolist())
+            assert [type(content).__name__ for content in contents] == [
+                "DialogueLine",
+                "ScriptGap",
+                "DialogueLine",
+            ]
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueLine):
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            node=content.node,
+                            start_pos=0.0 if not updated else 0.5,
+                        )
+                    )
+                else:
+                    updated.append(ScriptGap(label=content.label, start_pos=0.25))
+            return updated
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=base_audio))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <sound-script ref="door">
+                    Anna: Before the missing material.
+                    <script-gap />
+                    Anna: After the missing material.
+                  </sound-script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
+            production_plan = await root.plan(ainjector)
+            audio_plan = production_plan.audio_plans[0]
+            first_slice = audio_plan.audio_plans[0]
+            return audio_plan, await first_slice.aligned_script_source.render()
+        finally:
+            injector.close()
+
+    audio_plan, aligned_result = asyncio.run(runner())
+    assert isinstance(audio_plan, ComposeAudioPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == ["ScriptSlice", "ScriptSlice"]
+    assert isinstance(audio_plan.audio_plans[0].aligned_script_source.script_plan, AudioScriptPlan)
+    assert [type(content).__name__ for content in aligned_result.contents] == [
+        "DialogueLine",
+        "ScriptGap",
+        "DialogueLine",
+    ]
+    assert [content.start_pos for content in aligned_result.contents] == [0.0, 0.25, 0.5]
 
 
 def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):

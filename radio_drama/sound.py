@@ -131,7 +131,7 @@ class SoundPlan(AudioPlan):
 
     def __init__(
         self,
-        node: SoundNode | None,
+        node,
         sound_cache: NormalizedSoundCache | None = None,
         **kwargs,
     ) -> None:
@@ -228,7 +228,7 @@ class SoundPlan(AudioPlan):
         provider_injector = self.ainjector.injector.injector_containing(ProductionDocumentPath)
         if provider_injector is None:
             raise self.document_error(
-                "Relative <sound> references require a production document path in the injector"
+                "Relative sound references require a production document path in the injector"
             )
         return provider_injector.get_instance(ProductionDocumentPath).path
 
