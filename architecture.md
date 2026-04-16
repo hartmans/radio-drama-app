@@ -129,7 +129,7 @@ Planning rule for presets:
 * a `<line>` with no audio attrs is just another `normal` `DialogueLine` and merges into adjacent normal dialogue slices
 * a `<line>` whose `ScriptSlice.attrs_from_node(line_node)` result is non-empty becomes a `special` `DialogueLine`; aligned planning then emits a dedicated `ScriptSlice` for only that line, using the line node as the slice node so its audio attrs are consumed by that outermost slice
 * dialogue text parsed from `<group>` becomes `special` `DialogueLine`s whose `node` is the group node; aligned planning therefore emits one dedicated `ScriptSlice` per resulting grouped line, with the group's audio attrs consumed by each slice
-* `<script-gap>` is currently available inside `sound-script`; it creates a `ScriptGap` boundary in the authored script timeline but does not contribute spoken transcript text
+* `<script-gap>` is currently available inside `sound-script`; it creates a `ScriptGap` boundary in the authored script timeline, does not contribute spoken transcript text, and does not by itself remove any base-audio interval from the composed output
 * if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
 * `preset` stays on that outermost audio plan as metadata rather than introducing another wrapper plan
 * when a `ComposeAudioPlan` renders, each child contributes its rendered audio to either the child's own preset bus or, if the child is otherwise dry, the compose node's own preset bus

@@ -416,6 +416,21 @@ class ScriptPlan(AudioPlan):
                 content_index += 1
                 continue
             if isinstance(content, ScriptGap):
+                end_index = script_plan.advance_normal_dialogue_slice_end(content_index)
+                if end_index > content_index:
+                    audio_plans.append(
+                        await ainjector(
+                            ScriptSlice,
+                            node=node,
+                            attrs={},
+                            aligned_script_source=aligned_script_source,
+                            start_marker=content_index,
+                            end_marker=end_index,
+                            name=cls._script_slice_name(script_plan.script_events, content_index),
+                        )
+                    )
+                    content_index = end_index
+                    continue
                 content_index += 1
                 continue
             if content.handling == "special":
@@ -646,6 +661,9 @@ class ScriptPlan(AudioPlan):
             content = self.script_events[index]
             if isinstance(content, DialogueAudio):
                 break
+            if isinstance(content, ScriptGap):
+                index += 1
+                continue
             if not isinstance(content, DialogueLine) or content.handling != "normal":
                 break
             index += 1

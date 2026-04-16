@@ -456,13 +456,13 @@ def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
             first_slice = audio_plan.audio_plans[0]
-            return audio_plan, await first_slice.aligned_script_source.render()
+            return audio_plan, await first_slice.aligned_script_source.render(), await audio_plan.render()
         finally:
             injector.close()
 
-    audio_plan, aligned_result = asyncio.run(runner())
+    audio_plan, aligned_result, render_result = asyncio.run(runner())
     assert isinstance(audio_plan, ComposeAudioPlan)
-    assert [type(child).__name__ for child in audio_plan.audio_plans] == ["ScriptSlice", "ScriptSlice"]
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == ["ScriptSlice"]
     assert isinstance(audio_plan.audio_plans[0].aligned_script_source.script_plan, AudioScriptPlan)
     assert [type(content).__name__ for content in aligned_result.contents] == [
         "DialogueLine",
@@ -470,6 +470,7 @@ def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
         "DialogueLine",
     ]
     assert [content.start_pos for content in aligned_result.contents] == [0.0, 0.25, 0.5]
+    assert render_result.audio.tolist() == pytest.approx(base_audio.tolist())
 
 
 def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
