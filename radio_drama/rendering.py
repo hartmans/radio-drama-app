@@ -68,7 +68,7 @@ class ScriptRenderResult(RenderResult):
     """Rendered script audio plus optional per-dialogue-line start positions.
 
     ``dialogue_line_start_positions`` uses the same units and coordinate system
-    as ``DialogueContents.start_pos``: seconds in the rendered script timeline.
+    as ``ScriptEvent.start_pos``: seconds in the rendered script timeline.
     The tuple is parallel to the script's ``DialogueLine`` sequence and may be
     omitted when the backend cannot provide native line timing metadata.
     """

@@ -87,8 +87,11 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
             injector.close()
 
     script_plan = asyncio.run(runner())
-    assert len(script_plan.dialogue_lines) == 1
-    assert script_plan.dialogue_lines[0].spoken_text == (
+    dialogue_lines = [
+        content for content in script_plan.dialogue_contents if isinstance(content, DialogueLine)
+    ]
+    assert len(dialogue_lines) == 1
+    assert dialogue_lines[0].spoken_text == (
         "First sentence. Continued line. Another paragraph."
     )
 
@@ -288,7 +291,7 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
             first_slice = audio_plan.audio_plans[0]
             dialogue_audio = next(
                 content
-                for content in first_slice.aligned_script_source.script_plan.contents
+                for content in first_slice.aligned_script_source.script_plan.script_events
                 if isinstance(content, DialogueAudio)
             )
             sound_result = await dialogue_audio.audio_plan.render()
@@ -309,12 +312,16 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
     assert isinstance(second_slice, ScriptSlice)
     assert first_slice.aligned_script_source is second_slice.aligned_script_source
     assert isinstance(first_slice.aligned_script_source, AlignedScriptSource)
-    assert [type(content).__name__ for content in first_slice.aligned_script_source.script_plan.contents] == [
+    assert [type(content).__name__ for content in first_slice.aligned_script_source.script_plan.script_events] == [
         "DialogueLine",
         "DialogueAudio",
         "DialogueLine",
     ]
-    assert [line.spoken_text for line in first_slice.aligned_script_source.script_plan.dialogue_lines] == [
+    assert [
+        content.spoken_text
+        for content in first_slice.aligned_script_source.script_plan.dialogue_contents
+        if isinstance(content, DialogueLine)
+    ] == [
         "First line.",
         "Response.",
     ]

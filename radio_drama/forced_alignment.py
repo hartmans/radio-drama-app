@@ -19,7 +19,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .audio import resample_audio
 from .config import ProductionConfig
 from .debug import write_debug_json, write_debug_message
-from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
+from .dialogue import DialogueAudio, DialogueContent, DialogueLine, ScriptEvent, ScriptGap, ScriptPlan
 from .model_loading import shared_model_load
 from .audio import AudioPlan
 from .planning import PlanningNode
@@ -86,7 +86,7 @@ class AlignedScriptResult:
 
     render_result: RenderResult
     marker_frames: tuple[int, ...]
-    contents: tuple[DialogueContents, ...]
+    contents: tuple[ScriptEvent, ...]
 
 
 @dataclass(slots=True)
@@ -134,9 +134,9 @@ class WhisperXResource(AsyncInjectable):
 
     async def fill_start_positions(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
-    ) -> list[DialogueContents]:
+    ) -> list[ScriptEvent]:
         if not any(isinstance(content, DialogueLine) for content in contents):
             return copy_dialogue_contents(contents)
 
@@ -446,7 +446,7 @@ class AlignedScriptSource(PlanningNode):
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.script_plan = script_plan
-        self.contents: list[DialogueContents] = copy_dialogue_contents(script_plan.contents)
+        self.contents: list[ScriptEvent] = copy_dialogue_contents(script_plan.script_events)
 
     def child_plans(self) -> Iterable[PlanningNode]:
         return (self.script_plan,)
@@ -458,7 +458,7 @@ class AlignedScriptSource(PlanningNode):
             and base_result.dialogue_line_start_positions is not None
         ):
             self.contents = fill_start_positions_from_rendered_script(
-                self.script_plan.contents,
+                self.script_plan.script_events,
                 base_result.dialogue_line_start_positions,
                 duration_seconds=_audio_duration(
                     base_result.audio,
@@ -467,7 +467,10 @@ class AlignedScriptSource(PlanningNode):
             )
         else:
             resource = await self.ainjector.get_instance_async(WhisperXResource)
-            self.contents = await resource.fill_start_positions(self.script_plan.contents, base_result)
+            self.contents = await resource.fill_start_positions(
+                self.script_plan.script_events,
+                base_result,
+            )
         for content in self.contents:
             if not isinstance(content, DialogueLine):
                 continue
@@ -561,8 +564,8 @@ class ScriptSlice(AudioPlan):
         )
 
 
-def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[DialogueContents]:
-    copied: list[DialogueContents] = []
+def copy_dialogue_contents(contents: Sequence[ScriptEvent]) -> list[ScriptEvent]:
+    copied: list[ScriptEvent] = []
     for content in contents:
         if isinstance(content, DialogueLine):
             copied.append(
@@ -574,40 +577,51 @@ def copy_dialogue_contents(contents: Sequence[DialogueContents]) -> list[Dialogu
                     start_pos=content.start_pos,
                 )
             )
+        elif isinstance(content, ScriptGap):
+            copied.append(
+                ScriptGap(
+                    label=content.label,
+                    start_pos=content.start_pos,
+                )
+            )
         else:
             copied.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=content.start_pos))
     return copied
 
 
 def fill_start_positions_from_alignment(
-    contents: Sequence[DialogueContents],
+    contents: Sequence[ScriptEvent],
     alignment: AlignmentResult,
-) -> list[DialogueContents]:
+) -> list[ScriptEvent]:
     copied_contents = copy_dialogue_contents(contents)
-    dialogue_lines = [content for content in copied_contents if isinstance(content, DialogueLine)]
-    raw_line_spans = _line_spans_from_alignment(dialogue_lines, alignment)
-    stabilized_line_spans = _stabilize_line_spans(raw_line_spans)
+    dialogue_contents = [content for content in copied_contents if isinstance(content, DialogueContent)]
+    raw_dialogue_spans = _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
+    stabilized_dialogue_spans = _stabilize_line_spans(raw_dialogue_spans)
 
-    line_index = 0
+    content_index = 0
     for content in copied_contents:
-        if isinstance(content, DialogueLine):
-            start_pos, _ = raw_line_spans[line_index]
+        if isinstance(content, DialogueContent):
+            start_pos, _ = raw_dialogue_spans[content_index]
             content.start_pos = cast_float(start_pos) if start_pos is not None else math.nan
-            line_index += 1
+            content_index += 1
 
     for index, content in enumerate(copied_contents):
         if isinstance(content, DialogueAudio):
-            content.start_pos = _dialogue_audio_start_pos(copied_contents, stabilized_line_spans, index)
+            content.start_pos = _dialogue_audio_start_pos(
+                copied_contents,
+                stabilized_dialogue_spans,
+                index,
+            )
 
     return copied_contents
 
 
 def fill_start_positions_from_rendered_script(
-    contents: Sequence[DialogueContents],
+    contents: Sequence[ScriptEvent],
     dialogue_line_start_positions: Sequence[float],
     *,
     duration_seconds: float,
-) -> list[DialogueContents]:
+) -> list[ScriptEvent]:
     copied_contents = copy_dialogue_contents(contents)
     dialogue_lines = [content for content in copied_contents if isinstance(content, DialogueLine)]
     if len(dialogue_lines) != len(dialogue_line_start_positions):
@@ -622,15 +636,30 @@ def fill_start_positions_from_rendered_script(
         next_start = duration_seconds if index + 1 >= len(line_starts) else line_starts[index + 1]
         line_spans.append((line.start_pos, next_start))
 
+    dialogue_contents = [content for content in copied_contents if isinstance(content, DialogueContent)]
+    dialogue_content_spans = _merge_dialogue_content_spans(dialogue_contents, line_spans)
+    stabilized_dialogue_spans = _stabilize_line_spans(dialogue_content_spans)
+
+    content_index = 0
+    for content in copied_contents:
+        if isinstance(content, DialogueContent):
+            start_pos, _ = dialogue_content_spans[content_index]
+            content.start_pos = cast_float(start_pos) if start_pos is not None else math.nan
+            content_index += 1
+
     for index, content in enumerate(copied_contents):
         if isinstance(content, DialogueAudio):
-            content.start_pos = _dialogue_audio_start_pos(copied_contents, line_spans, index)
+            content.start_pos = _dialogue_audio_start_pos(
+                copied_contents,
+                stabilized_dialogue_spans,
+                index,
+            )
 
     return copied_contents
 
 
 def _marker_frames_from_contents(
-    contents: Sequence[DialogueContents],
+    contents: Sequence[ScriptEvent],
     *,
     frame_count: int,
     sample_rate: int,
@@ -659,7 +688,7 @@ def _marker_frames_from_contents(
 
 
 def _boundary_info_for_marker(
-    contents: Sequence[DialogueContents],
+    contents: Sequence[ScriptEvent],
     marker_index: int,
 ) -> tuple[float, str] | None:
     if marker_index <= 0 or marker_index >= len(contents):
@@ -724,6 +753,97 @@ def _line_spans_from_alignment(
     return spans
 
 
+def _dialogue_content_spans_from_alignment(
+    dialogue_contents: Sequence[DialogueContent],
+    alignment: AlignmentResult,
+) -> list[tuple[float | None, float | None]]:
+    dialogue_lines = [content for content in dialogue_contents if isinstance(content, DialogueLine)]
+    if not dialogue_lines:
+        return [(None, None) for _ in dialogue_contents]
+    if any(isinstance(content, ScriptGap) for content in dialogue_contents):
+        line_spans = _line_spans_from_alignment_segments(dialogue_contents, alignment)
+    else:
+        line_spans = _line_spans_from_alignment(dialogue_lines, alignment)
+    return _merge_dialogue_content_spans(dialogue_contents, line_spans)
+
+
+def _merge_dialogue_content_spans(
+    dialogue_contents: Sequence[DialogueContent],
+    line_spans: Sequence[tuple[float | None, float | None]],
+) -> list[tuple[float | None, float | None]]:
+    spans: list[tuple[float | None, float | None]] = [(None, None)] * len(dialogue_contents)
+    line_index = 0
+    for content_index, content in enumerate(dialogue_contents):
+        if isinstance(content, DialogueLine):
+            spans[content_index] = line_spans[line_index]
+            line_index += 1
+
+    if line_index != len(line_spans):
+        raise RuntimeError("Dialogue content spans did not consume all dialogue line spans")
+
+    for content_index, content in enumerate(dialogue_contents):
+        if not isinstance(content, ScriptGap):
+            continue
+        previous_end = next(
+            (
+                spans[index][1]
+                for index in range(content_index - 1, -1, -1)
+                if isinstance(dialogue_contents[index], DialogueLine) and spans[index][1] is not None
+            ),
+            None,
+        )
+        next_start = next(
+            (
+                spans[index][0]
+                for index in range(content_index + 1, len(dialogue_contents))
+                if isinstance(dialogue_contents[index], DialogueLine) and spans[index][0] is not None
+            ),
+            None,
+        )
+        spans[content_index] = (previous_end, next_start)
+
+    return spans
+
+
+def _line_spans_from_alignment_segments(
+    dialogue_contents: Sequence[DialogueContent],
+    alignment: AlignmentResult,
+) -> list[tuple[float | None, float | None]]:
+    aligned_tokens = _aligned_word_tokens(alignment.words)
+    aligned_token_index = _aligned_token_positions_by_text(aligned_tokens)
+    word_search_index = 0
+    spans: list[tuple[float | None, float | None]] = []
+    pending_line_tokens: list[tuple[str, ...]] = []
+
+    def flush_pending_block(start_index: int) -> int:
+        next_index = start_index
+        for line_tokens in pending_line_tokens:
+            start_time: float | None = None
+            end_time: float | None = None
+            matched_word_span = _match_line_in_aligned_tokens(
+                line_tokens,
+                aligned_tokens,
+                aligned_token_index,
+                start_index=next_index,
+            )
+            if matched_word_span is not None:
+                start_time, end_time, next_index = matched_word_span
+            spans.append((start_time, end_time))
+        pending_line_tokens.clear()
+        return next_index
+
+    for content in dialogue_contents:
+        if isinstance(content, DialogueLine):
+            pending_line_tokens.append(tuple(_normalized_tokens(content.spoken_text)))
+            continue
+        if pending_line_tokens:
+            word_search_index = flush_pending_block(word_search_index)
+
+    if pending_line_tokens:
+        word_search_index = flush_pending_block(word_search_index)
+    return spans
+
+
 def _stabilize_line_spans(
     spans: Sequence[tuple[float | None, float | None]],
 ) -> list[tuple[float, float]]:
@@ -749,23 +869,23 @@ def _stabilize_line_spans(
 
 
 def _dialogue_audio_start_pos(
-    contents: Sequence[DialogueContents],
-    line_spans: Sequence[tuple[float, float]],
+    contents: Sequence[ScriptEvent],
+    dialogue_content_spans: Sequence[tuple[float, float]],
     audio_index: int,
 ) -> float:
     previous_end: float | None = None
     next_start: float | None = None
 
-    line_counter = 0
+    content_counter = 0
     for index, content in enumerate(contents):
-        if isinstance(content, DialogueLine):
-            start, end = line_spans[line_counter]
+        if isinstance(content, DialogueContent):
+            start, end = dialogue_content_spans[content_counter]
             if index < audio_index:
                 previous_end = end
             elif index > audio_index and next_start is None:
                 next_start = start
                 break
-            line_counter += 1
+            content_counter += 1
 
     if previous_end is not None and next_start is not None:
         return (previous_end + next_start) / 2.0
@@ -1306,9 +1426,11 @@ def _debug_line_preview(text: str) -> str:
     return f"{normalized[:30]!r} ... {normalized[-30:]!r}"
 
 
-def _content_debug_label(content: DialogueContents) -> str:
+def _content_debug_label(content: ScriptEvent) -> str:
     if isinstance(content, DialogueLine):
         return _debug_line_preview(content.spoken_text)
+    if isinstance(content, ScriptGap):
+        return content.label or "script gap"
     return repr(content.audio_plan)
 
 

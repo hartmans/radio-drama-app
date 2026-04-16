@@ -14,7 +14,7 @@ import soundfile as sf
 
 from .audio import resample_audio
 from .cli import build_injector_from_namespace, initialize_arg_parser
-from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptPlan
+from .dialogue import DialogueAudio, DialogueLine, ScriptEvent, ScriptPlan
 from .document import parse_production_file
 from .errors import DocumentError
 from .forced_alignment import AlignedScriptSource
@@ -36,7 +36,7 @@ def _sanitize_path_component(text: str) -> str:
 
 
 def _boundary_is_reliable(
-    contents: list[DialogueContents] | tuple[DialogueContents, ...],
+    contents: list[ScriptEvent] | tuple[ScriptEvent, ...],
     marker_index: int,
 ) -> bool:
     if marker_index <= 0 or marker_index >= len(contents):
@@ -48,7 +48,7 @@ def _boundary_is_reliable(
 
 
 def chunk_training_intervals(
-    contents: list[DialogueContents] | tuple[DialogueContents, ...],
+    contents: list[ScriptEvent] | tuple[ScriptEvent, ...],
 ) -> list[TrainingChunk]:
     reliable_markers = [0]
     reliable_markers.extend(

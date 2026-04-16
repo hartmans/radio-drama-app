@@ -10,7 +10,14 @@ from typing import Callable, Sequence
 import numpy as np
 
 from .audio import convert_audio_format
-from .dialogue import DialogueAudio, DialogueContents, DialogueLine, ScriptRenderRequest
+from .dialogue import (
+    DialogueAudio,
+    DialogueContent,
+    DialogueLine,
+    ScriptEvent,
+    ScriptGap,
+    ScriptRenderRequest,
+)
 from .forced_alignment import WhisperXResource, copy_dialogue_contents
 from .qwen_tts import QwenTtsResource
 from .rendering import RenderResult, ScriptRenderResult
@@ -394,9 +401,9 @@ class CachedWhisperXResource(WhisperXResource):
 
     async def fill_start_positions(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
-    ) -> list[DialogueContents]:
+    ) -> list[ScriptEvent]:
         metadata = self._load_cached_metadata(contents, result)
         if metadata is None:
             if self.mode == "cache":
@@ -413,16 +420,16 @@ class CachedWhisperXResource(WhisperXResource):
 
     async def _live_fill_start_positions(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
-    ) -> list[DialogueContents]:
+    ) -> list[ScriptEvent]:
         return await super().fill_start_positions(contents, result)
 
     def _apply_cached_metadata(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         metadata: CachedForcedAlignmentMetadata,
-    ) -> list[DialogueContents]:
+    ) -> list[ScriptEvent]:
         copied = copy_dialogue_contents(contents)
         if len(copied) != len(metadata.start_positions):
             raise MissingCachedForcedAlignmentMetadata(
@@ -434,7 +441,7 @@ class CachedWhisperXResource(WhisperXResource):
 
     def _load_cached_metadata(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
     ) -> CachedForcedAlignmentMetadata | None:
         cache_path = self.cache_directory / f"{self._cache_key(contents, result)}.json"
@@ -447,7 +454,7 @@ class CachedWhisperXResource(WhisperXResource):
 
     def _store_cached_metadata(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
         metadata: CachedForcedAlignmentMetadata,
     ) -> None:
@@ -460,7 +467,7 @@ class CachedWhisperXResource(WhisperXResource):
 
     def _cache_key(
         self,
-        contents: Sequence[DialogueContents],
+        contents: Sequence[ScriptEvent],
         result: RenderResult,
     ) -> str:
         payload = json.dumps(
@@ -480,7 +487,7 @@ class CachedWhisperXResource(WhisperXResource):
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _serialize_dialogue_content(content: DialogueContents) -> dict[str, object]:
+def _serialize_dialogue_content(content: ScriptEvent) -> dict[str, object]:
     if isinstance(content, DialogueLine):
         return {
             "type": "line",
@@ -489,6 +496,11 @@ def _serialize_dialogue_content(content: DialogueContents) -> dict[str, object]:
             "handling": content.handling,
             "node": getattr(content.node, "display_name", None),
             "attributes": getattr(content.node, "attributes", {}),
+        }
+    if isinstance(content, ScriptGap):
+        return {
+            "type": "gap",
+            "label": content.label,
         }
     audio_node = getattr(content.audio_plan, "node", None)
     return {

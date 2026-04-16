@@ -11,9 +11,11 @@ from .audio import (
 from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
 from .config import ProductionConfig
 from .dialogue import (
+    DialogueContent,
     DialogueAudio,
-    DialogueContents,
     DialogueLine,
+    ScriptEvent,
+    ScriptGap,
     ScriptPlan,
     ScriptRenderRequest,
     SpeakerMapPlan,
@@ -82,8 +84,8 @@ __all__ = [
     "CacheManager",
     "CachableResource",
     "ComposeAudioPlan",
+    "DialogueContent",
     "DialogueAudio",
-    "DialogueContents",
     "AudioPlanContext",
     "AttributeOrTextValueNode",
     "coerce_array_exp",
@@ -132,6 +134,8 @@ __all__ = [
     "radio_drama_injector",
     "RenderResult",
     "ScriptNode",
+    "ScriptEvent",
+    "ScriptGap",
     "ScriptPlan",
     "ScriptRenderRequest",
     "ScriptSlice",

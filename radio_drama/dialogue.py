@@ -42,8 +42,8 @@ class SpeakerVoiceReference:
 
 
 @dataclass(slots=True)
-class DialogueContents:
-    """One ordered item inside a script, later addressable by aligned time.
+class ScriptEvent:
+    """One ordered authored event inside a script timeline.
 
     ``start_pos`` is measured in seconds in the rendered script timeline.
     It may remain ``NaN`` until alignment or backend-native script timing data
@@ -54,7 +54,12 @@ class DialogueContents:
 
 
 @dataclass(slots=True)
-class DialogueLine(DialogueContents):
+class DialogueContent(ScriptEvent):
+    """Script event that affects speech synthesis or forced alignment."""
+
+
+@dataclass(slots=True)
+class DialogueLine(DialogueContent):
     """Normalized dialogue stanza belonging to one resolved speaker."""
 
     speaker: SpeakerVoiceReference
@@ -63,7 +68,14 @@ class DialogueLine(DialogueContents):
     node: DocumentNode | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
+class ScriptGap(DialogueContent):
+    """Explicit omitted region where forced alignment should resynchronize."""
+
+    label: str = ""
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ScriptRenderRequest:
     """Semantic render request sent to a speech resource.
 
@@ -72,8 +84,28 @@ class ScriptRenderRequest:
     when deriving cache filenames and adjacent JSON metadata.
     """
 
-    dialogue_lines: list[DialogueLine]
+    dialogue_contents: list[DialogueContent]
     first_words: str = ""
+
+    def __init__(
+        self,
+        dialogue_contents: Sequence[DialogueContent] | None = None,
+        *,
+        dialogue_lines: Sequence[DialogueLine] | None = None,
+        first_words: str = "",
+    ) -> None:
+        if dialogue_contents is None:
+            dialogue_contents = [] if dialogue_lines is None else list(dialogue_lines)
+        elif dialogue_lines is not None:
+            raise TypeError("Specify either dialogue_contents or dialogue_lines, not both")
+        object.__setattr__(self, "dialogue_contents", list(dialogue_contents))
+        object.__setattr__(self, "first_words", first_words)
+
+    @property
+    def dialogue_lines(self) -> list[DialogueLine]:
+        return [
+            content for content in self.dialogue_contents if isinstance(content, DialogueLine)
+        ]
 
     def cache_first_words(self) -> str:
         """Return the human-authored cache label prior to filename sanitization."""
@@ -131,7 +163,7 @@ class ScriptRenderRequest:
 
 
 @dataclass(slots=True)
-class DialogueAudio(DialogueContents):
+class DialogueAudio(ScriptEvent):
     """Inline zero-duration audio insertion point within a script."""
 
     audio_plan: AudioPlan
@@ -259,14 +291,17 @@ class ScriptPlan(AudioPlan):
     def __init__(self, node: ScriptNode, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
         self.speaker_map_plan: SpeakerMapPlan | None = None
-        self.contents: list[DialogueContents] = []
+        self.script_events: list[ScriptEvent] = []
         self.ordered_speakers: list[SpeakerVoiceReference] = []
         self.render_request: ScriptRenderRequest | None = None
         self._registered_request = None
 
     def __repr__(self) -> str:
         line = self.node.location.line
-        first_words = self._preferred_first_words(self.dialogue_lines)
+        dialogue_lines = [
+            content for content in self.dialogue_contents if isinstance(content, DialogueLine)
+        ]
+        first_words = self._preferred_first_words(dialogue_lines)
         if line is None:
             if first_words:
                 return f"ScriptPlan(line=unknown, first_words={first_words!r})"
@@ -279,12 +314,15 @@ class ScriptPlan(AudioPlan):
         """Normalize dialogue and register the request with the shared resource."""
 
         self.speaker_map_plan = self._require_speaker_map_plan()
-        self.contents = await self._parse_contents()
-        self.ordered_speakers = self._ordered_unique_speakers(self.dialogue_lines)
-        if self.dialogue_lines:
-            first_words = self._preferred_first_words(self.dialogue_lines)
+        self.script_events = await self._parse_script_events()
+        dialogue_lines = [
+            content for content in self.dialogue_contents if isinstance(content, DialogueLine)
+        ]
+        self.ordered_speakers = self._ordered_unique_speakers(dialogue_lines)
+        if self.dialogue_contents:
+            first_words = self._preferred_first_words(dialogue_lines)
             self.render_request = ScriptRenderRequest(
-                dialogue_lines=list(self.dialogue_lines),
+                dialogue_contents=list(self.dialogue_contents),
                 first_words=first_words,
             )
         resource = await self.ainjector.get_instance_async(self._tts_resource_type())
@@ -317,12 +355,12 @@ class ScriptPlan(AudioPlan):
         self._raw_length = self._raw_inner_last
 
     @property
-    def dialogue_lines(self) -> list[DialogueLine]:
-        return [content for content in self.contents if isinstance(content, DialogueLine)]
+    def dialogue_contents(self) -> list[DialogueContent]:
+        return [content for content in self.script_events if isinstance(content, DialogueContent)]
 
     @property
     def dialogue_audios(self) -> list[DialogueAudio]:
-        return [content for content in self.contents if isinstance(content, DialogueAudio)]
+        return [content for content in self.script_events if isinstance(content, DialogueAudio)]
 
     @classmethod
     async def from_node(cls, ainjector, node: ScriptNode) -> AudioPlan:
@@ -362,10 +400,13 @@ class ScriptPlan(AudioPlan):
         audio_plans: list[AudioPlan] = []
         content_index = 0
 
-        while content_index < len(script_plan.contents):
-            content = script_plan.contents[content_index]
+        while content_index < len(script_plan.script_events):
+            content = script_plan.script_events[content_index]
             if isinstance(content, DialogueAudio):
                 audio_plans.append(content.audio_plan)
+                content_index += 1
+                continue
+            if isinstance(content, ScriptGap):
                 content_index += 1
                 continue
             if content.handling == "special":
@@ -393,7 +434,7 @@ class ScriptPlan(AudioPlan):
                     aligned_script_source=aligned_script_source,
                     start_marker=content_index,
                     end_marker=end_index,
-                    name=cls._script_slice_name(script_plan.contents, content_index),
+                    name=cls._script_slice_name(script_plan.script_events, content_index),
                 )
             )
             content_index = end_index
@@ -405,8 +446,8 @@ class ScriptPlan(AudioPlan):
                     node=node,
                     attrs={},
                     aligned_script_source=aligned_script_source,
-                    start_marker=len(script_plan.contents),
-                    end_marker=len(script_plan.contents),
+                    start_marker=len(script_plan.script_events),
+                    end_marker=len(script_plan.script_events),
                     name="ignored script",
                 )
             )
@@ -419,23 +460,25 @@ class ScriptPlan(AudioPlan):
 
     @staticmethod
     def _script_slice_name(
-        contents: Sequence[DialogueContents],
+        script_events: Sequence[ScriptEvent],
         marker_index: int,
     ) -> str:
-        if marker_index >= len(contents):
+        if marker_index >= len(script_events):
             return "script end"
-        for content in contents[marker_index:]:
+        for content in script_events[marker_index:]:
             if isinstance(content, DialogueLine) and content.handling == "normal":
                 return content.spoken_text[:30]
+            if isinstance(content, ScriptGap):
+                return content.label[:30] or "script gap"
             if isinstance(content, DialogueAudio):
                 return repr(content.audio_plan)
         return "ignored script"
 
-    async def _parse_contents(self) -> list[DialogueContents]:
+    async def _parse_script_events(self) -> list[ScriptEvent]:
         from .document import GroupNode, IgnoreNode, LineNode, TextNode
         from .forced_alignment import ScriptSlice
 
-        contents: list[DialogueContents] = []
+        contents: list[ScriptEvent] = []
         pending_text: list[str] = []
 
         def flush_pending_text() -> None:
@@ -560,20 +603,21 @@ class ScriptPlan(AudioPlan):
     def needs_forced_alignment(self) -> bool:
         return any(
             isinstance(content, DialogueAudio)
+            or isinstance(content, ScriptGap)
             or (isinstance(content, DialogueLine) and content.handling != "normal")
-            for content in self.contents
+            for content in self.script_events
         )
 
     def next_non_audio_index(self, start_index: int) -> int:
         index = start_index
-        while index < len(self.contents) and isinstance(self.contents[index], DialogueAudio):
+        while index < len(self.script_events) and isinstance(self.script_events[index], DialogueAudio):
             index += 1
         return index
 
     def advance_normal_dialogue_slice_end(self, start_index: int) -> int:
         index = start_index
-        while index < len(self.contents):
-            content = self.contents[index]
+        while index < len(self.script_events):
+            content = self.script_events[index]
             if isinstance(content, DialogueAudio):
                 break
             if not isinstance(content, DialogueLine) or content.handling != "normal":
@@ -618,9 +662,11 @@ class ScriptPlan(AudioPlan):
 
 
 __all__ = [
+    "DialogueContent",
     "DialogueAudio",
-    "DialogueContents",
     "DialogueLine",
+    "ScriptEvent",
+    "ScriptGap",
     "ScriptPlan",
     "ScriptRenderRequest",
     "SpeakerMapPlan",

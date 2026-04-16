@@ -95,13 +95,15 @@ Current plan types:
 * `SpeakerMapPlan` in `radio_drama.dialogue`: validates and resolves speaker names to voice references
   once ready, it registers itself in the production injector so later scripts can find it
 * `ScriptPlan` in `radio_drama.dialogue`: parses dialogue stanzas, normalizes a script-level render request, and registers that request with the shared speech resource during `async_ready()`
-  `ScriptPlan.contents` is an ordered list of `DialogueContents` objects
+  `ScriptPlan.script_events` is the ordered authored script timeline
+  `DialogueContent` is the subset of `ScriptEvent` entries that participates in synthesis or forced-alignment timing
   `DialogueLine` holds spoken text plus a handling mode such as `normal`, `ignore`, or `special`
+  `ScriptGap` is a non-spoken dialogue-content boundary that tells forced alignment to resynchronize across omitted recorded material
   `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
-  `DialogueAudio` wraps an inner `AudioPlan` such as `SoundPlan`
+  `DialogueAudio` is a non-dialogue `ScriptEvent` that wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan` in `radio_drama.sound`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
 * `MarkPlan` in `radio_drama.audio`: renders zero frames of silence and introduces one named audio mark into plan composition
-* `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `DialogueContents`, and content-boundary marker frames used by script-local slicing
+* `AlignedScriptSource`: a non-`AudioPlan` planning node that renders the dry `ScriptPlan`, runs forced alignment, and returns an `AlignedScriptResult` containing the dry `RenderResult`, aligned `ScriptEvent` timeline, and content-boundary marker frames used by script-local slicing
 * `ScriptSlice` in `radio_drama.forced_alignment`: an `AudioPlan` that slices an `AlignedScriptSource` result between two marker indexes
 * `SlicePlan` in `radio_drama.audio`: renders a time slice of an already-rendered `RenderResult`
 * `ComposeAudioPlan` in `radio_drama.audio`: lays out child `AudioPlan`s concurrently, computes child placement in outer geometry, bubbles and suppresses marks, renders child audio into compose-local preset buses, applies each preset bus once, and then sums the buses into one shared timeline
@@ -312,13 +314,13 @@ Current cache-backed resources follow the same broad pattern:
 * `CachedQwenTtsResource` sits at the `QwenTtsResource` boundary
   it persists enough metadata to replay the production-facing render contract without rerunning the Qwen speech model
 * `CachedWhisperXResource` sits at the `WhisperXResource` boundary
-  it persists enough metadata to replay filled `DialogueContents.start_pos` values without rerunning forced alignment
+  it persists enough metadata to replay filled `ScriptEvent.start_pos` values without rerunning forced alignment
 
 For the current implementation, cached metadata is resource-specific:
 
 * VibeVoice cache metadata includes model-native sample rate and frame count
 * Qwen TTS cache metadata includes model-native sample rate and frame count
-* WhisperX cache metadata includes the ordered `start_pos` values written onto `DialogueContents`
+* WhisperX cache metadata includes the ordered `start_pos` values written onto `ScriptEvent` entries
 
 This keeps tests focused on structural behavior such as batching, ordering, output-format conversion, and alignment cut points rather than exact waveform reproduction.
 

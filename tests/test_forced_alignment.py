@@ -26,7 +26,13 @@ from radio_drama.forced_alignment import (
     fill_start_positions_from_rendered_script,
 )
 from radio_drama.init import radio_drama_injector
-from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
+from radio_drama.dialogue import (
+    DialogueAudio,
+    DialogueLine,
+    ScriptGap,
+    ScriptRenderRequest,
+    SpeakerVoiceReference,
+)
 from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
 
@@ -208,7 +214,7 @@ def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
 
     class FakeScriptPlan:
         def __init__(self) -> None:
-            self.contents = contents
+            self.script_events = contents
 
         async def render(self) -> ScriptRenderResult:
             return ScriptRenderResult(
@@ -450,6 +456,61 @@ def test_forced_alignment_word_matcher_can_resynchronize_after_missed_line():
     assert np.isnan(filled[0].start_pos)
     assert filled[1].start_pos == 2.0
     assert filled[2].start_pos == 3.0
+
+
+def test_forced_alignment_script_gap_marks_omitted_interval():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="Alpha Bravo."),
+        ScriptGap(label="omitted"),
+        DialogueLine(speaker=speaker, spoken_text="Echo Foxtrot."),
+    ]
+    alignment = AlignmentResult(
+        words=(
+            AlignedWord(text="Alpha", start=1.0, end=1.3),
+            AlignedWord(text="Bravo", start=1.3, end=1.6),
+            AlignedWord(text="Charlie", start=2.0, end=2.3),
+            AlignedWord(text="Delta", start=2.3, end=2.6),
+            AlignedWord(text="Echo", start=3.0, end=3.3),
+            AlignedWord(text="Foxtrot", start=3.3, end=3.6),
+        ),
+        clauses=(),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert filled[0].start_pos == 1.0
+    assert filled[1].start_pos == 1.6
+    assert filled[2].start_pos == 3.0
+
+
+def test_fill_start_positions_from_rendered_script_infers_gap_boundaries():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="First line."),
+        ScriptGap(label="gap"),
+        DialogueAudio(audio_plan=object()),
+        DialogueLine(speaker=speaker, spoken_text="Second line."),
+    ]
+
+    filled = fill_start_positions_from_rendered_script(
+        contents,
+        (0.25, 1.0),
+        duration_seconds=2.5,
+    )
+
+    assert filled[0].start_pos == 0.25
+    assert filled[1].start_pos == 1.0
+    assert filled[2].start_pos == 1.0
+    assert filled[3].start_pos == 1.0
 
 
 def test_whisperx_debug_writes_segment_payload(tmp_path: Path):
