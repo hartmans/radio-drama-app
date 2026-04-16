@@ -839,5 +839,52 @@ def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):
         finally:
             injector.close()
 
-    with pytest.raises(DocumentError, match="Scripts may begin only with a recognized `speaker:` stanza"):
+    with pytest.raises(DocumentError, match="Scripts may begin only with a recognized `speaker:` stanza") as excinfo:
         asyncio.run(runner())
+    assert excinfo.value.location is not None
+    assert excinfo.value.location.line == 4
+
+
+def test_sound_script_missing_speaker_after_gap_reports_chunk_start(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=np.zeros(4, dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <sound-script ref="door">
+                    Anna: First line.
+                    <script-gap />
+                    Missing speaker here.
+                  </sound-script>
+                </production>
+                """,
+                source_name="bad-sound-script.xml",
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
+            await root.script_nodes[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="Scripts may begin only with a recognized `speaker:` stanza") as excinfo:
+        asyncio.run(runner())
+    assert excinfo.value.location is not None
+    assert excinfo.value.location.source == "bad-sound-script.xml"
+    assert excinfo.value.location.line == 6

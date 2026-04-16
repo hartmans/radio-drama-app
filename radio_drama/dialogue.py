@@ -489,15 +489,25 @@ class ScriptPlan(AudioPlan):
 
         contents: list[ScriptEvent] = []
         pending_text: list[str] = []
+        pending_text_node: TextNode | None = None
 
         def flush_pending_text() -> None:
+            nonlocal pending_text_node
             if not pending_text:
                 return
-            contents.extend(self._parse_dialogue_text("".join(pending_text)))
+            contents.extend(
+                self._parse_dialogue_text(
+                    "".join(pending_text),
+                    error_node=pending_text_node,
+                )
+            )
             pending_text.clear()
+            pending_text_node = None
 
         for child in self.node.children:
             if isinstance(child, TextNode):
+                if pending_text_node is None:
+                    pending_text_node = child
                 pending_text.append(child.text)
                 continue
             flush_pending_text()
@@ -506,6 +516,7 @@ class ScriptPlan(AudioPlan):
                     self._parse_dialogue_text(
                         child.text_content,
                         handling="ignore",
+                        error_node=child,
                     )
                 )
                 continue
@@ -515,6 +526,7 @@ class ScriptPlan(AudioPlan):
                         child.text_content,
                         handling="special",
                         node=child,
+                        error_node=child,
                     )
                 )
                 continue
@@ -543,6 +555,7 @@ class ScriptPlan(AudioPlan):
         *,
         handling: Literal["normal", "ignore", "special"] = "normal",
         node: DocumentNode | None = None,
+        error_node: DocumentNode | None = None,
     ) -> list[DialogueLine]:
         """Parse dialogue text into speaker-scoped lines.
 
@@ -605,7 +618,8 @@ class ScriptPlan(AudioPlan):
                     continue
             if current_speaker is None:
                 raise self.document_error(
-                    "Scripts may begin only with a recognized `speaker:` stanza"
+                    "Scripts may begin only with a recognized `speaker:` stanza",
+                    node=error_node or node,
                 )
             current_paragraph.append(stripped_line)
 
