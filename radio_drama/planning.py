@@ -64,54 +64,9 @@ class PlanningNode(AsyncInjectable):
         yield self
         for child in self.child_plans():
             yield from child._all_plans_seen(seen)
-
-
-def __getattr__(name: str):
-    if name in {"AudioPlan", "ComposeAudioPlan", "LoopPlan", "MarkPlan", "SlicePlan"}:
-        from . import audio
-
-        return getattr(audio, name)
-    if name in {
-        "AudioScriptPlan",
-        "DialogueContent",
-        "DialogueAudio",
-        "DialogueLine",
-        "ScriptEvent",
-        "ScriptGap",
-        "ScriptPlan",
-        "ScriptRenderRequest",
-        "SpeakerMapPlan",
-        "SpeakerVoiceReference",
-    }:
-        from . import dialogue
-
-        return getattr(dialogue, name)
-    if name == "ProductionPlan":
-        from .production import ProductionPlan
-
-        return ProductionPlan
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ = [
     "AudioAttrs",
     "AudioAttrValue",
-    "AudioPlan",
-    "AudioScriptPlan",
-    "ComposeAudioPlan",
-    "DialogueContent",
-    "DialogueAudio",
-    "DialogueLine",
-    "LoopPlan",
-    "MarkPlan",
     "PlanningNode",
     "PRODUCTION_PLANNING_INJECTOR_KEY",
-    "ProductionPlan",
-    "ScriptEvent",
-    "ScriptGap",
-    "ScriptPlan",
-    "ScriptRenderRequest",
-    "SlicePlan",
-    "SpeakerMapPlan",
-    "SpeakerVoiceReference",
 ]

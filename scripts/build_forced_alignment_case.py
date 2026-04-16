@@ -15,7 +15,7 @@ from radio_drama.forced_alignment import (
     _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
 )
-from radio_drama.planning import DialogueLine, SpeakerVoiceReference
+from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
