@@ -131,9 +131,9 @@ Supported attributes:
 * `end="EXPR"`: explicit outer-geometry end position in the parent composition
 * `preset="NAME"`: routes this node's rendered audio into the named preset bus at the nearest enclosing compose
 * `gain="EXPR"`: post-render gain automation in decibels
-* `pre_gap="SECONDS"`: time before the audio occupies space in its parent composition
+* `pre_gap="EXPR"`: time before the audio occupies space in its parent composition
 * `post_gap="SECONDS"`: time after the audio occupies space in its parent composition
-* `length="SECONDS"`: explicit occupied length in the parent composition
+* `length="EXPR"`: explicit occupied length in the parent composition
 * `pan="EXPR"`: stereo automation evaluated against render-time mark positions
 * `first_mark="NAME"`: introduces a mark at the node's natural first boundary
 * `last_mark="NAME"`: introduces a mark at the node's natural last boundary
@@ -150,7 +150,7 @@ Current rules:
 * `length` and `post_gap` are mutually exclusive
 * `loop_until` and `loop_loops` are mutually exclusive
 * `length` must be non-negative
-* `pre_gap` and `post_gap` are measured in seconds and may be negative
+* `pre_gap` is a seconds-valued expression and may be negative; `post_gap` is measured in seconds and may be negative
 * `loop_silence` must be non-negative
 * `start` is special because it defines the mapping from parent time into the node's inner time, so `start` expressions may use `outer_<mark>` names but not child-local `natural_length` or `inner_<mark>` names
 * dialogue lines use `Speaker: text`
@@ -270,9 +270,9 @@ Supported attributes:
 * `start="EXPR"`
 * `end="EXPR"`
 * `gain="DB"`
-* `pre_gap="SECONDS"`
+* `pre_gap="EXPR"`
 * `post_gap="SECONDS"`
-* `length="SECONDS"`
+* `length="EXPR"`
 * `pan="EXPR"`
 * `preset="NAME"`
 

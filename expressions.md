@@ -5,7 +5,7 @@ radio-drama documents.
 
 The short version:
 
-* `gain` and `pan` accept Python-style expressions
+* positioning attributes, `gain`, and `pan` accept Python-style expressions where supported
 * expressions can refer to marks and layout values made available by the node
   they are written on
 * invalid syntax or unknown names fails as an ordinary error instead of being
@@ -136,9 +136,12 @@ The exact names available depend on where the expression is written.
 Common names for authored expressions include:
 
 * `natural_length`
-  The node's span in sample frames.
+  The node's span in seconds for positioning expressions and in sample frames
+  for render-time automation.
 * `start`
-  The node's resolved start position when placement is explicit.
+  The node's resolved start position in an `end` expression.
+* `pre_gap`
+  The resolved left-side gap in a right-side expression.
 * `first`
   The first rendered sample position after left-side placement.
 * `last`
@@ -158,8 +161,8 @@ names.
 
 ## Practical notes
 
-* document authors should think in sample frames, not seconds, when writing
-  expressions
+* positioning expressions use seconds; render-time gain and pan expressions use
+  sample frames
 * use marks when you want a control point to follow a specific event in the
   script or audio timeline
 * if you need a simple constant, just write a number

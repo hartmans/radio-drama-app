@@ -245,12 +245,7 @@ class AudioPlan(PlanningNode):
             return {}
         attrs: AudioAttrs = {}
         start = cls._expression_attribute(node, "start")
-        pre_gap = cls._timing_attribute_seconds(
-            node,
-            "pre_gap",
-            allow_negative=True,
-            allow_missing=True,
-        )
+        pre_gap = cls._expression_attribute(node, "pre_gap")
         end = cls._expression_attribute(node, "end")
         post_gap = cls._timing_attribute_seconds(
             node,
@@ -330,7 +325,6 @@ class AudioPlan(PlanningNode):
         self.loop_silence = 0.0
         self.loop_outro = False
         self.loop_whole = "no"
-        self.pre_gap = 0.0
         self.post_gap = 0.0
         self.first_mark = None
         self.last_mark = None
@@ -377,7 +371,6 @@ class AudioPlan(PlanningNode):
         self.loop_silence = cast(float, attrs.get("loop_silence", 0.0))
         self.loop_outro = cast(bool, attrs.get("loop_outro", False))
         self.loop_whole = cast(str, attrs.get("loop_whole", "no"))
-        self.pre_gap = 0.0 if self.pre_gap_expression is None else float(self.pre_gap_expression)
         self.post_gap = 0.0 if self.post_gap_expression is None else float(self.post_gap_expression)
         self.first_mark = cast(str | None, attrs.get("first_mark"))
         self.last_mark = cast(str | None, attrs.get("last_mark"))
@@ -615,6 +608,7 @@ class AudioPlan(PlanningNode):
         explicit_start: bool,
     ) -> dict[str, float]:
         variables = self.left_side_variables()
+        variables["pre_gap"] = self.pre_gap
         if explicit_start:
             if outer_marks is not None:
                 for mark_id, position in outer_marks.items():
@@ -832,6 +826,7 @@ class ComposeAudioPlan(AudioPlan):
             )
 
         for audio_plan in explicit_children:
+            audio_plan.pre_gap = 0.0
             audio_plan.start = audio_plan.evaluate_expression(
                 audio_plan.start_expression,
                 audio_plan.start_variables(
@@ -932,9 +927,10 @@ class ComposeAudioPlan(AudioPlan):
                 audio_plan.left_side_variables(),
                 attribute_name="pre_gap",
             )
+        audio_plan.pre_gap = pre_gap
         audio_plan.start = cursor + pre_gap
         self._resolve_child_right_side(audio_plan, outer_marks)
-        return cursor + audio_plan.length
+        return audio_plan.end
 
     def _resolve_child_right_side(
         self,

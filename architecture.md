@@ -203,9 +203,11 @@ Current layout and render contract:
   * `start`
   * `end`
   * `length`
-* `length` is how much a child advances its parent's composition cursor
+* `length` is the child's resolved outer span, so `length == end - start`
+* automatic child placement advances the composition cursor to the child's resolved `end`
 * `start` and `end` are in the parent's geometry; `natural_length` is in the node's own natural sample geometry
-* `pre_gap` and `post_gap` are authored inputs that contribute to layout, but composition after layout uses resolved `start`, `end`, and `length`
+* `pre_gap` is a left-side expression whose evaluated value offsets an automatic child from the incoming cursor; its resolved numeric value is available as `pre_gap` to right-side expressions
+* `post_gap` is an authored input that contributes to layout, but composition after layout uses resolved `start`, `end`, and `length`
 * `incoming_marks(...)` is the interface for parent-scope inherited marks
 * each node rebases incoming marks into render-time geometry, preserving local marks over inherited ones
 * each node derives `audio_marks_render` by rebasing `audio_marks_inner` through `inner_first`, so render-time automation sees natural sample geometry where `0 == inner_first`

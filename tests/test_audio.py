@@ -710,6 +710,63 @@ def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
     assert "0.750s to 1.000s" in log_text
 
 
+def test_compose_automatic_pre_gap_expression_advances_to_child_end():
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, label: str, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.label = label
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
+            self._raw_length = self._raw_inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            root = parse_production_string("<production />", source_name="compose.xml")
+            first = await ainjector(
+                FakeAudioPlan,
+                label="first",
+                result=RenderResult(audio=np.array([1.0, 1.0], dtype=np.float32)),
+            )
+            overlap = await ainjector(
+                FakeAudioPlan,
+                label="overlap",
+                result=RenderResult(audio=np.array([2.0, 2.0], dtype=np.float32)),
+                attrs={
+                    "pre_gap": "0 - natural_length / 2",
+                    "length": "natural_length - pre_gap",
+                },
+            )
+            third = await ainjector(
+                FakeAudioPlan,
+                label="third",
+                result=RenderResult(audio=np.array([3.0], dtype=np.float32)),
+            )
+            compose_plan = await ainjector(
+                ComposeAudioPlan,
+                node=root,
+                audio_plans=[first, overlap, third],
+            )
+            await compose_plan.layout()
+            return overlap, third
+        finally:
+            injector.close()
+
+    overlap, third = asyncio.run(runner())
+    assert overlap.pre_gap == pytest.approx(-0.25)
+    assert overlap.length == pytest.approx(0.75)
+    assert overlap.length == pytest.approx(overlap.end - overlap.start)
+    assert third.start == pytest.approx(overlap.end)
+
+
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
