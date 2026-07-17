@@ -19,7 +19,7 @@ Expressions are written as a single Python expression. They support:
 * names such as `natural_length`, `intro`, or `outer_cue`
 * unary `+` and `-`
 * binary `+`, `-`, `*`, `/`, `**`, and `%`
-* function calls, currently only `line(...)`
+* function calls: `line(...)`, `min(...)`, and `max(...)`
 
 Expressions do not support:
 
@@ -59,6 +59,16 @@ line(0, -1, door_open, 0)
 The frame positions are sample-frame positions in the current expression
 context. They may be negative or extend past the current node span when that is
 useful for a ramp that starts before the visible section or continues after it.
+
+## `min(...)` and `max(...)`
+
+`min(...)` and `max(...)` select the smallest or largest value from their
+arguments. They are useful for constraining a timing expression to a boundary.
+
+```python
+min(natural_length, 3.0)
+max(0, inner_cue - 0.25)
+```
 
 ## Gain
 

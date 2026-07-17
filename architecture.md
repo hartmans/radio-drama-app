@@ -223,7 +223,7 @@ Current expression contract:
 
 * `eval_expression(text, locals, return_type)` parses one Python expression with `ast.parse(..., mode="eval")`, validates the allowed syntax, evaluates it with no builtins, and then applies `return_type`
 * the currently allowed surface is numeric constants, names, unary `+`/`-`, binary operators, and direct function calls
-* the only current global helper is `line(...)`
+* the current global helpers are `line(...)`, `min(...)`, and `max(...)`
 * `ArrayExpression` is the abstract base for expressions that expand to one float32 array for a requested frame count
 * `LineExpression` builds arrays from variadic piecewise-linear frame/value control points plus an optional virtual end point at the requested output size
 * `LineExpression` accepts control points outside the requested output interval and clips or truncates them when expanding to the requested size

@@ -130,7 +130,7 @@ def eval_expression(
     return return_type(
         eval(  # noqa: S307
             compile(parsed, "<expression>", "eval"),
-            {"__builtins__": {}, "line": line},
+            {"__builtins__": {}, "line": line, "min": min, "max": max},
             dict(variables),
         )
     )

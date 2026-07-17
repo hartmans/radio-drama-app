@@ -84,6 +84,19 @@ def test_eval_expression_supports_line_names_and_arithmetic() -> None:
     )
 
 
+def test_eval_expression_supports_min_and_max() -> None:
+    assert eval_expression(
+        "min(low, 3, max(2, high))",
+        {"low": 1.0, "high": 5.0},
+        lambda value: value,
+    ) == 1.0
+    assert eval_expression(
+        "max(low, 3, min(2, high))",
+        {"low": 1.0, "high": 5.0},
+        lambda value: value,
+    ) == 3
+
+
 def test_validate_expression_rejects_unsupported_nodes() -> None:
     with pytest.raises(ValueError, match="Unsupported expression node: List"):
         validate_expression("line([1, 2])")
