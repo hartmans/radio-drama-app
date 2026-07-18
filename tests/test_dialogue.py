@@ -9,7 +9,7 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.audio import ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import AudioScriptPlan, DialogueAudio, DialogueLine, ScriptGap, ScriptRenderRequest
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptRenderRequest
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
@@ -291,7 +291,7 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
             first_slice = audio_plan.audio_plans[0]
             dialogue_audio = next(
                 content
-                for content in first_slice.aligned_script_source.script_plan.script_events
+                for content in first_slice.aligned_script_source.audio_provider.script_events
                 if isinstance(content, DialogueAudio)
             )
             sound_result = await dialogue_audio.audio_plan.render()
@@ -312,27 +312,27 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
     assert isinstance(second_slice, ScriptSlice)
     assert first_slice.aligned_script_source is second_slice.aligned_script_source
     assert isinstance(first_slice.aligned_script_source, AlignedScriptSource)
-    assert [type(content).__name__ for content in first_slice.aligned_script_source.script_plan.script_events] == [
+    assert [type(content).__name__ for content in first_slice.aligned_script_source.audio_provider.script_events] == [
         "DialogueLine",
         "DialogueAudio",
         "DialogueLine",
     ]
     assert [
         content.spoken_text
-        for content in first_slice.aligned_script_source.script_plan.dialogue_contents
+        for content in first_slice.aligned_script_source.audio_provider.dialogue_contents
         if isinstance(content, DialogueLine)
     ] == [
         "First line.",
         "Response.",
     ]
-    assert normalized_script_from_request(first_slice.aligned_script_source.script_plan.render_request) == (
+    assert normalized_script_from_request(first_slice.aligned_script_source.audio_provider.render_request) == (
         "Speaker 1: First line.\nSpeaker 2: Response."
     )
     assert sound_result.frame_count == 0
     assert sound_result.channel_count == 2
 
 
-def test_sound_script_renders_wrapped_sound_without_tts_registration(tmp_path: Path):
+def test_recording_script_renders_without_tts_registration(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -349,25 +349,31 @@ def test_sound_script_renders_wrapped_sound_without_tts_registration(tmp_path: P
 
     class FakeVibeVoice:
         async def register_request(self, request: ScriptRenderRequest | None):
-            raise AssertionError("sound-script should not register a speech render request")
+            raise AssertionError("recording-only script should not register a speech render request")
 
     class FakeSoundCache:
         async def preload(self, sound_path: Path):
             assert sound_path == sound_file
             return asyncio.create_task(asyncio.sleep(0, result=base_audio))
 
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            raise AssertionError("a whole recording slice should bypass alignment")
+
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
                 """
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
-                  <sound-script ref="door" from="natural_length / 2">
-                    Anna: Transcript only.
-                  </sound-script>
+                  <script>
+                    <recording ref="door" from="natural_length / 2" />
+                    ~Anna: Transcript only.
+                  </script>
                 </production>
                 """,
                 source_name=str(xml_path),
@@ -380,11 +386,11 @@ def test_sound_script_renders_wrapped_sound_without_tts_registration(tmp_path: P
             injector.close()
 
     script_plan, render_result = asyncio.run(runner())
-    assert isinstance(script_plan, AudioScriptPlan)
+    assert isinstance(script_plan, ComposeAudioPlan)
     assert render_result.audio.tolist() == pytest.approx([0.3, 0.4])
 
 
-def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
+def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -401,7 +407,7 @@ def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
 
     class FakeVibeVoice:
         async def register_request(self, request: ScriptRenderRequest | None):
-            raise AssertionError("sound-script should not register a speech render request")
+            raise AssertionError("recording-only script should not register a speech render request")
 
     class FakeWhisperX:
         async def fill_start_positions(self, contents, result):
@@ -442,11 +448,12 @@ def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
                 """
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
-                  <sound-script ref="door">
-                    Anna: Before the missing material.
+                  <script>
+                    <recording ref="door" />
+                    ~Anna: Before the missing material.
                     <script-gap />
-                    Anna: After the missing material.
-                  </sound-script>
+                    ~Anna: After the missing material.
+                  </script>
                 </production>
                 """,
                 source_name=str(xml_path),
@@ -462,15 +469,18 @@ def test_sound_script_gap_aligns_against_wrapped_sound_audio(tmp_path: Path):
 
     audio_plan, aligned_result, render_result = asyncio.run(runner())
     assert isinstance(audio_plan, ComposeAudioPlan)
-    assert [type(child).__name__ for child in audio_plan.audio_plans] == ["ScriptSlice"]
-    assert isinstance(audio_plan.audio_plans[0].aligned_script_source.script_plan, AudioScriptPlan)
+    assert [type(child).__name__ for child in audio_plan.audio_plans] == [
+        "ScriptSlice",
+        "ScriptSlice",
+    ]
+    assert type(audio_plan.audio_plans[0].aligned_script_source.audio_provider).__name__ == "SoundPlan"
     assert [type(content).__name__ for content in aligned_result.contents] == [
         "DialogueLine",
         "ScriptGap",
         "DialogueLine",
     ]
     assert [content.start_pos for content in aligned_result.contents] == [0.0, 0.25, 0.5]
-    assert render_result.audio.tolist() == pytest.approx(base_audio.tolist())
+    assert render_result.audio.tolist() == pytest.approx([1.0, 3.0, 4.0])
 
 
 def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
@@ -846,7 +856,7 @@ def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):
     assert excinfo.value.location.line == 4
 
 
-def test_sound_script_missing_speaker_after_gap_reports_chunk_start(tmp_path: Path):
+def test_recording_script_missing_speaker_after_gap_reports_chunk_start(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     xml_path = tmp_path / "production.xml"
@@ -869,14 +879,15 @@ def test_sound_script_missing_speaker_after_gap_reports_chunk_start(tmp_path: Pa
                 """
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
-                  <sound-script ref="door">
-                    Anna: First line.
+                  <script>
+                    <recording ref="door" />
+                    ~Anna: First line.
                     <script-gap />
                     Missing speaker here.
-                  </sound-script>
+                  </script>
                 </production>
                 """,
-                source_name="bad-sound-script.xml",
+                source_name="bad-recording-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
             injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
@@ -887,5 +898,5 @@ def test_sound_script_missing_speaker_after_gap_reports_chunk_start(tmp_path: Pa
     with pytest.raises(DocumentError, match="Scripts may begin only with a recognized `speaker:` stanza") as excinfo:
         asyncio.run(runner())
     assert excinfo.value.location is not None
-    assert excinfo.value.location.source == "bad-sound-script.xml"
-    assert excinfo.value.location.line == 6
+    assert excinfo.value.location.source == "bad-recording-script.xml"
+    assert excinfo.value.location.line == 7

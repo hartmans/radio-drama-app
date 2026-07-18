@@ -154,6 +154,8 @@ Current rules:
 * `loop_silence` must be non-negative
 * `start` is special because it defines the mapping from parent time into the node's inner time, so `start` expressions may use `outer_<mark>` names but not child-local `natural_length` or `inner_<mark>` names
 * dialogue lines use `Speaker: text`
+* a leading `<recording ref="..." />` declares the script's default recorded source; prefix a stanza with `~` (for example `~Speaker: text`) or use `<line speaker="Speaker" source="recording">text</line>` to select it
+* when a script mixes sources, the complete dialogue remains in the TTS request for context, while only TTS-selected lines use synthesized audio; forced alignment for the recording receives only recording-selected dialogue
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty
@@ -173,6 +175,19 @@ Example:
   prosecutor: The state is ready, your honor.
 </script>
 ```
+
+Mixed recorded and synthesized dialogue example:
+
+```xml
+<script>
+  <recording ref="alice-take.wav" from="12s" gain="-2db" />
+  narrator: Alice waited for the verdict.
+  ~alice: I already know what it will be.
+  narrator: Nobody in the room believed her.
+</script>
+```
+
+`<recording>` must be the first element child of its script. `<sound-script>` is no longer supported; ordinary nested `<sound>` elements continue to insert inline audio.
 
 Practical loop example:
 

@@ -282,6 +282,36 @@ class ScriptNode(ElementNode):
 
         return await ScriptPlan.from_node(ainjector, self)
 
+    @property
+    def recording_node(self) -> "RecordingNode | None":
+        recordings = [child for child in self.element_children if isinstance(child, RecordingNode)]
+        if not recordings:
+            return None
+        return recordings[0]
+
+    def validate_document(self) -> None:
+        recordings = [child for child in self.element_children if isinstance(child, RecordingNode)]
+        if len(recordings) > 1:
+            raise recordings[1].error("<script> may contain at most one <recording> element")
+        if recordings and self.element_children[0] is not recordings[0]:
+            raise recordings[0].error(
+                "<recording> must be the first element child of <script>"
+            )
+        return ElementNode.validate_document(self)
+
+
+@dataclass(slots=True)
+class RecordingNode(AttributeOrTextValueNode):
+    """Leading script declaration for the default recorded dialogue source."""
+
+    tag_name: ClassVar[str] = "recording"
+    allow_text: ClassVar[bool] = True
+    value_attribute_name: ClassVar[str] = "ref"
+
+    @property
+    def ref(self) -> str:
+        return self.value_from_attribute_or_text
+
 
 @dataclass(slots=True)
 class ScriptGapNode(ElementNode):
@@ -294,42 +324,6 @@ class ScriptGapNode(ElementNode):
     def label(self) -> str:
         raw_label = self.attributes.get("label", "")
         return raw_label.strip()
-
-
-@dataclass(slots=True)
-class SoundScriptNode(ScriptNode):
-    """Document node for a script aligned against an authored sound asset."""
-
-    tag_name: ClassVar[str] = "sound-script"
-
-    @property
-    def ref(self) -> str:
-        raw_ref = self.attributes.get("ref")
-        if raw_ref is None:
-            raise self.error("<sound-script> requires a ref attribute")
-        normalized = raw_ref.strip()
-        if not normalized:
-            raise self.error("<sound-script> ref attribute cannot be empty")
-        return normalized
-
-    async def plan(self, ainjector):
-        from .dialogue import AudioScriptPlan
-        from .sound import SoundPlan
-
-        base_audio_plan = await ainjector(
-            SoundPlan,
-            node=self,
-            attrs=SoundPlan.attrs_from_node(self),
-        )
-        return await AudioScriptPlan.from_node(
-            ainjector,
-            self,
-            base_audio_plan=base_audio_plan,
-        )
-
-    def validate_document(self) -> None:
-        self.ref
-        return ElementNode.validate_document(self)
 
 
 @dataclass(slots=True)
@@ -365,8 +359,17 @@ class LineNode(ElementNode):
             raise self.error("<line> speaker attribute cannot be empty")
         return normalized
 
+    @property
+    def source(self) -> str:
+        raw_source = self.attributes.get("source", "tts")
+        normalized = raw_source.strip().lower()
+        if normalized not in {"tts", "recording"}:
+            raise self.error("<line> source must be either 'tts' or 'recording'")
+        return normalized
+
     def validate_document(self) -> None:
         self.speaker
+        self.source
         return ElementNode.validate_document(self)
 
 
@@ -392,10 +395,8 @@ class MarkNode(AttributeOrTextValueNode):
 _register_allowed_child(ScriptNode, IgnoreNode)
 _register_allowed_child(ScriptNode, GroupNode)
 _register_allowed_child(ScriptNode, LineNode)
-_register_allowed_child(SoundScriptNode, IgnoreNode)
-_register_allowed_child(SoundScriptNode, GroupNode)
-_register_allowed_child(SoundScriptNode, LineNode)
-_register_allowed_child(SoundScriptNode, ScriptGapNode)
+_register_allowed_child(ScriptNode, RecordingNode)
+_register_allowed_child(ScriptNode, ScriptGapNode)
 
 
 @dataclass(slots=True)

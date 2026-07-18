@@ -16,12 +16,11 @@ import numpy as np
 import soundfile as sf
 from carthage.dependency_injection import AsyncInjectable, inject
 
-from .audio import resample_audio
+from .audio import AudioPlan, ComposeAudioPlan, resample_audio
 from .config import ProductionConfig
 from .debug import write_debug_json, write_debug_message
-from .dialogue import DialogueAudio, DialogueContent, DialogueLine, ScriptEvent, ScriptGap, ScriptPlan
+from .dialogue import DialogueAudio, DialogueContent, DialogueLine, ScriptEvent, ScriptGap
 from .model_loading import shared_model_load
-from .audio import AudioPlan
 from .planning import PlanningNode
 from .rendering import RenderResult, ScriptRenderResult
 
@@ -436,29 +435,32 @@ class WhisperXResource(AsyncInjectable):
 
 @inject(config=ProductionConfig)
 class AlignedScriptSource(PlanningNode):
-    """Shared render/alignment source for script slices around inline audio."""
+    """One audio provider and its source-local alignment event projection."""
 
     def __init__(
         self,
         node,
-        script_plan: ScriptPlan,
+        audio_provider: PlanningNode,
+        contents: Sequence[ScriptEvent],
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
-        self.script_plan = script_plan
-        self.contents: list[ScriptEvent] = copy_dialogue_contents(script_plan.script_events)
+        self.audio_provider = audio_provider
+        self.contents: list[ScriptEvent] = copy_dialogue_contents(contents)
 
     def child_plans(self) -> Iterable[PlanningNode]:
-        return (self.script_plan,)
+        return (self.audio_provider,)
 
     async def render_node(self) -> AlignedScriptResult:
-        base_result = await self.script_plan.render()
+        if isinstance(self.audio_provider, AudioPlan):
+            await self.audio_provider.layout()
+        base_result = await self.audio_provider.render()
         if (
             isinstance(base_result, ScriptRenderResult)
             and base_result.dialogue_line_start_positions is not None
         ):
             self.contents = fill_start_positions_from_rendered_script(
-                self.script_plan.script_events,
+                self.contents,
                 base_result.dialogue_line_start_positions,
                 duration_seconds=_audio_duration(
                     base_result.audio,
@@ -468,7 +470,7 @@ class AlignedScriptSource(PlanningNode):
         else:
             resource = await self.ainjector.get_instance_async(WhisperXResource)
             self.contents = await resource.fill_start_positions(
-                self.script_plan.script_events,
+                self.contents,
                 base_result,
             )
         for content in self.contents:
@@ -523,6 +525,24 @@ class ScriptSlice(AudioPlan):
             f"end_marker={self.end_marker})"
         )
 
+    async def async_resolve(self):
+        """Bypass alignment when this slice selects its provider's whole output."""
+        if (
+            self.start_marker != 0
+            or self.end_marker != len(self.aligned_script_source.contents)
+            or not isinstance(self.aligned_script_source.audio_provider, AudioPlan)
+        ):
+            return await super().async_resolve()
+        provider = self.aligned_script_source.audio_provider
+        if not self.attrs:
+            return provider
+        return await self.ainjector(
+            ComposeAudioPlan,
+            node=self.node,
+            audio_plans=[provider],
+            attrs=self.attrs,
+        )
+
     async def layout_node(self) -> None:
         aligned_result = await self.aligned_script_source.render()
         self._log_nan_marker_if_used(aligned_result, self.start_marker, marker_name="start")
@@ -573,6 +593,7 @@ def copy_dialogue_contents(contents: Sequence[ScriptEvent]) -> list[ScriptEvent]
                     speaker=content.speaker,
                     spoken_text=content.spoken_text,
                     handling=content.handling,
+                    source=content.source,
                     node=content.node,
                     start_pos=content.start_pos,
                 )

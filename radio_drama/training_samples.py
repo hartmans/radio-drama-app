@@ -133,7 +133,8 @@ async def export_training_samples_from_plan(
     script_plans: list[ScriptPlan] = []
     for plan in production_plan.all_plans():
         if isinstance(plan, AlignedScriptSource):
-            aligned_by_script[id(plan.script_plan)] = plan
+            if isinstance(plan.audio_provider, ScriptPlan):
+                aligned_by_script[id(plan.audio_provider)] = plan
         elif isinstance(plan, ScriptPlan):
             script_plans.append(plan)
 
@@ -152,7 +153,8 @@ async def export_training_samples_from_plan(
             aligned_source = await script_plan.ainjector(
                 AlignedScriptSource,
                 node=script_plan.node,
-                script_plan=script_plan,
+                audio_provider=script_plan,
+                contents=script_plan.script_events,
             )
         aligned_result = await aligned_source.render()
         for chunk in chunk_training_intervals(aligned_result.contents):

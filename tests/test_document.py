@@ -121,6 +121,36 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
+def test_script_recording_must_lead_and_line_source_is_normalized():
+    root = parse_production_string(
+        """
+        <production>
+          <speaker-map>anna: anna.wav</speaker-map>
+          <script>
+            <recording ref="anna-take.wav" from="12" gain="-2" />
+            <line speaker="Anna" source="recording">Recorded line.</line>
+          </script>
+        </production>
+        """,
+        source_name="recording.xml",
+    )
+
+    script = root.script_nodes[0]
+    assert script.recording_node is not None
+    assert script.recording_node.ref == "anna-take.wav"
+    assert script.child_elements_named("line")[0].source == "recording"
+
+    with pytest.raises(DocumentError, match="first element child"):
+        parse_production_string(
+            """
+            <production><speaker-map>anna: anna.wav</speaker-map><script>
+              <line speaker="Anna">First.</line><recording ref="take.wav" />
+            </script></production>
+            """,
+            source_name="bad-recording.xml",
+        )
+
+
 def test_sound_node_preserves_trim_attributes():
     root = parse_production_string(
         """

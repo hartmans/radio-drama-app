@@ -25,7 +25,6 @@ if TYPE_CHECKING:
         LineNode,
         ScriptGapNode,
         ScriptNode,
-        SoundScriptNode,
         SpeakerMapNode,
         TextNode,
     )
@@ -67,6 +66,7 @@ class DialogueLine(DialogueContent):
     speaker: SpeakerVoiceReference
     spoken_text: str
     handling: Literal["normal", "ignore", "special"] = "normal"
+    source: Literal["tts", "recording"] = "tts"
     node: DocumentNode | None = None
 
 
@@ -143,6 +143,7 @@ class ScriptRenderRequest:
                     "voice_path": str(line.speaker.resolved_path),
                     "spoken_text": line.spoken_text,
                     "handling": line.handling,
+                    "source": line.source,
                 }
                 for line in self.dialogue_lines
             ],
@@ -317,17 +318,27 @@ class ScriptPlan(AudioPlan):
 
         self.speaker_map_plan = self._require_speaker_map_plan()
         self.script_events = await self._parse_script_events()
+        if (
+            any(
+                isinstance(event, DialogueLine) and event.source == "recording"
+                for event in self.script_events
+            )
+            and self.node.recording_node is None
+        ):
+            raise self.document_error(
+                "Recorded dialogue requires a leading <recording> declaration"
+            )
         dialogue_lines = [
             content for content in self.dialogue_contents if isinstance(content, DialogueLine)
         ]
         self.ordered_speakers = self._ordered_unique_speakers(dialogue_lines)
-        if self.dialogue_contents:
+        if self._source_has_output("tts"):
             first_words = self._preferred_first_words(dialogue_lines)
             self.render_request = ScriptRenderRequest(
                 dialogue_contents=list(self.dialogue_contents),
                 first_words=first_words,
             )
-        await self.register_render_request()
+            await self.register_render_request()
         return await super().async_ready()
 
     def _tts_resource_type(self):
@@ -352,6 +363,8 @@ class ScriptPlan(AudioPlan):
         self._registered_request = await resource.register_request(self.render_request)
 
     async def render_base_audio(self) -> RenderResult:
+        if self._registered_request is None:
+            return RenderResult.empty(channels=self.config.resolved_output_channels)
         return await self._registered_request.render()
 
     async def render_node(self) -> RenderResult:
@@ -381,11 +394,22 @@ class ScriptPlan(AudioPlan):
         )
         audio_plan: AudioPlan = script_plan
 
-        if script_plan.needs_forced_alignment():
+        if script_plan.needs_source_slicing():
             audio_plan = await cls._build_aligned_audio_plan(
                 ainjector,
                 node,
                 script_plan,
+                attrs=type(script_plan).attrs_from_node(node),
+            )
+        elif node.element_children:
+            # A declaration is not rendered inline, but it still means the
+            # script plan was created without outer attributes so a later
+            # retained source could own them. Keep those attrs on one outer
+            # audio plan when the declaration is ultimately unused.
+            audio_plan = await ainjector(
+                ComposeAudioPlan,
+                node=node,
+                audio_plans=[script_plan],
                 attrs=type(script_plan).attrs_from_node(node),
             )
         return audio_plan
@@ -401,11 +425,7 @@ class ScriptPlan(AudioPlan):
     ) -> AudioPlan:
         from .forced_alignment import AlignedScriptSource, ScriptSlice
 
-        aligned_script_source = await ainjector(
-            AlignedScriptSource,
-            node=node,
-            script_plan=script_plan,
-        )
+        sources = await cls._aligned_sources(ainjector, node, script_plan)
         audio_plans: list[AudioPlan] = []
         content_index = 0
 
@@ -416,31 +436,18 @@ class ScriptPlan(AudioPlan):
                 content_index += 1
                 continue
             if isinstance(content, ScriptGap):
-                end_index = script_plan.advance_normal_dialogue_slice_end(content_index)
-                if end_index > content_index:
-                    audio_plans.append(
-                        await ainjector(
-                            ScriptSlice,
-                            node=node,
-                            attrs={},
-                            aligned_script_source=aligned_script_source,
-                            start_marker=content_index,
-                            end_marker=end_index,
-                            name=cls._script_slice_name(script_plan.script_events, content_index),
-                        )
-                    )
-                    content_index = end_index
-                    continue
                 content_index += 1
                 continue
+            source = content.source
+            aligned_script_source, marker_indexes = sources[source]
             if content.handling == "special":
                 audio_plans.append(
                     await ainjector(
                         ScriptSlice,
                         node=content.node,
                         aligned_script_source=aligned_script_source,
-                        start_marker=content_index,
-                        end_marker=content_index + 1,
+                        start_marker=marker_indexes[content_index],
+                        end_marker=marker_indexes[content_index + 1],
                         name=content.spoken_text[:30] or content.speaker.authored_name,
                     )
                 )
@@ -449,38 +456,82 @@ class ScriptPlan(AudioPlan):
             if content.handling != "normal":
                 content_index += 1
                 continue
-            end_index = script_plan.advance_normal_dialogue_slice_end(content_index)
+            end_index = script_plan.advance_normal_dialogue_slice_end(content_index, source)
             audio_plans.append(
                 await ainjector(
                     ScriptSlice,
                     node=node,
                     attrs={},
                     aligned_script_source=aligned_script_source,
-                    start_marker=content_index,
-                    end_marker=end_index,
+                    start_marker=marker_indexes[content_index],
+                    end_marker=marker_indexes[end_index],
                     name=cls._script_slice_name(script_plan.script_events, content_index),
                 )
             )
             content_index = end_index
 
         if not audio_plans:
-            audio_plans.append(
-                await ainjector(
-                    ScriptSlice,
-                    node=node,
-                    attrs={},
-                    aligned_script_source=aligned_script_source,
-                    start_marker=len(script_plan.script_events),
-                    end_marker=len(script_plan.script_events),
-                    name="ignored script",
-                )
-            )
+            return await ainjector(ComposeAudioPlan, node=node, audio_plans=[], attrs=attrs)
         return await ainjector(
             ComposeAudioPlan,
             node=node,
             audio_plans=audio_plans,
             attrs=attrs,
         )
+
+    @classmethod
+    async def _aligned_sources(cls, ainjector, node, script_plan):
+        """Create only the source-local alignment graphs selected by output lines."""
+        from .forced_alignment import AlignedScriptSource
+        from .sound import SoundPlan
+
+        sources = {}
+        if script_plan._source_has_output("tts"):
+            projection = list(script_plan.script_events)
+            sources["tts"] = (
+                await ainjector(
+                    AlignedScriptSource,
+                    node=node,
+                    audio_provider=script_plan,
+                    contents=projection,
+                ),
+                cls._projection_marker_indexes(script_plan.script_events, projection),
+            )
+        if script_plan._source_has_output("recording"):
+            recording = node.recording_node
+            if recording is None:
+                raise node.error("Recorded dialogue requires a leading <recording> declaration")
+            recording_plan = await ainjector(
+                SoundPlan, node=recording, attrs=SoundPlan.attrs_from_node(recording)
+            )
+            projection = script_plan.recording_projection()
+            sources["recording"] = (
+                await ainjector(
+                    AlignedScriptSource,
+                    node=recording,
+                    audio_provider=recording_plan,
+                    contents=projection,
+                ),
+                cls._projection_marker_indexes(script_plan.script_events, projection),
+            )
+        return sources
+
+    @staticmethod
+    def _projection_marker_indexes(authored, projection):
+        """Map authored boundaries to local projection marker indexes.
+
+        A missing authored event intentionally maps to the next source-local
+        boundary; source transitions therefore retain next-start slice ends.
+        """
+        local_by_id = {id(event): index for index, event in enumerate(projection)}
+        indexes = []
+        for boundary in range(len(authored) + 1):
+            local = next(
+                (local_by_id[id(event)] for event in authored[boundary:] if id(event) in local_by_id),
+                len(projection),
+            )
+            indexes.append(local)
+        return indexes
 
     @staticmethod
     def _script_slice_name(
@@ -499,7 +550,7 @@ class ScriptPlan(AudioPlan):
         return "ignored script"
 
     async def _parse_script_events(self) -> list[ScriptEvent]:
-        from .document import GroupNode, IgnoreNode, LineNode, ScriptGapNode, TextNode
+        from .document import GroupNode, IgnoreNode, LineNode, RecordingNode, ScriptGapNode, TextNode
         from .forced_alignment import ScriptSlice
 
         contents: list[ScriptEvent] = []
@@ -526,6 +577,8 @@ class ScriptPlan(AudioPlan):
                 pending_text.append(child.text)
                 continue
             flush_pending_text()
+            if isinstance(child, RecordingNode):
+                continue
             if isinstance(child, IgnoreNode):
                 contents.extend(
                     self._parse_dialogue_text(
@@ -553,6 +606,7 @@ class ScriptPlan(AudioPlan):
                         speaker=self.speaker_map_plan.lookup(child.speaker),
                         spoken_text=child.normalized_text_content,
                         handling=handling,
+                        source=child.source,
                         node=child if handling == "special" else None,
                     )
                 )
@@ -590,6 +644,7 @@ class ScriptPlan(AudioPlan):
 
         lines: list[DialogueLine] = []
         current_speaker: SpeakerVoiceReference | None = None
+        current_source: Literal["tts", "recording"] = "tts"
         current_paragraph: list[str] = []
         current_paragraphs: list[str] = []
 
@@ -610,6 +665,7 @@ class ScriptPlan(AudioPlan):
                         speaker=current_speaker,
                         spoken_text=spoken_text,
                         handling=handling,
+                        source=current_source,
                         node=node,
                     )
                 )
@@ -622,6 +678,10 @@ class ScriptPlan(AudioPlan):
             match = _SPEAKER_LINE_RE.match(stripped_line)
             if match is not None:
                 candidate_speaker = match.group(1).strip()
+                candidate_source: Literal["tts", "recording"] = "tts"
+                if candidate_speaker.startswith("~"):
+                    candidate_source = "recording"
+                    candidate_speaker = candidate_speaker[1:].strip()
                 try:
                     speaker_ref = self.speaker_map_plan.lookup(candidate_speaker)
                 except KeyError:
@@ -629,6 +689,7 @@ class ScriptPlan(AudioPlan):
                 if speaker_ref is not None:
                     flush_stanza()
                     current_speaker = speaker_ref
+                    current_source = candidate_source
                     current_paragraph.append(match.group(2).strip())
                     continue
             if current_speaker is None:
@@ -641,11 +702,14 @@ class ScriptPlan(AudioPlan):
         flush_stanza()
         return lines
 
-    def needs_forced_alignment(self) -> bool:
+    def needs_source_slicing(self) -> bool:
         return any(
             isinstance(content, DialogueAudio)
             or isinstance(content, ScriptGap)
-            or (isinstance(content, DialogueLine) and content.handling != "normal")
+            or (
+                isinstance(content, DialogueLine)
+                and (content.handling != "normal" or content.source != "tts")
+            )
             for content in self.script_events
         )
 
@@ -655,19 +719,50 @@ class ScriptPlan(AudioPlan):
             index += 1
         return index
 
-    def advance_normal_dialogue_slice_end(self, start_index: int) -> int:
+    def advance_normal_dialogue_slice_end(self, start_index: int, source: str) -> int:
         index = start_index
         while index < len(self.script_events):
             content = self.script_events[index]
             if isinstance(content, DialogueAudio):
                 break
             if isinstance(content, ScriptGap):
-                index += 1
-                continue
-            if not isinstance(content, DialogueLine) or content.handling != "normal":
+                # A gap is an authored end boundary for the preceding run;
+                # the following line starts a new aligned run after resync.
+                break
+            if (
+                not isinstance(content, DialogueLine)
+                or content.handling != "normal"
+                or content.source != source
+            ):
                 break
             index += 1
         return index
+
+    def _source_has_output(self, source: str) -> bool:
+        return any(
+            isinstance(event, DialogueLine)
+            and event.source == source
+            and event.handling != "ignore"
+            for event in self.script_events
+        )
+
+    def recording_projection(self) -> list[ScriptEvent]:
+        """Return recording-local alignment events without TTS-only transcript."""
+        retained: list[ScriptEvent] = []
+        has_recording = any(
+            isinstance(event, DialogueLine) and event.source == "recording"
+            for event in self.script_events
+        )
+        if not has_recording:
+            return retained
+        for event in self.script_events:
+            if isinstance(event, DialogueLine) and event.source == "recording":
+                retained.append(event)
+            elif isinstance(event, ScriptGap):
+                retained.append(event)
+            elif isinstance(event, DialogueAudio):
+                retained.append(event)
+        return retained
 
     def _ordered_unique_speakers(
         self,
@@ -705,27 +800,7 @@ class ScriptPlan(AudioPlan):
         return label[:40] or "empty-script"
 
 
-@inject(config=ProductionConfig)
-class AudioScriptPlan(ScriptPlan):
-    """Script plan whose base audio comes from another ``AudioPlan``."""
-
-    def __init__(self, node: SoundScriptNode, *, base_audio_plan: AudioPlan, **kwargs) -> None:
-        super().__init__(node=node, **kwargs)
-        self.base_audio_plan = base_audio_plan
-
-    def child_plans(self) -> Sequence[PlanningNode]:
-        return (self.base_audio_plan,)
-
-    async def register_render_request(self) -> None:
-        self._registered_request = None
-
-    async def render_base_audio(self) -> RenderResult:
-        await self.base_audio_plan.layout()
-        return await self.base_audio_plan.render()
-
-
 __all__ = [
-    "AudioScriptPlan",
     "DialogueContent",
     "DialogueAudio",
     "DialogueLine",

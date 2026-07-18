@@ -11,7 +11,6 @@ from .audio import (
 from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
 from .config import ProductionConfig
 from .dialogue import (
-    AudioScriptPlan,
     DialogueContent,
     DialogueAudio,
     DialogueLine,
@@ -35,7 +34,7 @@ from .document import (
     ProductionNode,
     ScriptGapNode,
     ScriptNode,
-    SoundScriptNode,
+    RecordingNode,
     SpeakerMapNode,
     TextNode,
     parse_production_file,
@@ -80,7 +79,6 @@ from .vibevoice import VibeVoiceResource
 __all__ = [
     "ArrayExpression",
     "AudioPlan",
-    "AudioScriptPlan",
     "available_effect_chains",
     "build_named_effect_chain",
     "CacheCollection",
@@ -137,13 +135,13 @@ __all__ = [
     "QwenTtsResource",
     "radio_drama_injector",
     "RenderResult",
+    "RecordingNode",
     "ScriptNode",
     "ScriptEvent",
     "ScriptGapNode",
     "ScriptGap",
     "ScriptPlan",
     "ScriptRenderRequest",
-    "SoundScriptNode",
     "ScriptSlice",
     "SlicePlan",
     "SoundNode",

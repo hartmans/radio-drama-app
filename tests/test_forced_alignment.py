@@ -233,7 +233,8 @@ def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
             aligned_source = await ainjector(
                 AlignedScriptSource,
                 node=None,
-                script_plan=FakeScriptPlan(),
+                audio_provider=FakeScriptPlan(),
+                contents=contents,
             )
             return await aligned_source.render()
         finally:
