@@ -602,6 +602,7 @@ def copy_dialogue_contents(contents: Sequence[ScriptEvent]) -> list[ScriptEvent]
             copied.append(
                 ScriptGap(
                     label=content.label,
+                    mode=content.mode,
                     start_pos=content.start_pos,
                 )
             )

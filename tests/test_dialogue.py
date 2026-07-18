@@ -483,6 +483,148 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
     assert render_result.audio.tolist() == pytest.approx([1.0, 3.0, 4.0])
 
 
+def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+    recording_audio = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            assert request is not None
+
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return RenderResult(audio=np.array([10.0, 11.0, 12.0, 13.0], dtype=np.float32))
+
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueLine):
+                    start_pos = (
+                        0.75
+                        if content.spoken_text == "Second recorded line."
+                        else 0.0
+                    )
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            source=content.source,
+                            node=content.node,
+                            start_pos=start_pos,
+                        )
+                    )
+                elif isinstance(content, ScriptGap):
+                    updated.append(
+                        ScriptGap(
+                            label=content.label,
+                            mode=content.mode,
+                            start_pos=0.25,
+                        )
+                    )
+                else:
+                    updated.append(content)
+            return updated
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=recording_audio))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    <recording ref="door" />
+                    ~Anna: First recorded line.
+                    <script-gap mode="include" />
+                    Anna: TTS response.
+                    ~Anna: Second recorded line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return await production_plan.render()
+        finally:
+            injector.close()
+
+    render_result = asyncio.run(runner())
+    assert render_result.audio.tolist() == pytest.approx([1.0, 2.0, 3.0, 11.0, 12.0, 4.0, 5.0])
+
+
+def test_including_script_gap_requires_later_recorded_line(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    <recording ref="door" />
+                    ~Anna: First recorded line.
+                    <script-gap mode="include" />
+                    Anna: TTS response.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(
+        DocumentError,
+        match='<script-gap mode="include"> requires a later recorded dialogue line',
+    ):
+        asyncio.run(runner())
+
+
+def test_script_gap_mode_must_be_include_or_exclude():
+    with pytest.raises(DocumentError, match="<script-gap> mode must be either 'exclude' or 'include'"):
+        parse_production_string(
+            """
+            <production>
+              <script><script-gap mode="retain" /></script>
+            </production>
+            """,
+            source_name="bad-script-gap-mode.xml",
+        )
+
+
 def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

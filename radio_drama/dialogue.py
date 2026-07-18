@@ -75,6 +75,7 @@ class ScriptGap(DialogueContent):
     """Explicit omitted region where forced alignment should resynchronize."""
 
     label: str = ""
+    mode: Literal["exclude", "include"] = "exclude"
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -457,6 +458,7 @@ class ScriptPlan(AudioPlan):
                 content_index += 1
                 continue
             end_index = script_plan.advance_normal_dialogue_slice_end(content_index, source)
+            end_marker_index = script_plan.slice_end_marker_index(end_index, source)
             audio_plans.append(
                 await ainjector(
                     ScriptSlice,
@@ -464,7 +466,7 @@ class ScriptPlan(AudioPlan):
                     attrs={},
                     aligned_script_source=aligned_script_source,
                     start_marker=marker_indexes[content_index],
-                    end_marker=marker_indexes[end_index],
+                    end_marker=marker_indexes[end_marker_index],
                     name=cls._script_slice_name(script_plan.script_events, content_index),
                 )
             )
@@ -612,7 +614,7 @@ class ScriptPlan(AudioPlan):
                 )
                 continue
             if isinstance(child, ScriptGapNode):
-                contents.append(ScriptGap(label=child.label))
+                contents.append(ScriptGap(label=child.label, mode=child.mode))
                 continue
             contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
         flush_pending_text()
@@ -737,6 +739,21 @@ class ScriptPlan(AudioPlan):
                 break
             index += 1
         return index
+
+    def slice_end_marker_index(self, end_index: int, source: str) -> int:
+        """Return the authored boundary used to end a normal dialogue slice."""
+        if source != "recording" or end_index >= len(self.script_events):
+            return end_index
+        content = self.script_events[end_index]
+        if not isinstance(content, ScriptGap) or content.mode == "exclude":
+            return end_index
+        for index in range(end_index + 1, len(self.script_events)):
+            following = self.script_events[index]
+            if isinstance(following, DialogueLine) and following.source == "recording":
+                return index
+        raise self.document_error(
+            "<script-gap mode=\"include\"> requires a later recorded dialogue line"
+        )
 
     def _source_has_output(self, source: str) -> bool:
         return any(

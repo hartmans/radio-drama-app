@@ -100,7 +100,7 @@ Current plan types:
   `ScriptPlan.script_events` is the ordered authored script timeline
   `DialogueContent` is the subset of `ScriptEvent` entries that participates in synthesis or forced-alignment timing
   `DialogueLine` holds spoken text, a source key (`tts` or the default `recording`), and a handling mode such as `normal`, `ignore`, or `special`
-  `ScriptGap` is a non-spoken dialogue-content boundary that tells forced alignment to resynchronize across omitted recorded material
+  `ScriptGap` is a non-spoken dialogue-content boundary that tells forced alignment to resynchronize across omitted recorded material; its `exclude` mode ends the preceding recording slice at that line's aligned end, while `include` ends it at the next recorded line's aligned start
   `DialogueLine.node` may point back to the originating document node when later planning needs a stable node boundary
   `DialogueAudio` is a non-dialogue `ScriptEvent` that wraps an inner `AudioPlan` such as `SoundPlan`
 * `SoundPlan` in `radio_drama.sound`: resolves one sound asset during planning, optionally trims it with `from` / `to` in source-file time, sizes it during layout, and renders one normalized clip
@@ -130,7 +130,7 @@ Planning rule for presets:
 * a `<line>` with no audio attrs is just another `normal` `DialogueLine` and merges into adjacent normal dialogue slices
 * a `<line>` whose `ScriptSlice.attrs_from_node(line_node)` result is non-empty becomes a `special` `DialogueLine`; aligned planning then emits a dedicated `ScriptSlice` for only that line, using the line node as the slice node so its audio attrs are consumed by that outermost slice
 * dialogue text parsed from `<group>` becomes `special` `DialogueLine`s whose `node` is the group node; aligned planning therefore emits one dedicated `ScriptSlice` per resulting grouped line, with the group's audio attrs consumed by each slice
-* `<script-gap>` creates a `ScriptGap` boundary in the authored timeline. It is projected into retained alignment sources, does not contribute transcript text, and requests an aligned end/start boundary rather than being inferred from a source transition
+* `<script-gap>` creates a `ScriptGap` boundary in the authored timeline. It is projected into retained alignment sources, does not contribute transcript text, and requests an aligned end/start boundary rather than being inferred from a source transition. `mode="exclude"` is the default and excludes the interval after the preceding recorded line; `mode="include"` retains that interval through the next recorded line's aligned start, which must exist later in the script
 * if the same script also has audio attributes, those attrs are attached to the outermost audio plan for that script: either the plain `ScriptPlan`, or the composed aligned plan when alignment is needed
 * `preset` stays on that outermost audio plan as metadata rather than introducing another wrapper plan
 * when a `ComposeAudioPlan` renders, each child contributes its rendered audio to either the child's own preset bus or, if the child is otherwise dry, the compose node's own preset bus
