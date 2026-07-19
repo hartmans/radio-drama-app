@@ -81,6 +81,9 @@ Useful names in gain expressions include:
 
 * `natural_length`
   The node's natural span in sample frames.
+* `s` or `seconds`
+  One second expressed as a number of sample frames at the production sample
+  rate.
 * visible marks
   Marks exposed by the node's render-time scope, such as `intro`, `verse_end`,
   or `door_open`.
@@ -89,6 +92,7 @@ Examples:
 
 ```python
 gain="line(0, -6, natural_length, 0)"
+gain="line(0, -6, 2 * seconds, 0)"
 gain="-3"
 ```
 
@@ -162,7 +166,10 @@ Common names for authored expressions include:
   A mark visible in the containing scope.
 
 For render-time automation, mark names are exposed directly as names in the
-current scope.
+current scope. Render-time expressions also expose `s` and `seconds` as aliases
+for the production sample rate: one second expressed in sample frames. Multiply
+a duration in seconds by either name to get a frame position, as in `2.5 * s`,
+or divide a frame position by either name to get seconds, as in `cue / seconds`.
 
 `start` is the special case. Because `start` defines how parent time maps into
 the node's own inner geometry, it only sees `outer_<mark>` names from the
@@ -173,6 +180,8 @@ names.
 
 * positioning expressions use seconds; render-time gain and pan expressions use
   sample frames
+* in render-time expressions, `s` and `seconds` both equal the number of sample
+  frames per second
 * use marks when you want a control point to follow a specific event in the
   script or audio timeline
 * if you need a simple constant, just write a number

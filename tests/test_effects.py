@@ -124,7 +124,7 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
             plan = await ainjector(
                 FakeAudioPlan,
                 result=RenderResult(audio=np.ones((4, 2), dtype=np.float32)),
-                attrs={"pan": "line(cut, -1, cut + 2, 1)"},
+                attrs={"pan": "line(cut, -1, cut + 0.25 * s + 0.25 * seconds, 1)"},
             )
             return await plan.render()
         finally:

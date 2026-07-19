@@ -243,6 +243,7 @@ Current expression scopes:
 * render-time automation expressions such as `gain` and `pan` evaluate against `render_mark_positions`
 * render-time marks are exposed in natural sample geometry where `0 == inner_first`
 * `natural_length` is available in that same geometry and is expressed in sample frames
+* `s` and `seconds` are render-time aliases for one second expressed in sample frames at the production sample rate; multiplying by either produces a frame value and dividing a frame value by either produces seconds
 * a render-time mark may be negative or greater than `natural_length`
 * layout helpers use two mark namespaces:
   * `inner_<mark>` for marks already visible in the node's own inner geometry

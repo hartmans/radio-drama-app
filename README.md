@@ -327,9 +327,10 @@ Current expression-driven audio attributes:
 * `end`
 
 `gain` and `pan` evaluate at render time against visible marks in natural
-sample geometry. `start` and `end` are layout-time expressions. Unprefixed mark
-names are not populated specially; they simply fail as ordinary undefined names
-if used.
+sample geometry. Their `s` and `seconds` variables both represent one second in
+sample frames at the production sample rate. `start` and `end` are layout-time
+expressions. Unprefixed mark names are not populated specially; they simply fail
+as ordinary undefined names if used.
 
 ## Current Presets
 

@@ -619,8 +619,13 @@ class AudioPlan(PlanningNode):
         return variables
 
     def render_time_variables(self) -> dict[str, float]:
-        variables = {"natural_length": float(self._seconds_to_frames(self.natural_length))}
-        variables.update(self.render_mark_positions)
+        frames_per_second = float(self.config.resolved_output_sample_rate)
+        variables = self.render_mark_positions
+        variables.update(
+            natural_length=float(self._seconds_to_frames(self.natural_length)),
+            s=frames_per_second,
+            seconds=frames_per_second,
+        )
         return variables
 
     @property
