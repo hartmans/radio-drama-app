@@ -111,9 +111,9 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
-            self._layout_marks_inner = {"cut": 0.25}
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+            self.mark_positions = {"cut": 0.25}
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -145,8 +145,8 @@ def test_audio_plan_pan_expression_uses_linear_balance(tmp_path: Path):
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -182,9 +182,9 @@ def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
-            self._layout_marks_inner = {"cut": 0.25}
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+            self.mark_positions = {"cut": 0.25}
 
         async def render_node(self) -> RenderResult:
             return self.result

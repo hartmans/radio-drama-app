@@ -372,8 +372,8 @@ class ScriptPlan(AudioPlan):
 
     async def layout_node(self) -> None:
         result = await self.render_base_audio()
-        self._raw_inner_last = self._frames_to_seconds(result.frame_count)
-        self._raw_length = self._raw_inner_last
+        self.inner_last = self._frames_to_seconds(result.frame_count)
+        self.advance = self.inner_last
 
     @property
     def dialogue_contents(self) -> list[DialogueContent]:

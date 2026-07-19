@@ -82,8 +82,9 @@ Current planning contract:
 * every `AudioPlan.layout()` computes intrinsic layout facts for that node:
   * `inner_first`
   * `inner_last`
+  * `advance`
   * `natural_length`
-  * `audio_marks_inner`
+  * `mark_positions`
 * container plans, especially `ComposeAudioPlan`, additionally compute child placement in outer geometry:
   * `start`
   * `end`
@@ -114,12 +115,15 @@ Current plan types:
 
 Current mark/cut contract:
 
-* every `AudioPlan` exposes `audio_marks`, the set of unambiguous named cut points bubbled up from its immediate inner plans plus any local `first_mark` / `last_mark`
+* every `AudioPlan` exposes `mark_names`, the names of unambiguous marks bubbled up from its immediate inner plans plus any local `first_mark` / `last_mark`
+* after layout, `mark_positions` maps the marks that remain unambiguous in the plan's output to positions in the plan's local timeline
 * `MarkPlan` introduces one explicit authored mark, while any audio-producing node may also introduce boundary marks through `first_mark` and `last_mark`
 * `LoopPlan` suppresses bubbled wrapped marks from the repeated region, preserving only the first instance of boundary marks and any surviving pre-loop or outro marks
+* loop mark names bubble during planning, before loop layout can determine which repeated marks have positions; a `LoopPlan` may therefore expose a `mark_names` entry for which it later cannot provide a `mark_positions` entry
 * container plans bubble marks upward while suppressing any mark that becomes ambiguous among sibling plans
 * `cut_before_mark(mark_id)` mutates a plan in place so later rendering begins at that mark when the mark remains unambiguous through the container path
 * `cut_after_mark(mark_id)` mutates a plan in place so later rendering stops at that mark under the same ambiguity rules
+* cutting at any mark inside a `LoopPlan` is unsupported and raises an error
 Planning rule for presets:
 
 * `ScriptNode.plan()` is the public entry point and `ScriptPlan.from_node()` constructs the source graph
@@ -198,22 +202,25 @@ Current layout and render contract:
 * `AudioPlan.layout()` computes one node's intrinsic inner-geometry facts:
   * `inner_first`
   * `inner_last`
+  * `advance`
   * `natural_length`
-  * `audio_marks_inner`
+  * `mark_positions`
 * `ComposeAudioPlan.layout()` additionally computes child placement in outer geometry:
   * `start`
   * `end`
   * `length`
 * `length` is the child's resolved outer span, so `length == end - start`
 * automatic child placement advances the composition cursor to the child's resolved `end`
+* `advance` is the endpoint in a plan's local timeline that it recommends for automatic parent placement; the parent initially resolves `end` as `start + advance`
+* `advance` may differ from `inner_last` when rendered content extends beyond the layout span established by children
 * `start` and `end` are in the parent's geometry; `natural_length` is in the node's own natural sample geometry
 * `pre_gap` is a left-side expression whose evaluated value offsets an automatic child from the incoming cursor; its resolved numeric value is available as `pre_gap` to right-side expressions
 * `post_gap` is an authored input that contributes to layout, but composition after layout uses resolved `start`, `end`, and `length`
 * `incoming_marks(...)` is the interface for parent-scope inherited marks
 * each node rebases incoming marks into render-time geometry, preserving local marks over inherited ones
-* each node derives `audio_marks_render` by rebasing `audio_marks_inner` through `inner_first`, so render-time automation sees natural sample geometry where `0 == inner_first`
+* each node derives `render_mark_positions` by combining `mark_positions` with incoming marks and rebasing through `inner_first`, so render-time automation sees natural sample geometry where `0 == inner_first`
 * `pan` expressions are evaluated against those render-time locals, coerced to an array-valued expression, clipped to `[-1, 1]`, and then applied as stereo attenuation where the near side stays at full scale and the far side follows the current linear falloff to silence
-* mark bubbling for cutting still lives on `AudioPlan.audio_marks`, the set of surviving unambiguous mark ids visible through the plan tree
+* name bubbling and pre-layout cut lookup use `AudioPlan.mark_names`
 * the final production result is then passed through the `master` preset
 
 ## Expression layer
@@ -233,7 +240,7 @@ Current expression contract:
 
 Current expression scopes:
 
-* render-time automation expressions such as `gain` and `pan` evaluate against `audio_marks_render`
+* render-time automation expressions such as `gain` and `pan` evaluate against `render_mark_positions`
 * render-time marks are exposed in natural sample geometry where `0 == inner_first`
 * `natural_length` is available in that same geometry and is expressed in sample frames
 * a render-time mark may be negative or greater than `natural_length`

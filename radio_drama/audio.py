@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import math
-from math import gcd
+from collections import Counter
 from collections.abc import Iterable
+from math import gcd
 from typing import TYPE_CHECKING, Mapping, Sequence, cast
 
 import numpy as np
@@ -98,24 +99,28 @@ class AudioPlan(PlanningNode):
         **kwargs,
     ) -> None:
         super().__init__(node=node, **kwargs)
-        self.audio_marks: list[str] = []
-        self._audio_mark_counts: dict[str, int] = {}
+        # Names of unambiguous marks that this plan makes visible to its parent.
+        # Names are available during planning, before their positions are laid out.
+        self.mark_names: list[str] = []
         self._layout_task: asyncio.Task | None = None
         self._layout_complete = False
-        self.audio_marks_inner: dict[str, float] = {}
-        self.audio_marks_render: dict[str, float] = {}
+        # Positions of laid-out, unambiguous marks in this plan's local timeline.
+        self.mark_positions: dict[str, float] = {}
+        # Parent marks rebased into this plan's local timeline. They are available
+        # to expressions but are not marks exported by this plan.
         self._incoming_marks_inner: dict[str, float] = {}
+        # Bounds of rendered samples in this plan's local timeline. Rendered sample
+        # zero corresponds to inner_first and natural_length spans to inner_last.
         self.inner_first = 0.0
         self.inner_last = 0.0
+        # Recommended local cursor endpoint when a parent automatically places this
+        # plan. It may differ from inner_last when content outlives its layout span.
+        self.advance = 0.0
+        # Placement in the parent timeline. Layout initially places an unparented
+        # plan at zero; a containing ComposeAudioPlan replaces these values.
         self.start = 0.0
         self.end = 0.0
-        self.length = 0.0
-        self._raw_inner_first = 0.0
-        self._raw_inner_last = 0.0
-        self._raw_length = 0.0
-        self._content_start = 0.0
-        self._content_end = 0.0
-        self._local_audio_marks: list[str] = []
+        self._local_mark_names: list[str] = []
         resolved_attrs = type(self).attrs_from_node(node) if attrs is None else dict(attrs)
         self._replace_attrs(resolved_attrs)
 
@@ -155,6 +160,12 @@ class AudioPlan(PlanningNode):
     @property
     def natural_length(self) -> float:
         return self.inner_last - self.inner_first
+
+    @property
+    def length(self) -> float:
+        """Return this plan's resolved span in its parent timeline."""
+
+        return self.end - self.start
 
     async def layout(self) -> None:
         if self._layout_task is None:
@@ -218,25 +229,12 @@ class AudioPlan(PlanningNode):
     def output_preset_key(self) -> tuple[str, ...]:
         return self.preset_key
 
-    def _add_visible_audio_mark(self, audio_mark: str) -> None:
-        mark_count = self._audio_mark_counts.get(audio_mark, 0) + 1
-        self._audio_mark_counts[audio_mark] = mark_count
-        if mark_count == 1:
-            self.audio_marks.append(audio_mark)
-        elif mark_count == 2:
-            self.audio_marks.remove(audio_mark)
-
-    def inner_plans(self, *audio_plans: AudioPlan) -> None:
-        for audio_plan in audio_plans:
-            for audio_mark in audio_plan.audio_marks:
-                self._add_visible_audio_mark(audio_mark)
-
     def cut_before_mark(self, audio_mark: str) -> None:
-        if audio_mark not in self.audio_marks:
+        if audio_mark not in self.mark_names:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     def cut_after_mark(self, audio_mark: str) -> None:
-        if audio_mark not in self.audio_marks:
+        if audio_mark not in self.mark_names:
             raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     @classmethod
@@ -378,7 +376,7 @@ class AudioPlan(PlanningNode):
             raise self.document_error(
                 f"{self.node.display_name} may not specify the same id for first_mark and last_mark"
             )
-        self._local_audio_marks = [
+        self._local_mark_names = [
             mark_id
             for mark_id in (self.first_mark, self.last_mark)
             if mark_id is not None
@@ -428,7 +426,7 @@ class AudioPlan(PlanningNode):
     def _replace_attrs(self, attrs: Mapping[str, AudioAttrValue]) -> None:
         self.attrs = dict(attrs)
         self.process_attrs(self.attrs)
-        self._rebuild_audio_marks(self._mark_children())
+        self._rebuild_mark_names(self._mark_children())
 
     @staticmethod
     def _node_error(node: DocumentNode, message: str):
@@ -568,14 +566,16 @@ class AudioPlan(PlanningNode):
             return str(value)
         return str(value)
 
-    def _rebuild_audio_marks(self, audio_plans: Sequence[AudioPlan]) -> None:
-        self.audio_marks.clear()
-        self._audio_mark_counts.clear()
-        for audio_mark in self._local_audio_marks:
-            self._add_visible_audio_mark(audio_mark)
+    def _rebuild_mark_names(self, audio_plans: Sequence[AudioPlan]) -> None:
+        names = list(self._local_mark_names)
         for audio_plan in audio_plans:
-            for audio_mark in audio_plan.audio_marks:
-                self._add_visible_audio_mark(audio_mark)
+            names.extend(audio_plan.mark_names)
+        counts = Counter(names)
+        self.mark_names = [
+            mark_name
+            for mark_name in names
+            if counts[mark_name] == 1
+        ]
 
     def _mark_children(self) -> Sequence[AudioPlan]:
         return ()
@@ -585,8 +585,8 @@ class AudioPlan(PlanningNode):
         return self.start_expression is not None
 
     def left_side_variables(self) -> dict[str, float]:
-        variables = {"natural_length": self._raw_inner_last - self._raw_inner_first}
-        for mark_id, position in self.audio_marks_inner.items():
+        variables = {"natural_length": self.natural_length}
+        for mark_id, position in self.mark_positions.items():
             variables[f"inner_{mark_id}"] = position
         return variables
 
@@ -620,8 +620,20 @@ class AudioPlan(PlanningNode):
 
     def render_time_variables(self) -> dict[str, float]:
         variables = {"natural_length": float(self._seconds_to_frames(self.natural_length))}
-        variables.update(self.audio_marks_render)
+        variables.update(self.render_mark_positions)
         return variables
+
+    @property
+    def render_mark_positions(self) -> dict[str, float]:
+        """Return expression-visible marks in rendered sample coordinates."""
+
+        positions = dict(self.mark_positions)
+        for mark_id, position in self._incoming_marks_inner.items():
+            positions.setdefault(mark_id, position)
+        return {
+            mark_id: float(self._seconds_to_frames(position - self.inner_first))
+            for mark_id, position in positions.items()
+        }
 
     def evaluate_expression(
         self,
@@ -639,18 +651,11 @@ class AudioPlan(PlanningNode):
 
     def _finalize_intrinsic_layout(self) -> None:
         self._layout_complete = True
-        self._content_start = self._raw_inner_first
-        self._content_end = self._raw_inner_last
-        self.inner_first = self._raw_inner_first
-        self.inner_last = self._raw_inner_last
-        self.length = self._raw_length
-        self.end = self.length
-        self.start = 0.0
-        self.audio_marks_inner = self._resolved_layout_marks_inner()
-        self._rebuild_render_marks()
+        self.end = self.start + self.advance
+        self.mark_positions = self._resolved_mark_positions()
 
-    def _resolved_layout_marks_inner(self) -> dict[str, float]:
-        marks = dict(self._layout_marks_inner)
+    def _resolved_mark_positions(self) -> dict[str, float]:
+        marks = dict(self.mark_positions)
         if self.first_mark is not None:
             if self.first_mark in marks:
                 marks.pop(self.first_mark, None)
@@ -668,28 +673,15 @@ class AudioPlan(PlanningNode):
             mark_id: position - self.start
             for mark_id, position in (incoming_marks or {}).items()
         }
-        self._rebuild_render_marks()
-
-    def _rebuild_render_marks(self) -> None:
-        render_marks = dict(self.audio_marks_inner)
-        for mark_id, position in self._incoming_marks_inner.items():
-            render_marks.setdefault(mark_id, position)
-        self.audio_marks_render = {
-            mark_id: float(self._seconds_to_frames(position - self.inner_first))
-            for mark_id, position in render_marks.items()
-        }
 
     def _apply_node_render_geometry(self, result: RenderResult) -> RenderResult:
         total_frames = max(0, self._seconds_to_frames(self.natural_length))
-        content_start_frame = self._seconds_to_frames(self._content_start - self.inner_first)
-        if total_frames == result.frame_count and content_start_frame == 0:
+        if total_frames == result.frame_count:
             return result
         audio = self._empty_audio(total_frames)
         if result.frame_count != 0:
-            write_start = max(0, content_start_frame)
-            write_end = min(total_frames, write_start + result.frame_count)
-            source_end = max(0, write_end - write_start)
-            audio[write_start:write_end] = result.audio[:source_end]
+            source_end = min(total_frames, result.frame_count)
+            audio[:source_end] = result.audio[:source_end]
         return type(result)(audio=audio)
 
     def _seconds_to_frames(self, seconds: float) -> int:
@@ -705,18 +697,15 @@ class AudioPlan(PlanningNode):
 
     async def _layout_audio(self) -> None:
         self._layout_complete = False
-        self._layout_marks_inner: dict[str, float] = {}
-        self._raw_inner_first = 0.0
-        self._raw_inner_last = 0.0
-        self._raw_length = 0.0
-        self._content_start = 0.0
-        self._content_end = 0.0
+        self.mark_positions = {}
+        self.inner_first = 0.0
+        self.inner_last = 0.0
+        self.advance = 0.0
         await self.layout_node()
         self._finalize_intrinsic_layout()
 
     async def _render_audio(self) -> RenderResult:
         await self.layout()
-        self._rebuild_render_marks()
         return await self.post_render(await self.render_node())
 
 
@@ -727,15 +716,14 @@ class MarkPlan(AudioPlan):
     def __init__(self, node: MarkNode, id: str, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
         self.id = id
-        self._local_audio_marks = [id]
-        self._rebuild_audio_marks(())
+        self._local_mark_names = [id]
+        self._rebuild_mark_names(())
 
     def __repr__(self) -> str:
         return f"MarkPlan(id={self.id!r})"
 
     async def layout_node(self) -> None:
-        self._layout_marks_inner = {self.id: 0.0}
-        self._raw_length = 0.0
+        self.mark_positions = {self.id: 0.0}
 
     async def render_node(self) -> RenderResult:
         return RenderResult.empty(channels=self.config.resolved_output_channels)
@@ -753,7 +741,7 @@ class ComposeAudioPlan(AudioPlan):
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.audio_plans = list(audio_plans)
-        self._rebuild_audio_marks(self.audio_plans)
+        self._rebuild_mark_names(self.audio_plans)
 
     def __repr__(self) -> str:
         return f"ComposeAudioPlan(children={len(self.audio_plans)})"
@@ -773,34 +761,34 @@ class ComposeAudioPlan(AudioPlan):
     def cut_before_mark(self, audio_mark: str) -> None:
         super().cut_before_mark(audio_mark)
         for index, audio_plan in enumerate(self.audio_plans):
-            if audio_mark not in audio_plan.audio_marks:
+            if audio_mark not in audio_plan.mark_names:
                 continue
             self.audio_plans = self.audio_plans[index:]
             self.audio_plans[0].cut_before_mark(audio_mark)
-            self._rebuild_audio_marks(self.audio_plans)
+            self._rebuild_mark_names(self.audio_plans)
             return
         if audio_mark == self.first_mark:
             return
         if audio_mark == self.last_mark:
             self.audio_plans = []
-            self._rebuild_audio_marks(self.audio_plans)
+            self._rebuild_mark_names(self.audio_plans)
             return
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
     def cut_after_mark(self, audio_mark: str) -> None:
         super().cut_after_mark(audio_mark)
         for index, audio_plan in enumerate(self.audio_plans):
-            if audio_mark not in audio_plan.audio_marks:
+            if audio_mark not in audio_plan.mark_names:
                 continue
             self.audio_plans = self.audio_plans[: index + 1]
             self.audio_plans[-1].cut_after_mark(audio_mark)
-            self._rebuild_audio_marks(self.audio_plans)
+            self._rebuild_mark_names(self.audio_plans)
             return
         if audio_mark == self.last_mark:
             return
         if audio_mark == self.first_mark:
             self.audio_plans = []
-            self._rebuild_audio_marks(self.audio_plans)
+            self._rebuild_mark_names(self.audio_plans)
             return
         raise ValueError(f"Unknown or ambiguous audio mark {audio_mark!r}")
 
@@ -839,13 +827,6 @@ class ComposeAudioPlan(AudioPlan):
         await asyncio.gather(*(audio_plan.layout() for audio_plan in explicit_children))
 
         for audio_plan in explicit_children:
-            audio_plan.start = audio_plan.evaluate_expression(
-                audio_plan.start_expression,
-                audio_plan.start_variables(
-                    outer_marks=running_outer_marks,
-                ),
-                attribute_name="start",
-            )
             audio_plan.incoming_marks(running_outer_marks)
             self._resolve_child_right_side(audio_plan, running_outer_marks)
             self._merge_child_outer_marks(
@@ -855,39 +836,35 @@ class ComposeAudioPlan(AudioPlan):
             )
 
         if not self.audio_plans:
-            self._layout_marks_inner = {}
-            self._raw_inner_first = 0.0
-            self._raw_inner_last = 0.0
-            self._raw_length = 0.0
             return
 
-        self._raw_inner_first = min(
+        self.inner_first = min(
             min(audio_plan.start, audio_plan.start + audio_plan.inner_first)
             for audio_plan in self.audio_plans
         )
-        self._raw_inner_last = max(
+        self.inner_last = max(
             max(audio_plan.end, audio_plan.start + audio_plan.inner_last)
             for audio_plan in self.audio_plans
         )
-        self._raw_length = max((audio_plan.end for audio_plan in self.audio_plans), default=0.0)
-        self._layout_marks_inner = self._visible_child_marks_inner()
+        self.advance = max((audio_plan.end for audio_plan in self.audio_plans), default=0.0)
+        self.mark_positions = self._visible_child_mark_positions()
 
     async def render_node(self) -> RenderResult:
         from .effects import EffectMixer
 
         for audio_plan in self.audio_plans:
-            audio_plan.incoming_marks(self.audio_marks_inner)
+            audio_plan.incoming_marks(self.mark_positions)
         rendered_results = await asyncio.gather(
             *(audio_plan.render() for audio_plan in self.audio_plans)
         )
-        total_frames = max(0, self._seconds_to_frames(self._raw_inner_last - self._raw_inner_first))
+        total_frames = max(0, self._seconds_to_frames(self.natural_length))
         mixer = EffectMixer(
             total_frames=total_frames,
             channels=self.config.resolved_output_channels,
         )
         for audio_plan, result in zip(self.audio_plans, rendered_results, strict=True):
             start_frame = self._seconds_to_frames(
-                audio_plan.start + audio_plan.inner_first - self._raw_inner_first
+                audio_plan.start + audio_plan.inner_first - self.inner_first
             )
             end_frame = start_frame + result.frame_count
             write_debug_message(
@@ -937,7 +914,7 @@ class ComposeAudioPlan(AudioPlan):
         audio_plan: AudioPlan,
         outer_marks: Mapping[str, float],
     ) -> None:
-        intrinsic_length = audio_plan.inner_last
+        intrinsic_length = audio_plan.advance
         resolved_length = intrinsic_length
         if audio_plan.length_expression is not None:
             resolved_length = audio_plan.evaluate_expression(
@@ -974,7 +951,6 @@ class ComposeAudioPlan(AudioPlan):
             )
         else:
             audio_plan.end = default_end
-        audio_plan.length = audio_plan.end - audio_plan.start
 
     def _merge_child_outer_marks(
         self,
@@ -982,7 +958,7 @@ class ComposeAudioPlan(AudioPlan):
         outer_mark_counts: dict[str, int],
         audio_plan: AudioPlan,
     ) -> None:
-        for mark_id, position in audio_plan.audio_marks_inner.items():
+        for mark_id, position in audio_plan.mark_positions.items():
             count = outer_mark_counts.get(mark_id, 0) + 1
             outer_mark_counts[mark_id] = count
             if count == 1:
@@ -990,11 +966,11 @@ class ComposeAudioPlan(AudioPlan):
             else:
                 outer_marks.pop(mark_id, None)
 
-    def _visible_child_marks_inner(self) -> dict[str, float]:
+    def _visible_child_mark_positions(self) -> dict[str, float]:
         mark_counts: dict[str, int] = {}
         mark_positions: dict[str, float] = {}
         for audio_plan in self.audio_plans:
-            for mark_id, position in audio_plan.audio_marks_inner.items():
+            for mark_id, position in audio_plan.mark_positions.items():
                 mark_counts[mark_id] = mark_counts.get(mark_id, 0) + 1
                 mark_positions[mark_id] = audio_plan.start + position
         return {
@@ -1016,7 +992,9 @@ class LoopPlan(AudioPlan):
     ) -> None:
         super().__init__(node=node, **kwargs)
         self.audio_plan = audio_plan
-        self._rebuild_audio_marks((self.audio_plan,))
+        # A loop bubbles wrapped mark names during planning even though layout may
+        # later suppress positions made ambiguous by repetition.
+        self._rebuild_mark_names((self.audio_plan,))
         self.resolved_loop_beg = 0.0
         self.resolved_loop_end = 0.0
         self.resolved_loop_stop = 0.0
@@ -1036,6 +1014,12 @@ class LoopPlan(AudioPlan):
 
     async def async_resolve(self):
         return self
+
+    def cut_before_mark(self, audio_mark: str) -> None:
+        raise ValueError(f"cutting at mark {audio_mark!r} inside a loop is not supported")
+
+    def cut_after_mark(self, audio_mark: str) -> None:
+        raise ValueError(f"cutting at mark {audio_mark!r} inside a loop is not supported")
 
     def incoming_marks(self, incoming_marks: Mapping[str, float] | None = None) -> None:
         super().incoming_marks(incoming_marks)
@@ -1075,11 +1059,11 @@ class LoopPlan(AudioPlan):
     async def render_node(self) -> RenderResult:
         base_result = await self.audio_plan.render()
         segments: list[RenderResult] = []
-        if self.resolved_loop_beg > self._raw_inner_first:
+        if self.resolved_loop_beg > self.inner_first:
             segments.append(
                 self._render_wrapped_interval(
                     base_result,
-                    self._raw_inner_first,
+                    self.inner_first,
                     self.resolved_loop_beg,
                 )
             )
@@ -1167,15 +1151,15 @@ class LoopPlan(AudioPlan):
         return self.resolved_loop_end + self._frames_to_seconds(extra_frames)
 
     def _loop_expression_marks(self) -> dict[str, float]:
-        marks = dict(self.audio_plan.audio_marks_inner)
+        marks = dict(self.audio_plan.mark_positions)
         for mark_id, position in self._incoming_marks_inner.items():
             marks.setdefault(mark_id, position)
         return marks
 
-    def _loop_layout_marks_inner(self) -> dict[str, float]:
+    def _loop_mark_positions(self) -> dict[str, float]:
         marks: dict[str, float] = {}
         epsilon = self._loop_epsilon()
-        for mark_id, position in self.audio_plan.audio_marks_inner.items():
+        for mark_id, position in self.audio_plan.mark_positions.items():
             if position < self.resolved_loop_beg - epsilon:
                 marks[mark_id] = position
                 continue
@@ -1186,28 +1170,22 @@ class LoopPlan(AudioPlan):
                 marks.setdefault(mark_id, position)
         if self.loop_outro:
             outro_offset = self.resolved_loop_stop - self.resolved_loop_end
-            for mark_id, position in self.audio_plan.audio_marks_inner.items():
+            for mark_id, position in self.audio_plan.mark_positions.items():
                 if position > self.resolved_loop_end + epsilon:
                     marks.setdefault(mark_id, outro_offset + position)
         return marks
 
     def _rebuild_loop_layout(self) -> None:
-        self._raw_inner_first = min(self.audio_plan.inner_first, self.resolved_loop_beg)
+        self.inner_first = min(self.audio_plan.inner_first, self.resolved_loop_beg)
         outro_duration = (
             max(0.0, self.audio_plan.inner_last - self.resolved_loop_end)
             if self.loop_outro
             else 0.0
         )
-        self._raw_inner_last = self.resolved_loop_stop + outro_duration
-        self._raw_length = self._raw_inner_last
-        self._layout_marks_inner = self._loop_layout_marks_inner()
-        self._content_start = self._raw_inner_first
-        self._content_end = self._raw_inner_last
-        self.inner_first = self._raw_inner_first
-        self.inner_last = self._raw_inner_last
-        self.length = self._raw_length
-        self.audio_marks_inner = self._resolved_layout_marks_inner()
-        self._rebuild_render_marks()
+        self.inner_last = self.resolved_loop_stop + outro_duration
+        self.advance = self.inner_last
+        self.mark_positions = self._loop_mark_positions()
+        self.mark_positions = self._resolved_mark_positions()
 
     def _render_wrapped_interval(
         self,
@@ -1271,8 +1249,8 @@ class SlicePlan(AudioPlan):
     async def layout_node(self) -> None:
         if self.end_time < self.start_time:
             raise ValueError("end_time must be greater than or equal to start_time")
-        self._raw_inner_last = self.end_time - self.start_time
-        self._raw_length = self._raw_inner_last
+        self.inner_last = self.end_time - self.start_time
+        self.advance = self.inner_last
 
     async def render_node(self) -> RenderResult:
         if self.end_time < self.start_time:

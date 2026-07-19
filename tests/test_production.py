@@ -74,7 +74,7 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, m
             )
             production_plan = await root.plan(ainjector)
             production_plan.cut_before_mark("cut")
-            return production_plan.audio_marks, await production_plan.render()
+            return production_plan.mark_names, await production_plan.render()
         finally:
             injector.close()
 
@@ -136,7 +136,7 @@ def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Pa
             )
             production_plan = await root.plan(ainjector)
             production_plan.cut_before_mark("brennan_office")
-            return production_plan.audio_marks, await production_plan.render()
+            return production_plan.mark_names, await production_plan.render()
         finally:
             injector.close()
 
@@ -198,7 +198,7 @@ def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, mo
             )
             production_plan = await root.plan(ainjector)
             production_plan.cut_after_mark("cut")
-            return production_plan.audio_marks, await production_plan.render()
+            return production_plan.mark_names, await production_plan.render()
         finally:
             injector.close()
 
@@ -260,7 +260,7 @@ def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path
             )
             production_plan = await root.plan(ainjector)
             production_plan.cut_after_mark("brennan_office")
-            return production_plan.audio_marks, await production_plan.render()
+            return production_plan.mark_names, await production_plan.render()
         finally:
             injector.close()
 

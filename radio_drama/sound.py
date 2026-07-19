@@ -166,8 +166,8 @@ class SoundPlan(AudioPlan):
         audio = await normalized_audio_task
         self._resolve_trim_expressions(total_frames=audio.shape[0])
         trimmed_audio = self._trimmed_audio(audio)
-        self._raw_inner_last = self._frames_to_seconds(trimmed_audio.shape[0])
-        self._raw_length = self._raw_inner_last
+        self.inner_last = self._frames_to_seconds(trimmed_audio.shape[0])
+        self.advance = self.inner_last
 
     async def render_node(self) -> RenderResult:
         normalized_audio_task = await self._ensure_normalized_audio_task()

@@ -452,9 +452,9 @@ def test_mark_plan_emits_zero_length_audio_and_one_mark(tmp_path: Path):
 
     mark_plan, result = asyncio.run(runner())
     assert isinstance(mark_plan, MarkPlan)
-    assert mark_plan.audio_marks == ["cut"]
+    assert mark_plan.mark_names == ["cut"]
     assert result.frame_count == 0
-    assert mark_plan.audio_marks_render == {"cut": 0.0}
+    assert mark_plan.render_mark_positions == {"cut": 0.0}
 
 
 def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
@@ -479,8 +479,8 @@ def test_compose_audio_plan_hides_ambiguous_marks(tmp_path: Path):
             injector.close()
 
     compose_plan, _ = asyncio.run(runner())
-    assert compose_plan.audio_marks == []
-    assert compose_plan.audio_marks_render == {}
+    assert compose_plan.mark_names == []
+    assert compose_plan.render_mark_positions == {}
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
         compose_plan.cut_before_mark("cut")
     with pytest.raises(ValueError, match="Unknown or ambiguous audio mark 'cut'"):
@@ -522,7 +522,7 @@ def test_compose_audio_plan_bubbles_render_time_mark_positions(tmp_path: Path):
 
     audio_plan, result = asyncio.run(runner())
     assert result.audio.tolist() == [1.0, 1.0]
-    assert audio_plan.audio_marks_render == {"start": 0.0, "after": 2.0}
+    assert audio_plan.render_mark_positions == {"start": 0.0, "after": 2.0}
 
 
 def test_loop_plan_repeats_region_suppresses_loop_marks_and_shifts_outro(tmp_path: Path):
@@ -535,9 +535,9 @@ def test_loop_plan_repeats_region_suppresses_loop_marks_and_shifts_outro(tmp_pat
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
-            self._layout_marks_inner = {"pre": 0.25, "beg": 0.5, "mid": 0.75, "end": 1.0, "out": 1.25}
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+            self.mark_positions = {"pre": 0.25, "beg": 0.5, "mid": 0.75, "end": 1.0, "out": 1.25}
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -567,9 +567,13 @@ def test_loop_plan_repeats_region_suppresses_loop_marks_and_shifts_outro(tmp_pat
         result.audio,
         np.array([0.0, 1.0, 2.0, 3.0, 0.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32),
     )
-    assert plan.audio_marks_inner == {"pre": 0.25, "beg": 0.5, "end": 1.0, "out": 2.0}
-    assert plan.audio_marks_render == {"pre": 1.0, "beg": 2.0, "end": 4.0, "out": 8.0}
-    assert "mid" not in plan.audio_marks_inner
+    assert plan.mark_positions == {"pre": 0.25, "beg": 0.5, "end": 1.0, "out": 2.0}
+    assert plan.render_mark_positions == {"pre": 1.0, "beg": 2.0, "end": 4.0, "out": 8.0}
+    assert "mid" not in plan.mark_positions
+    with pytest.raises(ValueError, match="inside a loop"):
+        plan.cut_before_mark("pre")
+    with pytest.raises(ValueError, match="inside a loop"):
+        plan.cut_after_mark("out")
 
 
 def test_loop_plan_loop_until_whole_extend_adjusts_loop_stop(tmp_path: Path):
@@ -582,8 +586,8 @@ def test_loop_plan_loop_until_whole_extend_adjusts_loop_stop(tmp_path: Path):
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -622,8 +626,8 @@ def test_loop_plan_loop_until_can_target_later_automatic_mark(tmp_path: Path):
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -651,7 +655,7 @@ def test_loop_plan_loop_until_can_target_later_automatic_mark(tmp_path: Path):
     loop_plan, compose_plan = asyncio.run(runner())
     assert loop_plan.resolved_loop_stop == pytest.approx(4.0)
     assert loop_plan.inner_last == pytest.approx(4.0)
-    assert compose_plan.audio_marks == ["later"]
+    assert compose_plan.mark_names == ["later"]
 
 
 def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
@@ -673,8 +677,8 @@ def test_compose_audio_debug_logs_placement_spans(tmp_path: Path):
             return f"FakeAudioPlan({self.label!r})"
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -721,8 +725,8 @@ def test_compose_automatic_pre_gap_expression_advances_to_child_end():
             self.result = result
 
         async def layout_node(self) -> None:
-            self._raw_inner_last = self._frames_to_seconds(self.result.frame_count)
-            self._raw_length = self._raw_inner_last
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
 
         async def render_node(self) -> RenderResult:
             return self.result
@@ -765,6 +769,48 @@ def test_compose_automatic_pre_gap_expression_advances_to_child_end():
     assert overlap.length == pytest.approx(0.75)
     assert overlap.length == pytest.approx(overlap.end - overlap.start)
     assert third.start == pytest.approx(overlap.end)
+
+
+def test_nested_compose_uses_inner_recommended_advance():
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            root = parse_production_string("<production />", source_name="compose.xml")
+            shortened = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.array([1.0, 1.0], dtype=np.float32)),
+                attrs={"length": "0.25"},
+            )
+            inner = await ainjector(ComposeAudioPlan, node=root, audio_plans=[shortened])
+            following = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.array([2.0], dtype=np.float32)),
+            )
+            outer = await ainjector(ComposeAudioPlan, node=root, audio_plans=[inner, following])
+            await outer.layout()
+            return inner, following
+        finally:
+            injector.close()
+
+    inner, following = asyncio.run(runner())
+    assert inner.inner_last == pytest.approx(0.5)
+    assert inner.advance == pytest.approx(0.25)
+    assert following.start == pytest.approx(0.25)
 
 
 def test_normalized_sound_cache_reuses_shared_sound_path(tmp_path: Path):

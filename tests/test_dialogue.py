@@ -742,9 +742,9 @@ def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Pa
 
     production_plan, special_slice, result = asyncio.run(runner())
     assert isinstance(special_slice, ScriptSlice)
-    assert production_plan.audio_marks == ["enter", "exit"]
-    assert special_slice.audio_marks == ["enter", "exit"]
-    assert special_slice.audio_marks_render == {"enter": 0.0, "exit": 4.0}
+    assert production_plan.mark_names == ["enter", "exit"]
+    assert special_slice.mark_names == ["enter", "exit"]
+    assert special_slice.render_mark_positions == {"enter": 0.0, "exit": 4.0}
     np.testing.assert_allclose(result.audio, np.array([4.0, 5.0, 6.0, 7.0], dtype=np.float32))
 
 

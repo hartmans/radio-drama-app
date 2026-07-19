@@ -549,8 +549,8 @@ class ScriptSlice(AudioPlan):
         self._log_nan_marker_if_used(aligned_result, self.end_marker, marker_name="end")
         start_frame = aligned_result.marker_frames[self.start_marker]
         end_frame = max(start_frame, aligned_result.marker_frames[self.end_marker])
-        self._raw_inner_last = self._frames_to_seconds(end_frame - start_frame)
-        self._raw_length = self._raw_inner_last
+        self.inner_last = self._frames_to_seconds(end_frame - start_frame)
+        self.advance = self.inner_last
 
     async def render_node(self) -> RenderResult:
         aligned_result = await self.aligned_script_source.render()
