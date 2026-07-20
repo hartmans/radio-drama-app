@@ -325,6 +325,18 @@ class ScriptGapNode(ElementNode):
         raw_label = self.attributes.get("label", "")
         return raw_label.strip()
 
+    @property
+    def mode(self) -> str:
+        raw_mode = self.attributes.get("mode", "exclude")
+        normalized = raw_mode.strip().lower()
+        if normalized not in {"exclude", "include"}:
+            raise self.error("<script-gap> mode must be either 'exclude' or 'include'")
+        return normalized
+
+    def validate_document(self) -> None:
+        self.mode
+        return ElementNode.validate_document(self)
+
 
 @dataclass(slots=True)
 class IgnoreNode(ElementNode):

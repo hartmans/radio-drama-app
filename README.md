@@ -156,6 +156,7 @@ Current rules:
 * dialogue lines use `Speaker: text`
 * a leading `<recording ref="..." />` declares the script's default recorded source; prefix a stanza with `~` (for example `~Speaker: text`) or use `<line speaker="Speaker" source="recording">text</line>` to select it
 * when a script mixes sources, the complete dialogue remains in the TTS request for context, while only TTS-selected lines use synthesized audio; forced alignment for the recording receives only recording-selected dialogue
+* `<script-gap>` defaults to `mode="exclude"`, which cuts the preceding recording at its dialogue line's aligned end; `mode="include"` keeps recorded material until the next recorded line's aligned start, and requires that later recorded line
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty
@@ -188,6 +189,19 @@ Mixed recorded and synthesized dialogue example:
 ```
 
 `<recording>` must be the first element child of its script. `<sound-script>` is no longer supported; ordinary nested `<sound>` elements continue to insert inline audio.
+
+To retain a recorded reaction or pause while a TTS line is inserted, use an
+including script gap:
+
+```xml
+<script>
+  <recording ref="alice-take.wav" />
+  ~alice: I already know what it will be.
+  <script-gap mode="include" />
+  narrator: Nobody in the room believed her.
+  ~alice: You never do.
+</script>
+```
 
 Practical loop example:
 
