@@ -156,7 +156,8 @@ Current rules:
 * dialogue lines use `Speaker: text`
 * a leading `<recording ref="..." />` declares the script's default recorded source; prefix a stanza with `~` (for example `~Speaker: text`) or use `<line speaker="Speaker" source="recording">text</line>` to select it
 * when a script mixes sources, the complete dialogue remains in the TTS request for context, while only TTS-selected lines use synthesized audio; forced alignment for the recording receives only recording-selected dialogue
-* `<script-gap>` defaults to `mode="exclude"`, which cuts the preceding recording at its dialogue line's aligned end; `mode="include"` keeps recorded material until the next recorded line's aligned start, and requires that later recorded line
+* recording alignment projects inline audio and marks only while the most recent dialogue line selects the recording source; a TTS line switches subsequent inline events out of the recording projection until another recorded line appears
+* `<script-gap>` defaults to `mode="exclude"`, which cuts the preceding recording at its dialogue line's aligned end; `mode="include"` keeps recorded material until the next recorded line's aligned start, or through the end of the recording when there is no later recorded line
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty

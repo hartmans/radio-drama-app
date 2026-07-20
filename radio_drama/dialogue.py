@@ -751,9 +751,7 @@ class ScriptPlan(AudioPlan):
             following = self.script_events[index]
             if isinstance(following, DialogueLine) and following.source == "recording":
                 return index
-        raise self.document_error(
-            "<script-gap mode=\"include\"> requires a later recorded dialogue line"
-        )
+        return len(self.script_events)
 
     def _source_has_output(self, source: str) -> bool:
         return any(
@@ -772,12 +770,15 @@ class ScriptPlan(AudioPlan):
         )
         if not has_recording:
             return retained
+        current_source: Literal["tts", "recording"] | None = None
         for event in self.script_events:
-            if isinstance(event, DialogueLine) and event.source == "recording":
+            if isinstance(event, DialogueLine):
+                current_source = event.source
+                if current_source == "recording":
+                    retained.append(event)
+            elif isinstance(event, ScriptGap) and current_source == "recording":
                 retained.append(event)
-            elif isinstance(event, ScriptGap):
-                retained.append(event)
-            elif isinstance(event, DialogueAudio):
+            elif isinstance(event, DialogueAudio) and current_source == "recording":
                 retained.append(event)
         return retained
 
