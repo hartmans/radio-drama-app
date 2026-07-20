@@ -385,12 +385,12 @@ class AudioPlan(PlanningNode):
         self.pan_expression = cast(str | None, attrs.get("pan"))
         self.preset_name = cast(str | None, attrs.get("preset"))
         if self.preset_name is not None:
-            from .effects import available_effect_chains, normalize_effect_chain_name
+            from .effects import EffectChainRegistry, normalize_effect_chain_name
 
             normalized_preset_name = normalize_effect_chain_name(self.preset_name)
-            available = set(available_effect_chains())
-            if normalized_preset_name not in available:
-                formatted = ", ".join(sorted(available))
+            effect_chains = self.ainjector.injector.get_instance(EffectChainRegistry)
+            if normalized_preset_name not in effect_chains:
+                formatted = ", ".join(effect_chains.names())
                 raise self.document_error(
                     f"Unknown preset {self.preset_name!r}. Available presets: {formatted}"
                 )
@@ -863,7 +863,8 @@ class ComposeAudioPlan(AudioPlan):
             *(audio_plan.render() for audio_plan in self.audio_plans)
         )
         total_frames = max(0, self._seconds_to_frames(self.natural_length))
-        mixer = EffectMixer(
+        mixer = await self.ainjector(
+            EffectMixer,
             total_frames=total_frames,
             channels=self.config.resolved_output_channels,
         )

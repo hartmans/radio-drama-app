@@ -4,23 +4,22 @@ from carthage.dependency_injection import inject
 
 from .audio import ComposeAudioPlan
 from .config import ProductionConfig
+from .effects import EffectChainRegistry
 from .rendering import ProductionResult, RenderResult
 
 
-@inject(config=ProductionConfig)
+@inject(config=ProductionConfig, effect_chains=EffectChainRegistry)
 class ProductionPlan(ComposeAudioPlan):
     """Top-level production plan that preserves script order."""
 
     async def render_node(self) -> ProductionResult:
         """Render scripts in document order and clip to the production boundary."""
 
-        from .effects import build_named_effect_chain
-
         combined = await super().render_node()
         trimmed = self._trim_to_production_boundary(combined)
         if trimmed.frame_count == 0:
             return ProductionResult(audio=trimmed.audio)
-        master_chain = build_named_effect_chain("master")
+        master_chain = self.effect_chains["master"]
         master_chain.apply(
             trimmed.audio,
             sample_rate=self.config.resolved_output_sample_rate,

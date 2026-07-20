@@ -9,6 +9,7 @@ from carthage.dependency_injection import AsyncInjector, Injector
 
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
+from radio_drama.effects import EffectChainRegistry
 from radio_drama.init import radio_drama_injector
 
 
@@ -35,6 +36,7 @@ async def make_async_injector(
         document_path=document_path,
         output_path=output_path,
     )
+    injector.add_provider(EffectChainRegistry())
     return injector, injector(AsyncInjector)
 
 

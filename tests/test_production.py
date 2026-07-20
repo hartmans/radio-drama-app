@@ -21,6 +21,12 @@ from radio_drama.vibevoice import VibeVoiceResource
 from phase1_helpers import make_async_injector, normalized_script_from_request
 
 
+@pytest.fixture(autouse=True)
+def noop_effect_chains(monkeypatch):
+    for preset_name in effects_module._PRESETS:
+        monkeypatch.setitem(effects_module._PRESETS, preset_name, EffectPipeline(()))
+
+
 def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

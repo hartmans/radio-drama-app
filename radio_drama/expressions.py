@@ -16,6 +16,7 @@ _ALLOWED_BINARY_OPERATORS = (
     ast.Div,
     ast.Pow,
     ast.Mod,
+    ast.BitOr,
 )
 _ALLOWED_UNARY_OPERATORS = (
     ast.UAdd,
@@ -155,9 +156,13 @@ def _validate_node(node: ast.AST) -> None:
         _validate_node(node.body)
         return
     if isinstance(node, ast.Constant):
-        if isinstance(node.value, Real):
+        if isinstance(node.value, (Real, str)):
             return
-        raise ValueError("Only numeric constants are allowed in expressions")
+        raise ValueError("Only numeric and string constants are allowed in expressions")
+    if isinstance(node, ast.Tuple):
+        for element in node.elts:
+            _validate_node(element)
+        return
     if isinstance(node, ast.Name):
         return
     if isinstance(node, ast.BinOp):
@@ -174,9 +179,13 @@ def _validate_node(node: ast.AST) -> None:
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
             raise ValueError("Only direct function calls are allowed in expressions")
-        if node.keywords:
-            raise ValueError("Keyword arguments are not allowed in expressions")
         for arg in node.args:
+            if isinstance(arg, ast.Starred):
+                raise ValueError("Positional argument expansion is not allowed in expressions")
             _validate_node(arg)
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                raise ValueError("Keyword argument expansion is not allowed in expressions")
+            _validate_node(keyword.value)
         return
     raise ValueError(f"Unsupported expression node: {type(node).__name__}")

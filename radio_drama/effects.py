@@ -6,19 +6,23 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Protocol, Sequence, TypeVar
+from typing import Callable, Mapping, Protocol, Sequence, TypeVar, runtime_checkable
 
 import numpy as np
 import soundfile as sf
+import yaml
+from carthage.dependency_injection import AsyncInjectable, inject, inject_autokwargs
 from scipy.signal import butter, sosfiltfilt
 
 from .audio import normalize_audio_array, resample_audio
 from .expressions import coerce_array_exp, eval_expression
+from .planning import PlanningNode
 
 
 VOICE_PREPROCESS_VERSION = "loudnorm-v1"
 
 
+@runtime_checkable
 class EffectStage(Protocol):
     """Audio transformation that mutates one production-format buffer in place."""
 
@@ -143,12 +147,20 @@ class EffectPipeline(_ComposableEffectStage):
 
 
 effect_stages: dict[str, Callable[..., EffectStage]] = {}
+_effect_chain_functions: dict[str, Callable[..., EffectStage]] = {}
 
 _EffectFactory = TypeVar("_EffectFactory", bound=Callable[..., EffectStage])
 
 
 def register_effect_stage(factory: _EffectFactory) -> _EffectFactory:
     effect_stages[factory.__name__] = factory
+    return factory
+
+
+def effect_chain_function(factory: _EffectFactory) -> _EffectFactory:
+    """Expose one explicitly approved stage factory to effect-chain expressions."""
+
+    _effect_chain_functions[factory.__name__] = factory
     return factory
 
 
@@ -276,6 +288,7 @@ def _filtered_audio(
     return normalize_audio_array(sosfiltfilt(sos, audio, axis=0))
 
 
+@effect_chain_function
 @register_effect_stage
 def filter_audio(
     *,
@@ -296,6 +309,7 @@ def filter_audio(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def tilt_tone(
     *,
@@ -316,6 +330,7 @@ def tilt_tone(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def compress_audio(
     *,
@@ -355,6 +370,7 @@ def compress_audio(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def mid_side_mix(
     *,
@@ -374,6 +390,7 @@ def mid_side_mix(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def early_reflections(
     *,
@@ -394,6 +411,7 @@ def early_reflections(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def feedback_reverb(
     *,
@@ -424,6 +442,7 @@ def feedback_reverb(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
 def mix_white_noise(
     *,
@@ -493,8 +512,22 @@ def pan(
 
     return stage
 
-_PRESETS: Mapping[str, EffectStage] = {
-    "master": ffmpeg_filter_stage(lambda: "loudnorm=I=-16:TP=-1.5:LRA=11"),
+
+@effect_chain_function
+def master_loudnorm() -> EffectStage:
+    """Return the fixed production mastering stage exposed to expressions."""
+
+    return ffmpeg_filter_stage(lambda: "loudnorm=I=-16:TP=-1.5:LRA=11")
+
+
+def voice_loudnorm() -> EffectStage:
+    """Return the internal fixed reference-voice normalization stage."""
+
+    return ffmpeg_filter_stage(lambda: "loudnorm")
+
+
+_PRESETS: dict[str, EffectStage] = {
+    "master": master_loudnorm(),
     "narrator": (
         filter_audio(btype="highpass", cutoff_hz=85.0)
         | compress_audio(
@@ -631,7 +664,90 @@ _PRESET_ALIASES = {
     "narrator2": "thoughts",
 }
 
-_VOICE_PREPROCESS = ffmpeg_filter_stage(lambda: "loudnorm")
+
+def effect_chain(value) -> EffectStage:
+    """Coerce an expression result to the effect-chain interface."""
+
+    if isinstance(value, EffectStage):
+        return value
+    raise TypeError(f"Expected an effect chain, got {type(value).__name__}")
+
+
+def effect_chain_variables(
+    presets: Mapping[str, EffectStage] | None = None,
+) -> dict[str, object]:
+    """Return approved functions and current presets for chain evaluation."""
+
+    current_presets = _PRESETS if presets is None else presets
+    variables: dict[str, object] = dict(_effect_chain_functions)
+    variables.update(current_presets)
+    variables.update(
+        {
+            alias: current_presets[target]
+            for alias, target in _PRESET_ALIASES.items()
+            if target in current_presets
+        }
+    )
+    return variables
+
+
+class EffectChainRegistry:
+    """Production-scoped named effect chains initialized from built-in presets."""
+
+    def __init__(self) -> None:
+        self._presets = dict(_PRESETS)
+
+    def __getitem__(self, name: str) -> EffectStage:
+        return self._presets[normalize_effect_chain_name(name)]
+
+    def __contains__(self, name: str) -> bool:
+        return normalize_effect_chain_name(name) in self._presets
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._presets))
+
+    def add_from_expression(self, name: str, expression: str) -> EffectStage:
+        normalized_name = normalize_effect_chain_name(name)
+        if normalized_name in _effect_chain_functions:
+            raise ValueError(f"Preset name {name!r} is reserved for an effect function")
+        chain = eval_expression(
+            expression,
+            effect_chain_variables(self._presets),
+            effect_chain,
+        )
+        self._presets[normalized_name] = chain
+        return chain
+
+
+@inject(effect_chains=EffectChainRegistry)
+class PresetMapPlan(PlanningNode):
+    """Evaluate one production's ordered YAML preset definitions."""
+
+    async def async_ready(self):
+        loaded = yaml.safe_load(self.node.normalized_text_content)
+        if not isinstance(loaded, dict):
+            raise self.document_error(
+                "The <preset-map> YAML must be a mapping of preset names to expressions"
+            )
+        for preset_name, expression in loaded.items():
+            if not isinstance(preset_name, str) or not preset_name.strip().isidentifier():
+                raise self.document_error(
+                    "Preset names in <preset-map> must be valid expression identifiers"
+                )
+            if not isinstance(expression, str) or not expression.strip():
+                raise self.document_error(
+                    f"Expression for preset {preset_name!r} must be a non-empty string"
+                )
+            try:
+                self.effect_chains.add_from_expression(preset_name.strip(), expression.strip())
+            except Exception as exc:
+                raise self.document_error(
+                    f"Invalid expression for preset {preset_name!r}: {exc}"
+                ) from exc
+        return await super().async_ready()
+
+
+_VOICE_PREPROCESS = voice_loudnorm()
 
 
 @dataclass(slots=True)
@@ -642,7 +758,8 @@ class _EffectRegion:
     preset_key: tuple[str, ...]
 
 
-class EffectMixer:
+@inject_autokwargs(effect_chains=EffectChainRegistry)
+class EffectMixer(AsyncInjectable):
     """Compose-local preset bus mixer.
 
     Child renders are added in compose-frame coordinates along with a preset bus
@@ -650,7 +767,14 @@ class EffectMixer:
     that bus is processed once, and then all buses are summed together.
     """
 
-    def __init__(self, *, total_frames: int, channels: int) -> None:
+    def __init__(
+        self,
+        *,
+        total_frames: int,
+        channels: int,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
         self.total_frames = max(0, int(total_frames))
         self.channels = max(1, int(channels))
         self._regions: list[_EffectRegion] = []
@@ -701,7 +825,7 @@ class EffectMixer:
     ) -> None:
         def apply_preset_stack() -> None:
             for preset_name in preset_key:
-                stage = build_named_effect_chain(preset_name)
+                stage = self.effect_chains[preset_name]
                 stage.apply(audio, sample_rate=sample_rate)
 
         await asyncio.to_thread(apply_preset_stack)

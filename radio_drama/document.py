@@ -251,6 +251,19 @@ class SpeakerMapNode(ElementNode):
 
 
 @dataclass(slots=True)
+class PresetMapNode(ElementNode):
+    """Document node for production-scoped effect-chain expressions."""
+
+    tag_name: ClassVar[str] = "preset-map"
+    allow_text: ClassVar[bool] = True
+
+    async def plan(self, ainjector):
+        from .effects import PresetMapPlan
+
+        return await ainjector(PresetMapPlan, node=self)
+
+
+@dataclass(slots=True)
 class ScriptNode(ElementNode):
     """Document node for one ordered renderable script unit."""
 
@@ -416,10 +429,16 @@ class ProductionNode(ElementNode):
     """Root document node for one production."""
 
     tag_name: ClassVar[str] = "production"
-    allowed_child_tags: ClassVar[dict[str, type[ElementNode]]] = {"speaker-map": SpeakerMapNode}
+    allowed_child_tags: ClassVar[dict[str, type[ElementNode]]] = {
+        "speaker-map": SpeakerMapNode,
+        "preset-map": PresetMapNode,
+    }
     accepts_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
     def validate_document(self) -> None:
+        preset_maps = self.child_elements_named("preset-map")
+        if len(preset_maps) > 1:
+            raise preset_maps[1].error("A <production> may contain only one <preset-map>")
         return ElementNode.validate_document(self)
 
     @property
@@ -441,6 +460,7 @@ class ProductionNode(ElementNode):
         from .planning import PRODUCTION_PLANNING_INJECTOR_KEY
         from .production import ProductionPlan
         from .sound import ProductionDocumentPath
+        from .effects import EffectChainRegistry
 
         production_injector = radio_drama_injector(
             ainjector.injector,
@@ -452,8 +472,19 @@ class ProductionNode(ElementNode):
         ):
             production_injector.add_provider(ProductionDocumentPath(Path(self.location.source)))
         production_injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, production_injector)
+        production_injector.add_provider(EffectChainRegistry())
         production_ainjector = production_injector(type(ainjector))
-        planned_children = [await child.plan(production_ainjector) for child in self.element_children]
+        preset_maps = self.child_elements_named("preset-map")
+        planned_children = []
+        if preset_maps:
+            planned_children.append(await preset_maps[0].plan(production_ainjector))
+        planned_children.extend(
+            [
+                await child.plan(production_ainjector)
+                for child in self.element_children
+                if not isinstance(child, PresetMapNode)
+            ]
+        )
         audio_plans = [plan for plan in planned_children if isinstance(plan, AudioPlan)]
         production_plan = await production_ainjector(
             ProductionPlan,

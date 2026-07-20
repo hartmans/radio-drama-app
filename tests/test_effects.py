@@ -15,9 +15,13 @@ from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import ScriptPlan, ScriptRenderRequest
 from radio_drama.document import parse_production_string
 from radio_drama.effects import (
+    EffectChainRegistry,
     EffectPipeline,
     available_effect_chains,
     build_named_effect_chain,
+    effect_chain,
+    effect_chain_function,
+    effect_chain_variables,
     load_preprocessed_voice_reference,
 )
 from radio_drama.errors import DocumentError
@@ -477,6 +481,117 @@ def test_named_effect_chains_include_demo_presets():
     assert build_named_effect_chain("Narrator") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator1") is build_named_effect_chain("narrator")
     assert build_named_effect_chain("Narrator2") is build_named_effect_chain("thoughts")
+
+
+def test_effect_chain_function_decorator_adds_factory_to_expression_variables():
+    @effect_chain_function
+    def test_stage(amount: float):
+        del amount
+        return EffectPipeline(())
+
+    assert effect_chain_variables()["test_stage"] is test_stage
+
+
+def test_effect_chain_variables_include_presets_and_aliases():
+    variables = effect_chain_variables()
+
+    assert variables["phone"] is build_named_effect_chain("phone")
+    assert variables["narrator1"] is build_named_effect_chain("narrator")
+    assert "ffmpeg_filter_stage" not in variables
+    assert "voice_loudnorm" not in variables
+
+
+def test_effect_chain_registry_evaluates_replacements_in_order():
+    registry = EffectChainRegistry()
+
+    original_phone = registry["phone"]
+    registry.add_from_expression("extended", "phone | filter_audio(btype='lowpass', cutoff_hz=2000)")
+    registry.add_from_expression("phone", "extended")
+
+    extended = registry["extended"]
+    assert isinstance(extended, EffectPipeline)
+    assert extended.stages[:-1] == original_phone.stages
+    assert registry["phone"] is extended
+
+
+def test_effect_chain_registry_evaluates_alias_replacements_in_order():
+    registry = EffectChainRegistry()
+
+    registry.add_from_expression("narrator1", "phone")
+    registry.add_from_expression("custom_narrator", "narrator1")
+
+    assert registry["custom_narrator"] is registry["phone"]
+    assert registry["narrator"] is registry["phone"]
+
+
+def test_effect_chain_registry_rejects_effect_function_names():
+    registry = EffectChainRegistry()
+
+    with pytest.raises(ValueError, match="reserved for an effect function"):
+        registry.add_from_expression("filter_audio", "phone")
+
+
+def test_preset_map_is_processed_before_audio_plans(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" preset="custom_phone" />
+                  <preset-map>
+                    custom_phone: phone | filter_audio(btype="lowpass", cutoff_hz=2000)
+                    phone: custom_phone
+                    master: custom_phone
+                  </preset-map>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            plan = await root.plan(ainjector)
+            registry = plan.effect_chains
+            return plan.audio_plans[0], registry
+        finally:
+            injector.close()
+
+    sound_plan, registry = asyncio.run(runner())
+    assert sound_plan.preset_name == "custom_phone"
+    assert registry["phone"] is registry["custom_phone"]
+    assert registry["master"] is registry["custom_phone"]
+
+
+def test_production_rejects_more_than_one_preset_map():
+    async def runner():
+        config = ProductionConfig()
+        injector, ainjector = await make_async_injector(config)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <preset-map>one: phone</preset-map>
+                  <preset-map>two: indoor1</preset-map>
+                </production>
+                """,
+                source_name="duplicate-preset-map.xml",
+            )
+            await root.plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="only one <preset-map>"):
+        asyncio.run(runner())
+
+
+def test_effect_chain_rejects_non_stage_expression_results():
+    with pytest.raises(TypeError, match="effect chain"):
+        effect_chain(1)
 
 
 def test_load_preprocessed_voice_reference_downmixes_and_resamples(

@@ -83,14 +83,7 @@ def noop_master_chain(monkeypatch, request):
     if request.node.name == "test_master_effect_chain_preserves_output_format":
         return
 
-    original = effects_module.build_named_effect_chain
-
-    def fake_build_named_effect_chain(name: str):
-        if effects_module.normalize_effect_chain_name(name) == "master":
-            return EffectPipeline(())
-        return original(name)
-
-    monkeypatch.setattr(effects_module, "build_named_effect_chain", fake_build_named_effect_chain)
+    monkeypatch.setitem(effects_module._PRESETS, "master", EffectPipeline(()))
 
 
 @pytest.fixture

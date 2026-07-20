@@ -23,8 +23,9 @@ Current document contract:
 * document nodes retain XML attributes in `DocumentNode.attributes`
 * concrete element classes declare a class-level `tag_name`
 * child placement is driven by class-level contexts rather than by per-instance child-tag dictionaries
-* `<production>` may contain zero or one `<speaker-map>` elements plus any element permitted in the audio-plan context
+* `<production>` may contain zero or one `<speaker-map>`, zero or one `<preset-map>`, plus any element permitted in the audio-plan context
 * `<speaker-map>` content is YAML mapping speaker names to voice references
+* `<preset-map>` content is an ordered YAML mapping from preset identifiers to restricted effect-chain expressions
 * `<script>` content is speaker-authored dialogue text
 * an optional leading `<recording ref="..." />` in a `<script>` declares its default recorded dialogue source; it reuses the sound-reference and audio-attribute contract of `<sound>`
 * a stanza beginning `~Speaker:` and `<line speaker="..." source="recording">...</line>` select that recording; other dialogue selects TTS
@@ -91,7 +92,9 @@ Current planning contract:
   * `length`
 * every `AudioPlan` may receive parent-scope incoming marks after placement and before render; those inherited marks are available to render-time automation and, for plans such as `LoopPlan`, may also influence layout-time expression evaluation
 * explicit `start` is special: it establishes the mapping from parent outer time into the child's inner geometry, so it only sees outer-scope values and may not depend on child-local `natural_length` or `inner_*` names
-* productions are planned by walking element children in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
+* each production planning injector owns one `EffectChainRegistry`, copied from the built-ins so document overrides cannot leak between productions
+* a `<preset-map>` is planned before every audio-producing child regardless of its XML position; its YAML entries are evaluated in mapping order so each entry can reference or replace presets established by earlier entries
+* all remaining production children are planned in document order; speaker maps participate as ordinary planning nodes and audio-producing children are collected into the top-level `ProductionPlan`
 
 Current plan types:
 
@@ -273,11 +276,14 @@ Current effects contract:
 
 * `EffectStage` is the stable DSP interface; it mutates one production-format numpy buffer in place when given the output sample rate
 * stage composition uses `|`, and the result is itself an `EffectStage`
-* presets are named `EffectStage` singletons rather than a separate chain wrapper type
-* most reusable stage factories are registered in `radio_drama.effects.effect_stages` so later expression-driven effect evaluation can use them as eval locals
+* effect-chain expressions return the `effect_chain` expression type, which accepts any `EffectStage`; presets remain named `EffectStage` instances rather than requiring a separate runtime wrapper
+* only factories explicitly decorated with `@effect_chain_function` enter `effect_chain_variables`; generic FFmpeg, numpy, scipy, and Pedalboard stage constructors are not document-visible
+* the fixed `master_loudnorm()` factory exposes the built-in mastering stage without accepting an authored FFmpeg graph; voice preprocessing remains internal
+* the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, and `|`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
 * render-time automation such as `gain` and `pan` is implemented as ordinary effect stages in `radio_drama.effects`
-* preset names are validated while processing audio attrs and are consumed later by `ComposeAudioPlan` render-time bus mixing
+* preset names are validated against the production's injected registry while processing audio attrs and are consumed later by an injectable `EffectMixer` using that same registry
+* the production master is also resolved through the production registry, so `<preset-map>` may replace `master`
 * unknown preset names are document errors attached to the originating audio node
 
 Current built-in presets:

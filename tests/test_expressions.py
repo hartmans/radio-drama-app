@@ -97,6 +97,32 @@ def test_eval_expression_supports_min_and_max() -> None:
     ) == 3
 
 
+def test_eval_expression_supports_effect_chain_syntax() -> None:
+    calls = []
+
+    class Chain:
+        def __or__(self, other):
+            return Chain()
+
+    def factory(*, mode: str, taps: tuple[tuple[float, ...], ...]):
+        calls.append((mode, taps))
+        return Chain()
+
+    result = eval_expression(
+        'left | factory(mode="room", taps=((1.0, 0.5), (2.0, 0.25)))',
+        {"left": Chain(), "factory": factory},
+        lambda value: value,
+    )
+
+    assert isinstance(result, Chain)
+    assert calls == [("room", ((1.0, 0.5), (2.0, 0.25)))]
+
+
+def test_validate_expression_rejects_keyword_unpacking() -> None:
+    with pytest.raises(ValueError, match="Keyword argument expansion"):
+        validate_expression("factory(**options)")
+
+
 def test_validate_expression_rejects_unsupported_nodes() -> None:
     with pytest.raises(ValueError, match="Unsupported expression node: List"):
         validate_expression("line([1, 2])")
