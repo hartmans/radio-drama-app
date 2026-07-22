@@ -183,7 +183,7 @@ def ffmpeg_filter_stage(
 
 
 def available_effect_chains() -> tuple[str, ...]:
-    return tuple(sorted(_PRESETS))
+    return tuple(sorted(_PRESET_EXPRESSIONS))
 
 
 def normalize_effect_chain_name(name: str) -> str:
@@ -526,139 +526,70 @@ def voice_loudnorm() -> EffectStage:
     return ffmpeg_filter_stage(lambda: "loudnorm")
 
 
-_PRESETS: dict[str, EffectStage] = {
-    "master": master_loudnorm(),
+_PRESET_EXPRESSIONS: Mapping[str, str] = {
+    "master": 'master_loudnorm()',
     "narrator": (
-        filter_audio(btype="highpass", cutoff_hz=85.0)
-        | compress_audio(
-            threshold_db=-28.0,
-            ratio=2.8,
-            attack_ms=5.0,
-            release_ms=240.0,
-            makeup_db=2.2,
-        )
-        | mid_side_mix(mid_gain=1.18, side_gain=0.62)
-        | tilt_tone(low_band_db=-1.4, high_band_db=1.6)
-        | early_reflections(
-            taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
-            dry_mix=0.96,
-        )
+        'filter_audio(btype="highpass", cutoff_hz=85.0) | '
+        'compress_audio(threshold_db=-28.0, ratio=2.8, attack_ms=5.0, release_ms=240.0, makeup_db=2.2) | '
+        'mid_side_mix(mid_gain=1.18, side_gain=0.62) | '
+        'tilt_tone(low_band_db=-1.4, high_band_db=1.6) | '
+        'early_reflections(taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)), dry_mix=0.96)'
     ),
     "narrator_nofocus": (
-        filter_audio(btype="highpass", cutoff_hz=85.0)
-        | compress_audio(
-            threshold_db=-28.0,
-            ratio=2.8,
-            attack_ms=5.0,
-            release_ms=240.0,
-            makeup_db=2.2,
-        )
-        | tilt_tone(low_band_db=-1.4, high_band_db=1.6)
-        | early_reflections(
-            taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)),
-            dry_mix=0.96,
-        )
+        'filter_audio(btype="highpass", cutoff_hz=85.0) | '
+        'compress_audio(threshold_db=-28.0, ratio=2.8, attack_ms=5.0, release_ms=240.0, makeup_db=2.2) | '
+        'tilt_tone(low_band_db=-1.4, high_band_db=1.6) | '
+        'early_reflections(taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)), dry_mix=0.96)'
     ),
     "thoughts": (
-        filter_audio(btype="highpass", cutoff_hz=90.0)
-        | compress_audio(
-            threshold_db=-30.0,
-            ratio=3.2,
-            attack_ms=4.0,
-            release_ms=260.0,
-            makeup_db=2.4,
-        )
-        | mid_side_mix(mid_gain=1.14, side_gain=0.72)
-        | tilt_tone(low_band_db=-1.3, high_band_db=1.8)
-        | feedback_reverb(
-            delay_ms=44.0,
-            stereo_offset_ms=7.0,
-            feedback=0.58,
-            repeats=4,
-            wet_gain=0.08,
-            dry_mix=0.96,
-        )
+        'filter_audio(btype="highpass", cutoff_hz=90.0) | '
+        'compress_audio(threshold_db=-30.0, ratio=3.2, attack_ms=4.0, release_ms=260.0, makeup_db=2.4) | '
+        'mid_side_mix(mid_gain=1.14, side_gain=0.72) | '
+        'tilt_tone(low_band_db=-1.3, high_band_db=1.8) | '
+        'feedback_reverb(delay_ms=44.0, stereo_offset_ms=7.0, feedback=0.58, repeats=4, wet_gain=0.08, dry_mix=0.96)'
     ),
     "outdoor1": (
-        filter_audio(btype="highpass", cutoff_hz=100.0)
-        | tilt_tone(low_band_db=-0.6, high_band_db=1.0)
-        | mid_side_mix(mid_gain=0.98, side_gain=1.18)
-        | mix_white_noise(relative_db=-28.0)
-        | early_reflections(
-            taps=((24.0, 0.04, 0.05), (46.0, 0.03, 0.025)),
-            dry_mix=0.99,
-        )
+        'filter_audio(btype="highpass", cutoff_hz=100.0) | '
+        'tilt_tone(low_band_db=-0.6, high_band_db=1.0) | '
+        'mid_side_mix(mid_gain=0.98, side_gain=1.18) | '
+        'mix_white_noise(relative_db=-28.0) | '
+        'early_reflections(taps=((24.0, 0.04, 0.05), (46.0, 0.03, 0.025)), dry_mix=0.99)'
     ),
     "outdoor2": (
-        filter_audio(btype="highpass", cutoff_hz=115.0)
-        | mid_side_mix(mid_gain=0.97, side_gain=1.12)
-        | mix_white_noise(relative_db=-24.0)
-        | feedback_reverb(
-            delay_ms=66.0,
-            stereo_offset_ms=10.0,
-            feedback=0.6,
-            repeats=5,
-            wet_gain=0.1,
-            dry_mix=0.94,
-        )
-        | tilt_tone(low_band_db=-0.8, high_band_db=1.2)
+        'filter_audio(btype="highpass", cutoff_hz=115.0) | '
+        'mid_side_mix(mid_gain=0.97, side_gain=1.12) | '
+        'mix_white_noise(relative_db=-24.0) | '
+        'feedback_reverb(delay_ms=66.0, stereo_offset_ms=10.0, feedback=0.6, repeats=5, wet_gain=0.1, dry_mix=0.94) | '
+        'tilt_tone(low_band_db=-0.8, high_band_db=1.2)'
     ),
     "indoor1": (
-        filter_audio(btype="highpass", cutoff_hz=80.0)
-        | early_reflections(
-            taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)),
-            dry_mix=0.93,
-        )
-        | mid_side_mix(mid_gain=1.08, side_gain=0.74)
-        | tilt_tone(low_band_db=0.8, high_band_db=-0.6)
-        | filter_audio(btype="lowpass", cutoff_hz=8200.0)
+        'filter_audio(btype="highpass", cutoff_hz=80.0) | '
+        'early_reflections(taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)), dry_mix=0.93) | '
+        'mid_side_mix(mid_gain=1.08, side_gain=0.74) | '
+        'tilt_tone(low_band_db=0.8, high_band_db=-0.6) | '
+        'filter_audio(btype="lowpass", cutoff_hz=8200.0)'
     ),
     "indoor2": (
-        filter_audio(btype="highpass", cutoff_hz=85.0)
-        | compress_audio(
-            threshold_db=-27.0,
-            ratio=2.2,
-            attack_ms=7.0,
-            release_ms=200.0,
-            makeup_db=1.2,
-        )
-        | early_reflections(
-            taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)),
-            dry_mix=0.9,
-        )
-        | mid_side_mix(mid_gain=1.1, side_gain=0.66)
-        | filter_audio(btype="lowpass", cutoff_hz=6500.0)
+        'filter_audio(btype="highpass", cutoff_hz=85.0) | '
+        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
+        'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
+        'mid_side_mix(mid_gain=1.1, side_gain=0.66) | '
+        'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
     ),
     "background": (
-        filter_audio(btype="highpass", cutoff_hz=85.0)
-        | compress_audio(
-            threshold_db=-27.0,
-            ratio=2.2,
-            attack_ms=7.0,
-            release_ms=200.0,
-            makeup_db=1.2,
-        )
-        | early_reflections(
-            taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)),
-            dry_mix=0.9,
-        )
-        | mid_side_mix(mid_gain=0.4, side_gain=1.8)
-        | filter_audio(btype="lowpass", cutoff_hz=4500.0)
+        'filter_audio(btype="highpass", cutoff_hz=85.0) | '
+        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
+        'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
+        'mid_side_mix(mid_gain=0.4, side_gain=1.8) | '
+        'filter_audio(btype="lowpass", cutoff_hz=4500.0)'
     ),
     "phone": (
-        filter_audio(btype="highpass", cutoff_hz=320.0)
-        | filter_audio(btype="lowpass", cutoff_hz=3200.0)
-        | compress_audio(
-            threshold_db=-30.0,
-            ratio=3.6,
-            attack_ms=3.0,
-            release_ms=160.0,
-            makeup_db=3.0,
-        )
-        | mix_white_noise(relative_db=-34.0)
+        'filter_audio(btype="highpass", cutoff_hz=320.0) | '
+        'filter_audio(btype="lowpass", cutoff_hz=3200.0) | '
+        'compress_audio(threshold_db=-30.0, ratio=3.6, attack_ms=3.0, release_ms=160.0, makeup_db=3.0) | '
+        'mix_white_noise(relative_db=-34.0)'
     ),
 }
-
 _PRESET_ALIASES = {
     "narrator1": "narrator",
     "narrator2": "thoughts",
@@ -678,7 +609,7 @@ def effect_chain_variables(
 ) -> dict[str, object]:
     """Return approved functions and current presets for chain evaluation."""
 
-    current_presets = _PRESETS if presets is None else presets
+    current_presets = build_builtin_presets() if presets is None else presets
     variables: dict[str, object] = dict(_effect_chain_functions)
     variables.update(current_presets)
     variables.update(
@@ -691,31 +622,58 @@ def effect_chain_variables(
     return variables
 
 
+@dataclass(frozen=True, slots=True)
+class PresetEntry:
+    """Holds both the expression string and compiled EffectStage for a preset."""
+    expression: str
+    stage: EffectStage
+
+
 class EffectChainRegistry:
     """Production-scoped named effect chains initialized from built-in presets."""
 
+    __slots__ = ("_entries",)
+
     def __init__(self) -> None:
-        self._presets = dict(_PRESETS)
+        self._entries: dict[str, PresetEntry] = {}
+        
+        # Build builtin presets from expression strings
+        preset_vars: dict[str, EffectStage] = {}
+        for name in sorted(_PRESET_EXPRESSIONS.keys()):
+            expr = _PRESET_EXPRESSIONS[name]
+            chain = eval_expression(expr, effect_chain_variables(preset_vars), effect_chain)
+            self._entries[name] = PresetEntry(expression=expr, stage=chain)
+            preset_vars[name] = chain
 
     def __getitem__(self, name: str) -> EffectStage:
-        return self._presets[normalize_effect_chain_name(name)]
+        normalized_name = normalize_effect_chain_name(name)
+        return self._entries[normalized_name].stage  # type: ignore[union-attr]
 
     def __contains__(self, name: str) -> bool:
-        return normalize_effect_chain_name(name) in self._presets
+        normalized_name = normalize_effect_chain_name(name)
+        return normalized_name in self._entries
 
     def names(self) -> tuple[str, ...]:
-        return tuple(sorted(self._presets))
+        return tuple(sorted(self._entries.keys()))
+
+    def get_expression(self, name: str) -> str | None:
+        """Return the expression string for a preset, or None if not found."""
+        normalized_name = normalize_effect_chain_name(name)
+        entry = self._entries.get(normalized_name)
+        return entry.expression if entry is not None else None  # type: ignore[union-attr]
 
     def add_from_expression(self, name: str, expression: str) -> EffectStage:
+        """Add a new preset from an expression string. Stores both expression and stage."""
         normalized_name = normalize_effect_chain_name(name)
         if normalized_name in _effect_chain_functions:
             raise ValueError(f"Preset name {name!r} is reserved for an effect function")
+        
         chain = eval_expression(
             expression,
-            effect_chain_variables(self._presets),
+            effect_chain_variables({k: v.stage for k, v in self._entries.items()}),
             effect_chain,
         )
-        self._presets[normalized_name] = chain
+        self._entries[normalized_name] = PresetEntry(expression=expression, stage=chain)
         return chain
 
 

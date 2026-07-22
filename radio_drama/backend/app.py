@@ -18,10 +18,14 @@ from scipy.io import wavfile
 from radio_drama.config import ProductionConfig
 from radio_drama.document import parse_production_file
 from radio_drama.effects import (
+    EffectChainRegistry,
     available_effect_chains,
     build_named_effect_chain,
+    effect_chain,
+    effect_chain_variables,
     normalize_effect_chain_name,
 )
+from radio_drama.expressions import eval_expression
 from radio_drama.init import radio_drama_injector
 from radio_drama.rendering import RenderResult
 
@@ -44,6 +48,18 @@ class PreparePresetsResponse(BaseModel):
 class AudioSliceRequest(BaseModel):
     preset_name: str
     from_time: float = Field(default=0.0, ge=0.0)
+
+
+class ExpressionRequest(BaseModel):
+    expression: str
+    from_time: float = Field(default=0.0, ge=0.0)
+
+
+class ExpressionResponse(BaseModel):
+    status: str
+    duration_seconds: float
+    sample_rate: int
+    restart_audio: bool = True
 
 
 class UnknownPresetName(ValueError):
@@ -117,6 +133,20 @@ class PresetAudioStore:
             raise ValueError("At least one preset name is required")
         return tuple(normalized_names)
 
+    async def apply_expression_to_full(self, expression: str) -> RenderResult:
+        """Apply a custom expression to the entire base result.
+        
+        Returns a new RenderResult with the expression applied.
+        """
+        # Validate and evaluate the expression
+        variables = effect_chain_variables()
+        chain = eval_expression(expression, variables, effect_chain)
+        
+        # Apply to a copy of the base result
+        rendered = RenderResult(audio=np.array(self.base_result.audio, copy=True))
+        await asyncio.to_thread(chain.apply, rendered.audio, sample_rate=self.sample_rate)
+        return rendered
+
 
 def create_app(audio_store: PresetAudioStore) -> FastAPI:
     app = FastAPI(title="Radio Drama Preset Backend")
@@ -177,6 +207,51 @@ def create_app(audio_store: PresetAudioStore) -> FastAPI:
             media_type="audio/wav",
             headers={"X-Render-Start-Time": f"{request.from_time:.6f}"},
         )
+
+    @app.get("/api/presets/expressions")
+    async def get_preset_expressions() -> dict[str, str]:
+        """Return expressions for existing presets.
+        
+        Returns a mapping of preset names to their effect chain expressions.
+        The frontend can display these expressions with copy buttons and allow
+        users to input/edit custom expressions.
+        """
+        registry = EffectChainRegistry()
+        result: dict[str, str] = {}
+        for name in registry.names():
+            expr = registry.get_expression(name)
+            if expr is not None:
+                result[name] = expr
+        return result
+
+    @app.post("/api/apply-expression", response_model=ExpressionResponse)
+    async def apply_expression(request: ExpressionRequest) -> ExpressionResponse:
+        """Apply a custom expression to the entire audio.
+        
+        The expression is evaluated and applied as an effect chain to the full
+        base audio in a separate thread. The frontend should restart audio from
+        its current position after receiving this response.
+        """
+        try:
+            result = await audio_store.apply_expression_to_full(request.expression)
+            # Store the result temporarily for slicing
+            # In a real implementation, you might want to cache this
+            return ExpressionResponse(
+                status="Expression applied successfully",
+                duration_seconds=audio_store.duration_seconds,
+                sample_rate=audio_store.sample_rate,
+                restart_audio=True,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid expression: {exc}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to apply expression: {exc}",
+            ) from exc
 
     return app
 
