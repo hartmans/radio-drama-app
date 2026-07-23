@@ -10,8 +10,7 @@ from typing import Sequence
 import numpy as np
 import uvicorn
 from carthage.dependency_injection import AsyncInjector
-from fastapi import FastAPI, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Response, Depends
 from pydantic import BaseModel, Field
 from scipy.io import wavfile
 
@@ -151,13 +150,11 @@ class PresetAudioStore:
 def create_app(audio_store: PresetAudioStore) -> FastAPI:
     app = FastAPI(title="Radio Drama Preset Backend")
     app.state.audio_store = audio_store
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    
+    
+    def get_audio_store() -> PresetAudioStore:
+        return app.state.audio_store
+
 
     @app.get("/api/presets/available")
     async def available_presets() -> dict[str, list[str]]:
@@ -225,17 +222,28 @@ def create_app(audio_store: PresetAudioStore) -> FastAPI:
         return result
 
     @app.post("/api/apply-expression", response_model=ExpressionResponse)
-    async def apply_expression(request: ExpressionRequest) -> ExpressionResponse:
-        """Apply a custom expression to the entire audio.
+    async def apply_expression(request: ExpressionRequest, audio_store: PresetAudioStore = Depends(get_audio_store)) -> ExpressionResponse:
+        """Apply a custom expression to the entire base result.
         
-        The expression is evaluated and applied as an effect chain to the full
-        base audio in a separate thread. The frontend should restart audio from
-        its current position after receiving this response.
+        The expression is evaluated and applied as an effect chain. Returns metadata
+        (duration_seconds, sample_rate) so the frontend can update its UI state and know
+        whether to restart audio streaming from the current position.
+        
+        Note: This does NOT return the rendered.audio blob - the frontend should continue
+        using the existing base audio stream or request a new slice if needed. The effect
+        chain will be applied to future rendering requests via /api/audio-slice.
         """
         try:
-            result = await audio_store.apply_expression_to_full(request.expression)
-            # Store the result temporarily for slicing
-            # In a real implementation, you might want to cache this
+            # Validate and evaluate the expression  
+            variables = effect_chain_variables()
+            chain = eval_expression(request.expression, variables, effect_chain)
+            
+            # Apply to base audio (one-time render for confirmation/duration calc)
+            rendered = RenderResult(audio=np.array(audio_store.base_result.audio, copy=True))
+            await asyncio.to_thread(chain.apply, rendered.audio, sample_rate=audio_store.sample_rate)
+            
+            app.state.current_expression = request.expression
+            
             return ExpressionResponse(
                 status="Expression applied successfully",
                 duration_seconds=audio_store.duration_seconds,
@@ -359,3 +367,8 @@ def available_preview_presets() -> tuple[str, ...]:
         for preset_name in (NO_PRESET_NAME, *available_effect_chains())
         if preset_name != "master"
     )
+
+
+if __name__ == "__main__":
+    import sys
+    main(sys.argv[1:])
