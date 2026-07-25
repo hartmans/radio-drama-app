@@ -29,6 +29,10 @@ You probably don't want the preset preview backend; it is mostly there for debug
   --sounds-dir example_sounds
 ```
 
+The cut options are optional. Each names a `<mark>` and limits the base audio,
+and therefore every expression preview, to that part of the production. For
+example, add `--cut-before START_MARK --cut-after END_MARK` to the command.
+
 Start the frontend:
 
 ```bash

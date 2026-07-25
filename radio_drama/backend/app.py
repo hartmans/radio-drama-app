@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import hashlib
 import io
 from dataclasses import dataclass, field
@@ -46,7 +47,7 @@ class ApplyExpressionRequest(BaseModel):
 
 class ApplyExpressionResponse(BaseModel):
     """Apply expression response - returns just the cached filename (frontend constructs URL)."""
-    filename: str                    # e.g., "a1b2c3d4e5f6..." (sha256 of expression)
+    filename: str                    # e.g., "a1b2c3d4e5f6..." (content-aware cache key)
     duration_seconds: float
     sample_rate: int
 
@@ -55,7 +56,7 @@ class ApplyExpressionResponse(BaseModel):
 class ExpressionCacheStore:
     """Maintains cache of rendered audio for expressions.
     
-    Cache mapping: sha256(expression_string) -> cached_wav_filename
+    Cache mapping: sha256(base audio + expression string) -> cached_wav_filename
     All files stored in cache_directory/{sha256}.wav
     
     The frontend accesses these via static mount at /api/cache/{filename}
@@ -67,15 +68,16 @@ class ExpressionCacheStore:
     preset_expressions: dict[str, str]  # Loaded from injector after planning
     
     _base_audio_filename: str = field(default_factory=lambda: "_base.wav", init=False)
+    _base_audio_hash: bytes = field(init=False, repr=False)
     
     def __post_init__(self):
-        """Ensure cache directory exists and save base audio if not cached."""
+        """Ensure the cache exists and publish this session's base audio."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save base audio on first run (only do this once per session)
-        base_path = self._base_audio_path()
-        if not base_path.exists():
-            self._save_base_audio(base_path)
+        base_hasher = hashlib.sha256()
+        base_hasher.update(str(self.sample_rate).encode("ascii"))
+        base_hasher.update(self.base_result.audio.tobytes())
+        self._base_audio_hash = base_hasher.digest()
+        self._save_base_audio(self._base_audio_path())
     
     def _base_audio_path(self) -> Path:
         return self.cache_dir / self._base_audio_filename
@@ -93,8 +95,10 @@ class ExpressionCacheStore:
         return self.base_result.frame_count / self.sample_rate
     
     def _expression_sha256(self, expression: str) -> str:
-        """Compute SHA256 hash of expression string for cache key."""
-        return hashlib.sha256(expression.encode('utf-8')).hexdigest()
+        """Compute a cache key for an expression applied to this base render."""
+        hasher = hashlib.sha256(self._base_audio_hash)
+        hasher.update(expression.encode("utf-8"))
+        return hasher.hexdigest()
     
     async def apply_expression_and_cache(
         self, 
@@ -109,7 +113,7 @@ class ExpressionCacheStore:
         Frontend constructs full URL as: /api/cache/{filename}
         And can seek by appending ?from={time} or using HTTP Range requests.
         """
-        # Compute SHA256 of expression for cache key
+        # Include the base render so changed source or cut bounds cannot reuse stale audio.
         expr_hash = self._expression_sha256(expression)
         cached_path = self.cache_dir / f"{expr_hash}.wav"
         
@@ -206,7 +210,7 @@ def create_app(
             request.from_time: Starting time in the original audio (currently informational)
         
         Returns:
-            filename: SHA256 hash of the expression string (also the cached .wav filename)
+            filename: SHA256 cache key for the base audio and expression
             duration_seconds: Duration of resulting audio
             sample_rate: Sample rate (same as source)
         """
@@ -244,8 +248,10 @@ async def render_production_result(
     production_path: str | Path,
     *,
     config: ProductionConfig,
+    cut_before: str | None = None,
+    cut_after: str | None = None,
 ) -> RenderResult:
-    """Render a production file to get base audio.
+    """Render a production file to get base audio, optionally bounded by marks.
     
     For now we use builtin presets - the expression-based architecture extracts 
     preset expressions from production planning.
@@ -266,6 +272,12 @@ async def render_production_result(
         # Get AsyncInjector and plan/render
         async_injector = injector(AsyncInjector)
         production_plan = await production_node.plan(async_injector)
+        if cut_before is not None:
+            production_plan.cut_before_mark(cut_before)
+            gc.collect()
+        if cut_after is not None:
+            production_plan.cut_after_mark(cut_after)
+            gc.collect()
         base_result = await production_plan.render()
             
         return base_result
@@ -352,6 +364,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output sample rate override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Maximum VibeVoice batch size override.")
+    parser.add_argument("--cut-before", default=None, help="Drop all production audio before the named <mark>.")
+    parser.add_argument("--cut-after", default=None, help="Drop all production audio after the named <mark>.")
     parser.add_argument("--device", default=None, help="Preferred torch device override.")
     parser.add_argument("--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override.")
     parser.add_argument(
@@ -392,7 +406,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     
     # Render production to get base audio
     base_result = asyncio.run(
-        render_production_result(args.production_xml, config=config)
+        render_production_result(
+            args.production_xml,
+            config=config,
+            cut_before=args.cut_before,
+            cut_after=args.cut_after,
+        )
     )
     
     # Determine cache directory

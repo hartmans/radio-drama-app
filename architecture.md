@@ -307,7 +307,7 @@ The preset-preview backend is a thin diagnostic layer above the existing plannin
 
 Current backend contract:
 
-* `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`
+* `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`; optional `--cut-before` and `--cut-after` mark bounds are applied to the shared production plan before that render
 * the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
 * the preview backend also exposes a dry `none` option that returns slices from the unprocessed base render
 * preset preparation runs concurrently and reuses the same `EffectStage` interface as document-driven render-time presets
