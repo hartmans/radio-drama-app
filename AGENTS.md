@@ -3,6 +3,11 @@
 * Reason carefully about what should be long-term interface guarantees and what is a result of the current implementation
 * Allowing python to throw AttributeErrors and KeyErrors when interfaces are misused is better than a lot of checking for programmer error. It's definitely better than turning invalid input into continues/hidden ignored conditions
 * Producing better errors for things in the incoming document is valuable
+
+## Effect Function Documentation
+
+Effect chain functions are documented in `docs/effects.md`. When modifying any effect function (parameters, behavior, output), the corresponding documentation must be updated to reflect those changes. This ensures that audio characteristics, configuration guidelines, and examples stay current with the implementation.
+
 * ~/ai/vibevoice/.venv is the venv to use
 * Commit after changes
 * Codex sandbox note: in this environment, `asyncio` cross-thread wakeups can fail unless the loop already has some scheduled timer/task activity. In practice, `loop.call_soon_threadsafe(...)` may not wake an otherwise-idle loop inside sandboxed Python commands, even though the same code works outside the sandbox.

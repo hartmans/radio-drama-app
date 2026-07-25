@@ -12,6 +12,10 @@ Create an app that turns a human-edited XML production document into a radio dra
 * document-facing APIs should prefer strong user-facing errors for invalid input, while programmer misuse can continue to surface as ordinary Python exceptions
 * `radio_drama.text.normalize_text_punctuation` is the shared opt-in boundary utility for converting typographic single and double quotes, en and em dashes, and ellipses to stable ASCII forms; authored dialogue remains Unicode unless a consumer applies it
 
+## Effect Function Documentation
+
+Effect chain functions are documented in `docs/effects.md`. When modifying any effect function (parameters, behavior, output), the corresponding documentation must be updated to reflect those changes. The effects documentation provides audio characteristics, configuration guidelines, and examples for each effect.
+
 # Current architecture
 
 ## Document layer
