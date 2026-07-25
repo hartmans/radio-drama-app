@@ -10,6 +10,7 @@ Create an app that turns a human-edited XML production document into a radio dra
 * Carthage dependency injection for shared resources and non-local state
 * model-facing resources should stay narrow enough that they can eventually move into separate processes or interpreters
 * document-facing APIs should prefer strong user-facing errors for invalid input, while programmer misuse can continue to surface as ordinary Python exceptions
+* `radio_drama.text.normalize_text_punctuation` is the shared opt-in boundary utility for converting typographic single and double quotes, en and em dashes, and ellipses to stable ASCII forms; authored dialogue remains Unicode unless a consumer applies it
 
 # Current architecture
 

@@ -306,6 +306,38 @@ def test_forced_alignment_prefers_exact_clause_start_when_first_word_is_missing(
     assert [content.start_pos for content in filled] == [1.0, 2.0]
 
 
+def test_forced_alignment_normalizes_typographic_apostrophes():
+    speaker = SpeakerVoiceReference(
+        authored_name="Anna",
+        voice_name="anna.wav",
+        resolved_path=Path("anna.wav"),
+    )
+    contents = [
+        DialogueLine(speaker=speaker, spoken_text="That’s disgusting."),
+        DialogueLine(speaker=speaker, spoken_text="We don’t hang people any more."),
+    ]
+    alignment = AlignmentResult(
+        words=(
+            AlignedWord(text="That's", start=1.0, end=1.2),
+            AlignedWord(text="disgusting.", start=1.2, end=1.8),
+            AlignedWord(text="We", start=2.0, end=2.1),
+            AlignedWord(text="don't", start=2.1, end=2.3),
+            AlignedWord(text="hang", start=2.3, end=2.5),
+            AlignedWord(text="people", start=2.5, end=2.7),
+            AlignedWord(text="any", start=2.7, end=2.8),
+            AlignedWord(text="more.", start=2.8, end=3.0),
+        ),
+        clauses=(
+            AlignedClause(text="That's disgusting.", start=1.0, end=1.8),
+            AlignedClause(text="We don't hang people any more.", start=2.0, end=3.0),
+        ),
+    )
+
+    filled = fill_start_positions_from_alignment(contents, alignment)
+
+    assert [content.start_pos for content in filled] == [1.0, 2.0]
+
+
 def test_forced_alignment_does_not_infer_line_start_from_clause_end_boundary():
     speaker = SpeakerVoiceReference(
         authored_name="Anna",

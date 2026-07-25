@@ -23,6 +23,7 @@ from .dialogue import DialogueAudio, DialogueContent, DialogueLine, ScriptEvent,
 from .model_loading import shared_model_load
 from .planning import PlanningNode
 from .rendering import RenderResult, ScriptRenderResult
+from .text import normalize_text_punctuation
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
@@ -1379,7 +1380,10 @@ def _line_ends_with_clause(
 
 @lru_cache(maxsize=8192)
 def _normalized_tokens(text: str) -> tuple[str, ...]:
-    return tuple(token.lower() for token in _TOKEN_RE.findall(text))
+    return tuple(
+        token.lower()
+        for token in _TOKEN_RE.findall(normalize_text_punctuation(text))
+    )
 
 
 def _transcript_lines(transcript: str) -> list[str]:

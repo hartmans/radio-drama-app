@@ -79,6 +79,7 @@ from .production import ProductionPlan
 from .qwen_tts import QwenTtsResource
 from .rendering import ProductionResult, RenderResult
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
+from .text import normalize_text_punctuation
 from .vibevoice import VibeVoiceResource
 
 __all__ = [
@@ -166,6 +167,7 @@ __all__ = [
     "WhisperXResource",
     "numpy_stage",
     "normalize_effect_chain_name",
+    "normalize_text_punctuation",
     "parse_production_file",
     "parse_production_string",
     "register_effect_stage",
