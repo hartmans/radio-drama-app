@@ -569,11 +569,23 @@ _PRESET_EXPRESSIONS: Mapping[str, str] = {
         'tilt_tone(low_band_db=0.8, high_band_db=-0.6) | '
         'filter_audio(btype="lowpass", cutoff_hz=8200.0)'
     ),
+    "indoor1_nofocus": (
+        'filter_audio(btype="highpass", cutoff_hz=80.0) | '
+        'early_reflections(taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)), dry_mix=0.93) | '
+        'tilt_tone(low_band_db=0.8, high_band_db=-0.6) | '
+        'filter_audio(btype="lowpass", cutoff_hz=8200.0)'
+    ),
     "indoor2": (
         'filter_audio(btype="highpass", cutoff_hz=85.0) | '
         'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
         'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
         'mid_side_mix(mid_gain=1.1, side_gain=0.66) | '
+        'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
+    ),
+    "indoor2_nofocus": (
+        'filter_audio(btype="highpass", cutoff_hz=85.0) | '
+        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
+        'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
         'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
     ),
     "background": (
@@ -608,8 +620,20 @@ def effect_chain_variables(
     presets: Mapping[str, EffectStage] | None = None,
 ) -> dict[str, object]:
     """Return approved functions and current presets for chain evaluation."""
-
-    current_presets = build_builtin_presets() if presets is None else presets
+    
+    if presets is None:
+        # Build preset stages from _PRESET_EXPRESSIONS strings  
+        builtins = {}
+        temp_vars = dict(_effect_chain_functions)
+        for name in sorted(_PRESET_EXPRESSIONS.keys()):
+            expr_str = _PRESET_EXPRESSIONS[name]
+            chain = eval_expression(expr_str, {**temp_vars, **builtins}, effect_chain)
+            builtins[name] = chain
+            temp_vars.update(builtins)
+        current_presets = builtins
+    else:
+        current_presets = presets
+    
     variables: dict[str, object] = dict(_effect_chain_functions)
     variables.update(current_presets)
     variables.update(
