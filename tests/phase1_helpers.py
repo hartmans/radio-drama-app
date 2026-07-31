@@ -29,6 +29,7 @@ async def make_async_injector(
     *,
     document_path: Path | None = None,
     output_path: Path | None = None,
+    effect_chains: EffectChainRegistry | None = None,
 ) -> tuple[Injector, AsyncInjector]:
     injector = radio_drama_injector(
         config=config,
@@ -36,7 +37,7 @@ async def make_async_injector(
         document_path=document_path,
         output_path=output_path,
     )
-    injector.add_provider(EffectChainRegistry())
+    injector.add_provider(EffectChainRegistry() if effect_chains is None else effect_chains)
     return injector, injector(AsyncInjector)
 
 

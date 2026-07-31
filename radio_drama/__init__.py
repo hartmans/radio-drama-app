@@ -56,8 +56,7 @@ from .effects import (
     EffectStage,
     FFmpegFilterEffectStage,
     PedalboardEffectStage,
-    available_effect_chains,
-    build_named_effect_chain,
+
     feedback_reverb,
     ffmpeg_filter_stage,
     filter_audio,
@@ -85,8 +84,7 @@ from .vibevoice import VibeVoiceResource
 __all__ = [
     "ArrayExpression",
     "AudioPlan",
-    "available_effect_chains",
-    "build_named_effect_chain",
+
     "CacheCollection",
     "CacheKey",
     "CacheManager",

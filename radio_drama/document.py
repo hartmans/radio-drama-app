@@ -472,7 +472,13 @@ class ProductionNode(ElementNode):
         ):
             production_injector.add_provider(ProductionDocumentPath(Path(self.location.source)))
         production_injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, production_injector)
-        production_injector.add_provider(EffectChainRegistry())
+        inherited_effect_chains = ainjector.injector.injector_containing(EffectChainRegistry)
+        if inherited_effect_chains is None:
+            production_injector.add_provider(EffectChainRegistry())
+        else:
+            production_injector.add_provider(
+                inherited_effect_chains.get_instance(EffectChainRegistry).copy()
+            )
         production_ainjector = production_injector(type(ainjector))
         preset_maps = self.child_elements_named("preset-map")
         planned_children = []

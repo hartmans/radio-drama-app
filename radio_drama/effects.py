@@ -15,7 +15,7 @@ from carthage.dependency_injection import AsyncInjectable, inject, inject_autokw
 from scipy.signal import butter, sosfiltfilt
 
 from .audio import normalize_audio_array, resample_audio
-from .expressions import coerce_array_exp, eval_expression
+from .expressions import ArrayExpression, eval_expression
 from .planning import PlanningNode
 
 
@@ -182,17 +182,9 @@ def ffmpeg_filter_stage(
     return FFmpegFilterEffectStage(filter_graph_factory)
 
 
-def available_effect_chains() -> tuple[str, ...]:
-    return tuple(sorted(_PRESET_EXPRESSIONS))
-
-
 def normalize_effect_chain_name(name: str) -> str:
     normalized_name = name.strip().lower()
     return _PRESET_ALIASES.get(normalized_name, normalized_name)
-
-
-def build_named_effect_chain(name: str) -> EffectStage:
-    return _PRESETS[normalize_effect_chain_name(name)]
 
 
 def build_voice_preprocess_chain() -> EffectStage:
@@ -466,16 +458,12 @@ def mix_white_noise(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
-def gain(
-    expression: str,
-    *,
-    variables: Mapping[str, float],
-) -> EffectStage:
+def gain(gain_expression: ArrayExpression) -> EffectStage:
     @numpy_stage
     def stage(audio: np.ndarray, sample_rate: int) -> None:
         del sample_rate
-        gain_expression = eval_expression(expression, variables, coerce_array_exp)
         gain_db = gain_expression.to_size(audio.shape[0])
         gain_multiplier = np.float32(10.0) ** (
             gain_db.astype(np.float32, copy=False) / np.float32(20.0)
@@ -488,18 +476,14 @@ def gain(
     return stage
 
 
+@effect_chain_function
 @register_effect_stage
-def pan(
-    expression: str,
-    *,
-    variables: Mapping[str, float],
-) -> EffectStage:
+def pan(pan_expression: ArrayExpression) -> EffectStage:
     @numpy_stage
     def stage(audio: np.ndarray, sample_rate: int) -> None:
         del sample_rate
         if audio.ndim != 2 or audio.shape[1] < 2:
             return
-        pan_expression = eval_expression(expression, variables, coerce_array_exp)
         pan_values = np.clip(pan_expression.to_size(audio.shape[0]), -1.0, 1.0)
         far_channel_gain = (1.0 - np.abs(pan_values)).astype(np.float32, copy=False)
         left_gain = np.where(pan_values <= 0.0, 1.0, far_channel_gain).astype(
@@ -693,6 +677,13 @@ class EffectChainRegistry:
         """Return the current named stages for one document expression scope."""
 
         return {name: entry.stage for name, entry in self._entries.items()}
+
+    def copy(self) -> "EffectChainRegistry":
+        """Return an independent registry with this registry's current entries."""
+
+        copied = EffectChainRegistry()
+        copied._entries = dict(self._entries)
+        return copied
 
     def add_from_expression(self, name: str, expression: str) -> EffectStage:
         """Add a new preset from an expression string. Stores both expression and stage."""

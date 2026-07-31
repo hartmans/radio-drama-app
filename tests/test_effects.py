@@ -16,9 +16,8 @@ from radio_drama.dialogue import ScriptPlan, ScriptRenderRequest
 from radio_drama.document import parse_production_string
 from radio_drama.effects import (
     EffectChainRegistry,
+    EffectMixer,
     EffectPipeline,
-    available_effect_chains,
-    build_named_effect_chain,
     effect_chain,
     effect_chain_function,
     effect_chain_variables,
@@ -267,6 +266,39 @@ def test_audio_plan_effect_runs_between_gain_and_pan_in_a_thread(tmp_path: Path,
     np.testing.assert_allclose(result.audio[:, 1], np.full(2, 3.0, dtype=np.float32), atol=1e-4)
 
 
+def test_effect_expression_can_use_gain_and_pan_stages(tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=4, output_channels=2)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.ones((2, 2), dtype=np.float32)),
+                attrs={"effect": "gain(line(6.0206)) | pan(line(1))"},
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
+    np.testing.assert_allclose(result.audio[:, 1], np.full(2, 2.0, dtype=np.float32), atol=1e-4)
+
+
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
     xml_path = tmp_path / "production.xml"
     xml_path.write_text("<production />", encoding="utf-8")
@@ -384,10 +416,7 @@ def test_nested_script_presets_keep_outer_compose_scope(tmp_path: Path):
     assert outer_plan.audio_plans[1].preset_key == ()
 
 
-def test_same_preset_children_share_one_compose_bus(tmp_path: Path, monkeypatch):
-    voice_file = tmp_path / "anna.wav"
-    voice_file.write_bytes(b"fake")
-    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+def test_same_preset_regions_share_one_compose_bus():
     call_count = 0
 
     class CountingStage:
@@ -397,40 +426,41 @@ def test_same_preset_children_share_one_compose_bus(tmp_path: Path, monkeypatch)
             call_count += 1
             audio += 1.0
 
-    monkeypatch.setitem(effects_module._PRESETS, "narrator", EffectPipeline((CountingStage(),)))
-    monkeypatch.setitem(effects_module._PRESETS, "master", EffectPipeline(()))
-
-    class FakeVibeVoice:
-        async def register_request(self, request: ScriptRenderRequest):
-            class Registered:
-                async def render(self_nonlocal) -> RenderResult:
-                    value = 1.0 if "Line 1" in normalized_script_from_request(request) else 2.0
-                    return RenderResult(audio=np.array([value], dtype=np.float32))
-
-            return Registered()
+    @effect_chain_function
+    def test_counting_stage():
+        return EffectPipeline((CountingStage(),))
 
     async def runner():
+        config = ProductionConfig(output_sample_rate=4, output_channels=1)
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         try:
-            root = parse_production_string(
-                """
-                <production>
-                  <speaker-map>Anna: anna.wav</speaker-map>
-                  <script preset="narrator">Anna: Line 1.</script>
-                  <script preset="narrator">Anna: Line 2.</script>
-                </production>
-                """,
-                source_name="shared-preset-bus.xml",
+            registry = EffectChainRegistry()
+            registry.add_from_expression("narrator", "test_counting_stage()")
+            injector.replace_provider(InjectionKey(EffectChainRegistry), registry, close=False)
+            mixer = await ainjector(
+                EffectMixer,
+                total_frames=2,
+                channels=1,
             )
-            plan = await root.plan(ainjector)
-            return await plan.render()
+            mixer.add(
+                start_frame=0,
+                end_frame=1,
+                audio=np.array([1.0], dtype=np.float32),
+                preset_key=("narrator",),
+            )
+            mixer.add(
+                start_frame=1,
+                end_frame=2,
+                audio=np.array([2.0], dtype=np.float32),
+                preset_key=("narrator",),
+            )
+            return await mixer.apply(sample_rate=4)
         finally:
             injector.close()
 
     result = asyncio.run(runner())
     assert call_count == 1
-    assert result.audio.tolist() == [2.0, 3.0]
+    assert result.tolist() == [2.0, 3.0]
 
 
 def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
@@ -521,6 +551,7 @@ def test_unknown_preset_raises_document_error(tmp_path: Path):
 
 
 def test_named_effect_chains_include_demo_presets():
+    registry = EffectChainRegistry()
     assert {
         "indoor1",
         "indoor2",
@@ -531,10 +562,10 @@ def test_named_effect_chains_include_demo_presets():
         "outdoor2",
         "phone",
         "thoughts",
-    }.issubset(available_effect_chains())
-    assert build_named_effect_chain("Narrator") is build_named_effect_chain("narrator")
-    assert build_named_effect_chain("Narrator1") is build_named_effect_chain("narrator")
-    assert build_named_effect_chain("Narrator2") is build_named_effect_chain("thoughts")
+    }.issubset(registry.names())
+    assert registry["Narrator"] is registry["narrator"]
+    assert registry["Narrator1"] is registry["narrator"]
+    assert registry["Narrator2"] is registry["thoughts"]
 
 
 def test_effect_chain_function_decorator_adds_factory_to_expression_variables():
@@ -547,10 +578,11 @@ def test_effect_chain_function_decorator_adds_factory_to_expression_variables():
 
 
 def test_effect_chain_variables_include_presets_and_aliases():
-    variables = effect_chain_variables()
+    registry = EffectChainRegistry()
+    variables = effect_chain_variables(registry.stages())
 
-    assert variables["phone"] is build_named_effect_chain("phone")
-    assert variables["narrator1"] is build_named_effect_chain("narrator")
+    assert variables["phone"] is registry["phone"]
+    assert variables["narrator1"] is registry["narrator"]
     assert "ffmpeg_filter_stage" not in variables
     assert "voice_loudnorm" not in variables
 
@@ -689,7 +721,7 @@ def test_master_effect_chain_preserves_output_format():
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not available")
 
-    chain = build_named_effect_chain("master")
+    chain = EffectChainRegistry()["master"]
     audio = np.linspace(-0.2, 0.2, 1024, dtype=np.float32)
     stereo_audio = np.column_stack([audio, audio])
     chain.apply(stereo_audio, sample_rate=48000)

@@ -7,27 +7,42 @@ import numpy as np
 import pytest
 from carthage.dependency_injection import InjectionKey
 
-import radio_drama.effects as effects_module
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueAudio, ScriptRenderRequest
 from radio_drama.document import parse_production_string
-from radio_drama.effects import EffectPipeline
+from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.production import ProductionPlan
 from radio_drama.rendering import RenderResult
 from radio_drama.vibevoice import VibeVoiceResource
 
-from phase1_helpers import make_async_injector, normalized_script_from_request
+from phase1_helpers import make_async_injector as _make_async_injector, normalized_script_from_request
 
 
-@pytest.fixture(autouse=True)
-def noop_effect_chains(monkeypatch):
-    for preset_name in effects_module._PRESETS:
-        monkeypatch.setitem(effects_module._PRESETS, preset_name, EffectPipeline(()))
+@effect_chain_function
+def identity_stage_for_tests():
+    return EffectPipeline(())
 
 
-def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
+def _noop_effect_chains() -> EffectChainRegistry:
+    registry = EffectChainRegistry()
+    for preset_name in registry.names():
+        registry.add_from_expression(preset_name, "identity_stage_for_tests()")
+    return registry
+
+
+async def make_async_injector(config: ProductionConfig, **kwargs):
+    kwargs.setdefault("effect_chains", _noop_effect_chains())
+    return await _make_async_injector(config, **kwargs)
+
+
+@pytest.fixture
+def noop_effect_chains() -> EffectChainRegistry:
+    return _noop_effect_chains()
+
+
+def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, noop_effect_chains):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(
@@ -54,14 +69,8 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, m
                     updated.append(content)
             return updated
 
-    monkeypatch.setattr(
-        effects_module,
-        "build_named_effect_chain",
-        lambda name: EffectPipeline(()),
-    )
-
     async def runner():
-        injector, ainjector = await make_async_injector(config)
+        injector, ainjector = await make_async_injector(config, effect_chains=noop_effect_chains)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
@@ -89,7 +98,7 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, m
     assert result.audio.tolist() == [2.0, 2.0]
 
 
-def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Path, monkeypatch):
+def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Path, noop_effect_chains):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(
@@ -116,14 +125,8 @@ def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Pa
                     updated.append(content)
             return updated
 
-    monkeypatch.setattr(
-        effects_module,
-        "build_named_effect_chain",
-        lambda name: EffectPipeline(()),
-    )
-
     async def runner():
-        injector, ainjector = await make_async_injector(config)
+        injector, ainjector = await make_async_injector(config, effect_chains=noop_effect_chains)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
@@ -151,7 +154,7 @@ def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Pa
     assert result.audio.tolist() == [1.0, 1.0, 2.0, 2.0]
 
 
-def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, monkeypatch):
+def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, noop_effect_chains):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(
@@ -178,14 +181,8 @@ def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, mo
                     updated.append(content)
             return updated
 
-    monkeypatch.setattr(
-        effects_module,
-        "build_named_effect_chain",
-        lambda name: EffectPipeline(()),
-    )
-
     async def runner():
-        injector, ainjector = await make_async_injector(config)
+        injector, ainjector = await make_async_injector(config, effect_chains=noop_effect_chains)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
@@ -213,7 +210,7 @@ def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, mo
     assert result.audio.tolist() == [1.0, 1.0]
 
 
-def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path, monkeypatch):
+def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path, noop_effect_chains):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")
     config = ProductionConfig(
@@ -240,14 +237,8 @@ def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path
                     updated.append(content)
             return updated
 
-    monkeypatch.setattr(
-        effects_module,
-        "build_named_effect_chain",
-        lambda name: EffectPipeline(()),
-    )
-
     async def runner():
-        injector, ainjector = await make_async_injector(config)
+        injector, ainjector = await make_async_injector(config, effect_chains=noop_effect_chains)
         injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:

@@ -7,6 +7,8 @@ effect-chain expression to that element's rendered audio. The node applies its
 `gain` automation first, then `effect`, then `pan`; this processing is separate
 from any compose-local `preset` bus. The expression may use the production's
 built-in and document-defined preset names plus documented effect functions.
+`gain(line(...))` and `pan(line(...))` are available within these expressions;
+both take an array expression, so automation stays explicit and composable.
 
 ---
 

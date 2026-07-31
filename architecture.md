@@ -287,7 +287,7 @@ Current effects contract:
 * the fixed `master_loudnorm()` factory exposes the built-in mastering stage without accepting an authored FFmpeg graph; voice preprocessing remains internal
 * the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, and `|`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
-* render-time automation such as `gain` and `pan` is implemented as ordinary effect stages in `radio_drama.effects`
+* render-time automation evaluates `gain` and `pan` attributes to array expressions before constructing ordinary effect stages in `radio_drama.effects`; those same stages may be used inside an effect-chain expression as `gain(line(...))` or `pan(line(...))`
 * preset names are validated against the production's injected registry while processing audio attrs and are consumed later by an injectable `EffectMixer` using that same registry
 * the production master is also resolved through the production registry, so `<preset-map>` may replace `master`
 * unknown preset names are document errors attached to the originating audio node

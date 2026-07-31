@@ -13,7 +13,7 @@ from scipy.signal import resample_poly
 
 from .config import ProductionConfig
 from .debug import write_debug_message
-from .expressions import coerce_real, eval_expression, validate_expression
+from .expressions import coerce_array_exp, coerce_real, eval_expression, validate_expression
 from .planning import AudioAttrValue, AudioAttrs, PlanningNode
 from .rendering import RenderResult
 
@@ -198,7 +198,9 @@ class AudioPlan(PlanningNode):
         post_stage = None
         variables = self.render_time_variables()
         if self.gain_expression is not None:
-            post_stage = gain(self.gain_expression, variables=variables)
+            post_stage = gain(
+                eval_expression(self.gain_expression, variables, coerce_array_exp)
+            )
         if self.effect_expression is not None:
             from .effects import EffectChainRegistry
 
@@ -210,7 +212,9 @@ class AudioPlan(PlanningNode):
             )
             post_stage = effect_stage if post_stage is None else post_stage | effect_stage
         if self.pan_expression is not None and updated_result.audio.ndim == 2 and updated_result.audio.shape[1] >= 2:
-            pan_stage = pan(self.pan_expression, variables=variables)
+            pan_stage = pan(
+                eval_expression(self.pan_expression, variables, coerce_array_exp)
+            )
             post_stage = pan_stage if post_stage is None else post_stage | pan_stage
         if post_stage is not None and updated_result.frame_count:
             try:
