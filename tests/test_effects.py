@@ -23,6 +23,7 @@ from radio_drama.effects import (
     effect_chain_function,
     effect_chain_variables,
     load_preprocessed_voice_reference,
+    numpy_stage,
 )
 from radio_drama.errors import DocumentError
 from radio_drama.rendering import RenderResult
@@ -211,6 +212,59 @@ def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
         dtype=np.float32,
     )
     np.testing.assert_allclose(result.audio, expected, atol=1e-6)
+
+
+def test_audio_plan_effect_runs_between_gain_and_pan_in_a_thread(tmp_path: Path, monkeypatch):
+    config = ProductionConfig(output_sample_rate=4, output_channels=2)
+    calls: list[str] = []
+
+    @effect_chain_function
+    def test_post_render_effect():
+        @numpy_stage
+        def stage(audio: np.ndarray, sample_rate: int) -> None:
+            del sample_rate
+            calls.append("effect")
+            audio += 1.0
+
+        return stage
+
+    original_to_thread = asyncio.to_thread
+
+    async def recording_to_thread(func, /, *args, **kwargs):
+        calls.append("thread")
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", recording_to_thread)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        def __init__(self, result: RenderResult, **kwargs) -> None:
+            super().__init__(node=None, **kwargs)
+            self.result = result
+
+        async def layout_node(self) -> None:
+            self.inner_last = self._frames_to_seconds(self.result.frame_count)
+            self.advance = self.inner_last
+
+        async def render_node(self) -> RenderResult:
+            return self.result
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                result=RenderResult(audio=np.ones((2, 2), dtype=np.float32)),
+                attrs={"gain": "6.0206", "effect": "test_post_render_effect()", "pan": "1"},
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert calls == ["thread", "effect"]
+    np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
+    np.testing.assert_allclose(result.audio[:, 1], np.full(2, 3.0, dtype=np.float32), atol=1e-4)
 
 
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):

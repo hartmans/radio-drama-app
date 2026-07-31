@@ -2,6 +2,12 @@
 
 This document describes the effect chain functions available in the radio-drama-app backend. Each effect can be composed into chains using the pipeline operator (`|`).
 
+Audio-producing XML elements may also set `effect="..."` to apply a restricted
+effect-chain expression to that element's rendered audio. The node applies its
+`gain` automation first, then `effect`, then `pan`; this processing is separate
+from any compose-local `preset` bus. The expression may use the production's
+built-in and document-defined preset names plus documented effect functions.
+
 ---
 
 ## early_reflections

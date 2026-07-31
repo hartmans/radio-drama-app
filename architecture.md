@@ -36,7 +36,7 @@ Current document contract:
 * a stanza beginning `~Speaker:` and `<line speaker="..." source="recording">...</line>` select that recording; other dialogue selects TTS
 * `<line speaker="...">...</line>` may appear inside a script to author one explicit dialogue line without reparsing its text content as `speaker: ...`
 * `<group ...>...</group>` may appear inside a script to parse its text as ordinary dialogue stanzas while assigning one shared script-slice node and one shared set of audio attrs to the resulting dialogue lines
-* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, and looping attrs such as `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
+* any audio-producing element may set audio attributes such as `pre_gap`, `post_gap`, `length`, `gain`, `effect`, `pan`, `preset`, `first_mark`, `last_mark`, and looping attrs such as `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * `<script>` accepts any element permitted in the audio-plan context, including nested `<script>` and `<sound>`
 * `<sound>` identifies a named sound either as `<sound ref="door" />` or `<sound>door</sound>`
   `from` and `to` are sound-specific trim attributes in source-file time, not general outer audio attrs
@@ -77,7 +77,7 @@ Current planning contract:
 * `radio_drama.production` now holds the top-level production compose plan
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * `AudioPlan` also owns layout state and exposes a memoized `layout()` pass before render-time mixing or DSP
-* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `pan`, `preset`, `first_mark`, `last_mark`, `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
+* document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `effect`, `pan`, `preset`, `first_mark`, `last_mark`, `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * any element that plans into an `AudioPlan` may author those audio attributes
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
 * `process_attrs()` is responsible for cross-attribute validation such as rejecting `start` with `pre_gap`, and rejecting `length` with `post_gap`
@@ -202,6 +202,7 @@ Current rendering contract:
 * current internal render results are already in production format
 * `ProductionResult` is the top-level rendered output type
 * effect processing mutates the `RenderResult.audio` buffer in place and does not carry separate timing metadata in the result object
+* per-node `effect` expressions run after `gain` and before `pan`; they are separate from compose-local preset buses
 * inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and composing the inserted sounds into the same timeline
 
 Current production behavior is layout-driven timeline composition of rendered script results.

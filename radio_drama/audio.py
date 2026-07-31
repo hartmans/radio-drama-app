@@ -192,32 +192,37 @@ class AudioPlan(PlanningNode):
         raise NotImplementedError
 
     async def post_render(self, result: RenderResult) -> RenderResult:
-        from .effects import gain, pan
+        from .effects import effect_chain, effect_chain_variables, gain, pan
 
         updated_result = self._apply_node_render_geometry(result)
-        if updated_result.frame_count == 0:
-            return updated_result
-        variables = self.render_time_variables()
         post_stage = None
+        variables = self.render_time_variables()
         if self.gain_expression is not None:
             post_stage = gain(self.gain_expression, variables=variables)
-        if self.pan_expression is None or updated_result.audio.ndim != 2 or updated_result.audio.shape[1] < 2:
-            if post_stage is None:
-                return updated_result
-        else:
+        if self.effect_expression is not None:
+            from .effects import EffectChainRegistry
+
+            effect_chains = self.ainjector.injector.get_instance(EffectChainRegistry)
+            effect_stage = eval_expression(
+                self.effect_expression,
+                effect_chain_variables(effect_chains.stages()),
+                effect_chain,
+            )
+            post_stage = effect_stage if post_stage is None else post_stage | effect_stage
+        if self.pan_expression is not None and updated_result.audio.ndim == 2 and updated_result.audio.shape[1] >= 2:
             pan_stage = pan(self.pan_expression, variables=variables)
             post_stage = pan_stage if post_stage is None else post_stage | pan_stage
-        if post_stage is None:
-            return updated_result
-        try:
-            post_stage.apply(
-                updated_result.audio,
-                sample_rate=self.config.resolved_output_sample_rate,
-            )
-        except Exception as exc:
-            raise self.document_error(
-                f"{self.node.display_name} render-time effect failed: {exc}"
-            ) from exc
+        if post_stage is not None and updated_result.frame_count:
+            try:
+                await asyncio.to_thread(
+                    post_stage.apply,
+                    updated_result.audio,
+                    sample_rate=self.config.resolved_output_sample_rate,
+                )
+            except Exception as exc:
+                raise self.document_error(
+                    f"{self.node.display_name} render-time effect failed: {exc}"
+                ) from exc
         return updated_result
 
     def leaf_audio_plans(self) -> list[AudioPlan]:
@@ -272,6 +277,7 @@ class AudioPlan(PlanningNode):
         first_mark = cls._mark_attribute(node, "first_mark")
         last_mark = cls._mark_attribute(node, "last_mark")
         gain = cls._expression_attribute(node, "gain")
+        effect = cls._expression_attribute(node, "effect")
         pan = cls._expression_attribute(node, "pan")
         preset = cls._preset_attribute(node)
         if start is not None:
@@ -304,6 +310,8 @@ class AudioPlan(PlanningNode):
             attrs["last_mark"] = last_mark
         if gain is not None:
             attrs["gain"] = gain
+        if effect is not None:
+            attrs["effect"] = effect
         if pan is not None:
             attrs["pan"] = pan
         if preset is not None:
@@ -327,6 +335,7 @@ class AudioPlan(PlanningNode):
         self.first_mark = None
         self.last_mark = None
         self.gain_expression = None
+        self.effect_expression = None
         self.pan_expression = None
         self.preset_name = None
         self.preset_key: tuple[str, ...] = ()
@@ -382,6 +391,7 @@ class AudioPlan(PlanningNode):
             if mark_id is not None
         ]
         self.gain_expression = cast(str | None, attrs.get("gain"))
+        self.effect_expression = cast(str | None, attrs.get("effect"))
         self.pan_expression = cast(str | None, attrs.get("pan"))
         self.preset_name = cast(str | None, attrs.get("preset"))
         if self.preset_name is not None:
@@ -420,6 +430,7 @@ class AudioPlan(PlanningNode):
             "first_mark",
             "last_mark",
             "gain",
+            "effect",
             "pan",
         })
 

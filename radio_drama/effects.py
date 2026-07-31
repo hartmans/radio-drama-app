@@ -686,6 +686,11 @@ class EffectChainRegistry:
         entry = self._entries.get(normalized_name)
         return entry.expression if entry is not None else None  # type: ignore[union-attr]
 
+    def stages(self) -> dict[str, EffectStage]:
+        """Return the current named stages for one document expression scope."""
+
+        return {name: entry.stage for name, entry in self._entries.items()}
+
     def add_from_expression(self, name: str, expression: str) -> EffectStage:
         """Add a new preset from an expression string. Stores both expression and stage."""
         normalized_name = normalize_effect_chain_name(name)
