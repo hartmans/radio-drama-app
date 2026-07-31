@@ -230,6 +230,7 @@ def load_preprocessed_voice_reference(
     voice_path: str | Path,
     *,
     output_sample_rate: int | None = None,
+    gain_db: float = 0.0,
 ) -> tuple[np.ndarray, int]:
     """Load, preprocess, and optionally resample one reference voice file."""
 
@@ -250,6 +251,8 @@ def load_preprocessed_voice_reference(
             output_sample_rate=output_sample_rate,
         )
         sample_rate = output_sample_rate
+    if gain_db:
+        processed_audio *= np.float32(_db_to_gain(gain_db))
     return processed_audio, sample_rate
 
 

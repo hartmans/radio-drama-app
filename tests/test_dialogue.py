@@ -9,16 +9,34 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.audio import ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptRenderRequest
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptPlan, ScriptRenderRequest
 from radio_drama.document import parse_production_string
+from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import RenderResult
+from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.vibevoice import VibeVoiceResource
 
-from phase1_helpers import make_async_injector, normalized_script_from_request
+from phase1_helpers import make_async_injector as _make_async_injector, normalized_script_from_request
+
+
+@effect_chain_function
+def identity_stage_for_dialogue_tests():
+    return EffectPipeline(())
+
+
+def _noop_effect_chains() -> EffectChainRegistry:
+    registry = EffectChainRegistry()
+    for preset_name in registry.names():
+        registry.add_from_expression(preset_name, "identity_stage_for_dialogue_tests()")
+    return registry
+
+
+async def make_async_injector(config: ProductionConfig, **kwargs):
+    kwargs.setdefault("effect_chains", _noop_effect_chains())
+    return await _make_async_injector(config, **kwargs)
 
 
 def test_speaker_map_plan_resolves_stem_lookup(tmp_path: Path):
@@ -47,6 +65,73 @@ def test_speaker_map_plan_resolves_stem_lookup(tmp_path: Path):
     plan = asyncio.run(runner())
     assert plan.lookup("ANNA").resolved_path == voice_file
     assert plan.lookup("anna").authored_name == "Anna"
+
+
+def test_speaker_map_mapping_applies_effect_in_special_script_slice(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            assert request is not None
+
+            class Registered:
+                async def render(self_nonlocal) -> RenderResult:
+                    return ScriptRenderResult(
+                        audio=np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32),
+                        dialogue_line_start_positions=(0.0, 0.5),
+                    )
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna:
+                      ref: anna.wav
+                      gain: 6.0206
+                      effect: gain(line(6.0206))
+                  </speaker-map>
+                  <script>Anna: Amplified line.</script>
+                </production>
+                """,
+                source_name="speaker-map-effect.xml",
+            )
+            production_plan = await root.plan(ainjector)
+            script_audio_plan = production_plan.audio_plans[0]
+            return script_audio_plan, await production_plan.render()
+        finally:
+            injector.close()
+
+    script_audio_plan, result = asyncio.run(runner())
+    assert isinstance(script_audio_plan, ComposeAudioPlan)
+    def find_script_plan(plan):
+        if isinstance(plan, ScriptPlan):
+            return plan
+        for child in getattr(plan, "audio_plans", ()):
+            found = find_script_plan(child)
+            if found is not None:
+                return found
+        return None
+
+    script_plan = find_script_plan(script_audio_plan)
+    assert isinstance(script_plan, ScriptPlan)
+    speaker = script_plan.dialogue_contents[0].speaker
+    assert speaker.voice_name == "anna.wav"
+    assert speaker.gain == pytest.approx(6.0206)
+    assert speaker.effect_expression == "gain(line(6.0206))"
+    assert script_plan.dialogue_contents[0].handling == "special"
+    np.testing.assert_allclose(result.audio, np.array([0.2, 0.4, 0.6, 0.8], dtype=np.float32), rtol=1e-4)
 
 
 def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):

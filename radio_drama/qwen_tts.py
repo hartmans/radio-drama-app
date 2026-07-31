@@ -62,7 +62,7 @@ class QwenTtsResource(AsyncInjectable):
         self._drain_task: asyncio.Task | None = None
         self._load_lock = RLock()
         self._prompt_cache_lock = Lock()
-        self._voice_prompt_cache: dict[str, list[VoiceClonePromptItem]] = {}
+        self._voice_prompt_cache: dict[tuple[str, float], list[VoiceClonePromptItem]] = {}
         self._voice_clone_prompt_item_type = None
 
     @property
@@ -204,12 +204,12 @@ class QwenTtsResource(AsyncInjectable):
                 for _ in batch
             ]
 
-        voice_paths = {
-            str(Path(line.speaker.resolved_path).expanduser().resolve())
+        voice_references = {
+            (str(Path(line.speaker.resolved_path).expanduser().resolve()), line.speaker.gain)
             for registration in batch
             for line in self._script_lines(registration.request)
         }
-        prompt_items_by_voice = self._prompt_items_by_voice_sync(sorted(voice_paths))
+        prompt_items_by_voice = self._prompt_items_by_voice_sync(sorted(voice_references))
 
         line_texts: list[str] = []
         line_prompts: list[VoiceClonePromptItem] = []
@@ -218,9 +218,12 @@ class QwenTtsResource(AsyncInjectable):
             zip(batch, parsed_scripts, strict=True)
         ):
             for line in script_lines:
-                voice_path = str(Path(line.speaker.resolved_path).expanduser().resolve())
+                voice_reference = (
+                    str(Path(line.speaker.resolved_path).expanduser().resolve()),
+                    line.speaker.gain,
+                )
                 line_texts.append(line.spoken_text)
-                line_prompts.append(prompt_items_by_voice[voice_path][0])
+                line_prompts.append(prompt_items_by_voice[voice_reference][0])
                 line_targets.append(script_index)
 
         if not line_texts:
@@ -339,42 +342,52 @@ class QwenTtsResource(AsyncInjectable):
 
     def _prompt_items_by_voice_sync(
         self,
-        voice_paths: Sequence[str],
-    ) -> dict[str, list[VoiceClonePromptItem]]:
+        voice_references: Sequence[tuple[str, float]],
+    ) -> dict[tuple[str, float], list[VoiceClonePromptItem]]:
         return {
-            voice_path: self._prompt_items_for_voice_sync(voice_path)
-            for voice_path in voice_paths
+            voice_reference: self._prompt_items_for_voice_sync(*voice_reference)
+            for voice_reference in voice_references
         }
 
     def _prompt_items_for_voice_sync(
         self,
         voice_path: str,
+        gain_db: float = 0.0,
     ) -> list[VoiceClonePromptItem]:
+        cache_key = (voice_path, gain_db)
         with self._prompt_cache_lock:
-            cached = self._voice_prompt_cache.get(voice_path)
+            cached = self._voice_prompt_cache.get(cache_key)
             if cached is not None:
                 return cached
 
-        cache_path = self._prompt_cache_path(Path(voice_path))
+        cache_path = self._prompt_cache_path(Path(voice_path), gain_db=gain_db)
         if cache_path.is_file():
             prompt_items = self._deserialize_prompt_items(
                 torch.load(cache_path, map_location="cpu")
             )
         else:
-            prompt_items = self._build_prompt_items_for_voice_sync(voice_path)
+            prompt_items = self._build_prompt_items_for_voice_sync(voice_path, gain_db=gain_db)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(self._serialize_prompt_items(prompt_items), cache_path)
 
         with self._prompt_cache_lock:
-            self._voice_prompt_cache[voice_path] = prompt_items
+            self._voice_prompt_cache[cache_key] = prompt_items
         return prompt_items
 
     def _build_prompt_items_for_voice_sync(
         self,
         voice_path: str,
+        *,
+        gain_db: float = 0.0,
     ) -> list[VoiceClonePromptItem]:
         model = self._ensure_loaded()
-        reference_audio, sample_rate = self._preprocessed_voice_reference_sync(voice_path)
+        if gain_db:
+            reference_audio, sample_rate = self._preprocessed_voice_reference_sync(
+                voice_path,
+                gain_db=gain_db,
+            )
+        else:
+            reference_audio, sample_rate = self._preprocessed_voice_reference_sync(voice_path)
         transcript = self.whisperx_resource.transcribe_audio_sample_sync(
             reference_audio,
             sample_rate,
@@ -390,8 +403,10 @@ class QwenTtsResource(AsyncInjectable):
     def _preprocessed_voice_reference_sync(
         self,
         voice_path: str,
+        *,
+        gain_db: float = 0.0,
     ) -> tuple[np.ndarray, int]:
-        return load_preprocessed_voice_reference(voice_path)
+        return load_preprocessed_voice_reference(voice_path, gain_db=gain_db)
 
     def _serialize_prompt_items(
         self,
@@ -472,15 +487,16 @@ class QwenTtsResource(AsyncInjectable):
                 self._model = model
                 return model
 
-    def _prompt_cache_path(self, voice_path: Path) -> Path:
+    def _prompt_cache_path(self, voice_path: Path, *, gain_db: float = 0.0) -> Path:
         voice_path = voice_path.expanduser().resolve()
         try:
             relative = voice_path.relative_to(self.config.resolved_voice_directory.resolve())
         except ValueError:
             relative = Path("external") / voice_path.relative_to(voice_path.anchor)
         versioned_relative = Path(VOICE_PREPROCESS_VERSION) / relative
+        gain_suffix = "" if not gain_db else f".gain-{gain_db:g}db"
         return _QWEN_PROMPT_CACHE_DIRECTORY / versioned_relative.with_suffix(
-            f"{relative.suffix}.pt"
+            f"{relative.suffix}{gain_suffix}.pt"
         )
 
     def _pop_live_batch_locked(self) -> list[RegisteredRenderRequest]:

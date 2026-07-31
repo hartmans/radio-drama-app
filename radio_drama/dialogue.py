@@ -13,6 +13,7 @@ from carthage.dependency_injection import ExistingProvider, Injector, inject
 
 from .audio import AudioPlan, ComposeAudioPlan, SUPPORTED_AUDIO_EXTENSIONS
 from .config import ProductionConfig
+from .expressions import validate_expression
 from .planning import AudioAttrValue, PRODUCTION_PLANNING_INJECTOR_KEY, PlanningNode
 from .rendering import RenderResult
 
@@ -40,6 +41,8 @@ class SpeakerVoiceReference:
     authored_name: str
     voice_name: str
     resolved_path: Path
+    gain: float = 0.0
+    effect_expression: str | None = None
 
 
 @dataclass(slots=True)
@@ -193,11 +196,13 @@ class SpeakerMapPlan(PlanningNode):
             raise self.document_error("The <speaker-map> did not define any speakers")
 
         voices_by_key: dict[str, SpeakerVoiceReference] = {}
-        for speaker_name, voice_name in loaded.items():
-            if not isinstance(speaker_name, str) or not isinstance(voice_name, str):
-                raise self.document_error(
-                    "Speaker names and voice names in <speaker-map> must be strings"
-                )
+        for speaker_name, speaker_value in loaded.items():
+            if not isinstance(speaker_name, str):
+                raise self.document_error("Speaker names in <speaker-map> must be strings")
+            voice_name, gain, effect_expression = self._parse_speaker_value(
+                speaker_name,
+                speaker_value,
+            )
             normalized_speaker = speaker_name.strip()
             normalized_voice = voice_name.strip()
             if not normalized_speaker or not normalized_voice:
@@ -213,6 +218,8 @@ class SpeakerMapPlan(PlanningNode):
                 authored_name=normalized_speaker,
                 voice_name=normalized_voice,
                 resolved_path=self._resolve_voice_path(normalized_speaker, normalized_voice),
+                gain=gain,
+                effect_expression=effect_expression,
             )
 
         self._voices_by_key = voices_by_key
@@ -223,6 +230,48 @@ class SpeakerMapPlan(PlanningNode):
             except ExistingProvider as exc:
                 raise self.document_error("A <production> may contain only one <speaker-map>") from exc
         return await super().async_ready()
+
+    def _parse_speaker_value(
+        self,
+        speaker_name: str,
+        speaker_value: object,
+    ) -> tuple[str, float, str | None]:
+        if isinstance(speaker_value, str):
+            return speaker_value, 0.0, None
+        if not isinstance(speaker_value, dict):
+            raise self.document_error(
+                f"Voice reference for speaker {speaker_name!r} must be a string or mapping"
+            )
+        unknown_keys = set(speaker_value) - {"ref", "gain", "effect"}
+        if unknown_keys:
+            raise self.document_error(
+                f"Speaker {speaker_name!r} may contain only ref, gain, and effect"
+            )
+        voice_name = speaker_value.get("ref")
+        if not isinstance(voice_name, str) or not voice_name.strip():
+            raise self.document_error(
+                f"Speaker {speaker_name!r} ref must be a non-empty string"
+            )
+        gain_value = speaker_value.get("gain", 0.0)
+        if isinstance(gain_value, bool) or not isinstance(gain_value, (int, float)):
+            raise self.document_error(f"Speaker {speaker_name!r} gain must be a number")
+        gain = float(gain_value)
+        if not math.isfinite(gain):
+            raise self.document_error(f"Speaker {speaker_name!r} gain must be finite")
+        effect_expression = speaker_value.get("effect")
+        if effect_expression is not None:
+            if not isinstance(effect_expression, str) or not effect_expression.strip():
+                raise self.document_error(
+                    f"Speaker {speaker_name!r} effect must be a non-empty expression"
+                )
+            try:
+                validate_expression(effect_expression)
+            except (SyntaxError, ValueError) as exc:
+                raise self.document_error(
+                    f"Speaker {speaker_name!r} effect must be a valid expression: {exc}"
+                ) from exc
+            effect_expression = effect_expression.strip()
+        return voice_name, gain, effect_expression
 
     def _production_injector(self) -> Injector | None:
         provider_injector = self.ainjector.injector.injector_containing(PRODUCTION_PLANNING_INJECTOR_KEY)
@@ -442,10 +491,20 @@ class ScriptPlan(AudioPlan):
             source = content.source
             aligned_script_source, marker_indexes = sources[source]
             if content.handling == "special":
+                slice_attrs = ScriptSlice.attrs_from_node(content.node)
+                speaker_effect = content.speaker.effect_expression
+                if speaker_effect is not None:
+                    existing_effect = slice_attrs.get("effect")
+                    slice_attrs["effect"] = (
+                        speaker_effect
+                        if existing_effect is None
+                        else f"({existing_effect}) | ({speaker_effect})"
+                    )
                 audio_plans.append(
                     await ainjector(
                         ScriptSlice,
                         node=content.node,
+                        attrs=slice_attrs,
                         aligned_script_source=aligned_script_source,
                         start_marker=marker_indexes[content_index],
                         end_marker=marker_indexes[content_index + 1],
@@ -602,10 +661,13 @@ class ScriptPlan(AudioPlan):
                 continue
             if isinstance(child, LineNode):
                 line_attrs = ScriptSlice.attrs_from_node(child)
-                handling: Literal["normal", "special"] = "special" if line_attrs else "normal"
+                speaker = self.speaker_map_plan.lookup(child.speaker)
+                handling: Literal["normal", "special"] = (
+                    "special" if line_attrs or speaker.effect_expression is not None else "normal"
+                )
                 contents.append(
                     DialogueLine(
-                        speaker=self.speaker_map_plan.lookup(child.speaker),
+                        speaker=speaker,
                         spoken_text=child.normalized_text_content,
                         handling=handling,
                         source=child.source,
@@ -666,7 +728,11 @@ class ScriptPlan(AudioPlan):
                     DialogueLine(
                         speaker=current_speaker,
                         spoken_text=spoken_text,
-                        handling=handling,
+                        handling=(
+                            "special"
+                            if current_speaker.effect_expression is not None
+                            else handling
+                        ),
                         source=current_source,
                         node=node,
                     )
@@ -710,7 +776,11 @@ class ScriptPlan(AudioPlan):
             or isinstance(content, ScriptGap)
             or (
                 isinstance(content, DialogueLine)
-                and (content.handling != "normal" or content.source != "tts")
+                and (
+                    content.handling != "normal"
+                    or content.source != "tts"
+                    or content.speaker.effect_expression is not None
+                )
             )
             for content in self.script_events
         )
