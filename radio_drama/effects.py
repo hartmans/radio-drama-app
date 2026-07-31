@@ -577,16 +577,16 @@ _PRESET_EXPRESSIONS: Mapping[str, str] = {
     ),
     "indoor2": (
         'filter_audio(btype="highpass", cutoff_hz=85.0) | '
-        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
+        'compress_audio(threshold_db=-27.0, ratio=1.7, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
         'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
         'mid_side_mix(mid_gain=1.1, side_gain=0.66) | '
-        'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
+        'filter_audio(btype="lowpass", cutoff_hz=16500.0)'
     ),
     "indoor2_nofocus": (
         'filter_audio(btype="highpass", cutoff_hz=85.0) | '
-        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
+        'compress_audio(threshold_db=-27.0, ratio=1.7, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '
         'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '
-        'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
+        'filter_audio(btype="lowpass", cutoff_hz=16500.0)'
     ),
     "background": (
         'filter_audio(btype="highpass", cutoff_hz=85.0) | '
