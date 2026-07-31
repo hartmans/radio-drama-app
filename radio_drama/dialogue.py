@@ -199,28 +199,14 @@ class SpeakerMapPlan(PlanningNode):
         for speaker_name, speaker_value in loaded.items():
             if not isinstance(speaker_name, str):
                 raise self.document_error("Speaker names in <speaker-map> must be strings")
-            voice_name, gain, effect_expression = self._parse_speaker_value(
-                speaker_name,
-                speaker_value,
-            )
-            normalized_speaker = speaker_name.strip()
-            normalized_voice = voice_name.strip()
-            if not normalized_speaker or not normalized_voice:
-                raise self.document_error(
-                    "Speaker names and voice names in <speaker-map> cannot be empty"
-                )
+            voice_reference = self._parse_speaker_value(speaker_name, speaker_value)
+            normalized_speaker = voice_reference.authored_name
             key = normalized_speaker.lower()
             if key in voices_by_key:
                 raise self.document_error(
                     f"Speaker {speaker_name!r} is defined more than once in <speaker-map>"
                 )
-            voices_by_key[key] = SpeakerVoiceReference(
-                authored_name=normalized_speaker,
-                voice_name=normalized_voice,
-                resolved_path=self._resolve_voice_path(normalized_speaker, normalized_voice),
-                gain=gain,
-                effect_expression=effect_expression,
-            )
+            voices_by_key[key] = voice_reference
 
         self._voices_by_key = voices_by_key
         production_injector = self._production_injector()
@@ -235,9 +221,9 @@ class SpeakerMapPlan(PlanningNode):
         self,
         speaker_name: str,
         speaker_value: object,
-    ) -> tuple[str, float, str | None]:
+    ) -> SpeakerVoiceReference:
         if isinstance(speaker_value, str):
-            return speaker_value, 0.0, None
+            speaker_value = {"ref": speaker_value}
         if not isinstance(speaker_value, dict):
             raise self.document_error(
                 f"Voice reference for speaker {speaker_name!r} must be a string or mapping"
@@ -271,7 +257,17 @@ class SpeakerMapPlan(PlanningNode):
                     f"Speaker {speaker_name!r} effect must be a valid expression: {exc}"
                 ) from exc
             effect_expression = effect_expression.strip()
-        return voice_name, gain, effect_expression
+        normalized_speaker = speaker_name.strip()
+        normalized_voice = voice_name.strip()
+        if not normalized_speaker:
+            raise self.document_error("Speaker names in <speaker-map> cannot be empty")
+        return SpeakerVoiceReference(
+            authored_name=normalized_speaker,
+            voice_name=normalized_voice,
+            resolved_path=self._resolve_voice_path(normalized_speaker, normalized_voice),
+            gain=gain,
+            effect_expression=effect_expression,
+        )
 
     def _production_injector(self) -> Injector | None:
         provider_injector = self.ainjector.injector.injector_containing(PRODUCTION_PLANNING_INJECTOR_KEY)
@@ -491,20 +487,14 @@ class ScriptPlan(AudioPlan):
             source = content.source
             aligned_script_source, marker_indexes = sources[source]
             if content.handling == "special":
-                slice_attrs = ScriptSlice.attrs_from_node(content.node)
                 speaker_effect = content.speaker.effect_expression
-                if speaker_effect is not None:
-                    existing_effect = slice_attrs.get("effect")
-                    slice_attrs["effect"] = (
-                        speaker_effect
-                        if existing_effect is None
-                        else f"({existing_effect}) | ({speaker_effect})"
-                    )
+                slice_attrs = ScriptSlice.attrs_from_node(content.node)
                 audio_plans.append(
                     await ainjector(
                         ScriptSlice,
                         node=content.node,
                         attrs=slice_attrs,
+                        speaker_effect_expression=speaker_effect,
                         aligned_script_source=aligned_script_source,
                         start_marker=marker_indexes[content_index],
                         end_marker=marker_indexes[content_index + 1],

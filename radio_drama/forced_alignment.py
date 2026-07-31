@@ -505,6 +505,7 @@ class ScriptSlice(AudioPlan):
         start_marker: int,
         end_marker: int,
         name: str | None = None,
+        speaker_effect_expression: str | None = None,
         node=None,
         **kwargs,
     ) -> None:
@@ -513,6 +514,7 @@ class ScriptSlice(AudioPlan):
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.name = name
+        self.speaker_effect_expression = speaker_effect_expression
 
     def child_plans(self) -> Iterable[PlanningNode]:
         return (self.aligned_script_source,)
@@ -535,8 +537,10 @@ class ScriptSlice(AudioPlan):
         ):
             return await super().async_resolve()
         provider = self.aligned_script_source.audio_provider
-        if not self.attrs:
+        if not self.attrs and self.speaker_effect_expression is None:
             return provider
+        if not self.attrs:
+            return self
         return await self.ainjector(
             ComposeAudioPlan,
             node=self.node,
@@ -558,10 +562,26 @@ class ScriptSlice(AudioPlan):
         start_frame = aligned_result.marker_frames[self.start_marker]
         end_frame = aligned_result.marker_frames[self.end_marker]
         end_frame = max(start_frame, end_frame)
-        return aligned_result.render_result.slice_frames(
+        result = aligned_result.render_result.slice_frames(
             start_frame,
             end_frame,
         )
+        if self.speaker_effect_expression is not None and result.frame_count:
+            from .effects import EffectChainRegistry, effect_chain, effect_chain_variables
+            from .expressions import eval_expression
+
+            effect_chains = self.ainjector.injector.get_instance(EffectChainRegistry)
+            stage = eval_expression(
+                self.speaker_effect_expression,
+                effect_chain_variables(effect_chains.stages()),
+                effect_chain,
+            )
+            await asyncio.to_thread(
+                stage.apply,
+                result.audio,
+                sample_rate=self.config.resolved_output_sample_rate,
+            )
+        return result
 
     def _log_nan_marker_if_used(
         self,
