@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import tomllib
 import weakref
 from dataclasses import dataclass, field
@@ -16,6 +18,7 @@ from .audio import convert_audio_format
 from .cache import CacheCollection, CacheKey, CacheManager
 from .config import ProductionConfig
 from .dialogue import DialogueLine, ScriptGap, ScriptRenderRequest, TtsResource
+from .effects import load_preprocessed_voice_reference
 from .rendering import RenderResult, ScriptRenderResult
 from .voice_reference import VoiceReferenceTranscriptionResource
 
@@ -87,7 +90,8 @@ class ProxyTtsResource(TtsResource):
         self._process: asyncio.subprocess.Process | None = None
         self._rpc_lock = asyncio.Lock()
         self._request_id = 0
-        self._voice_paths: dict[Path, str] = {}
+        self._voice_paths: dict[str, str] = {}
+        self._voice_mounts: dict[Path, str] = {}
         self._capabilities: set[str] = set()
 
     async def register_request(
@@ -223,18 +227,11 @@ class ProxyTtsResource(TtsResource):
         if cache_directory is None:
             raise RuntimeError("Proxy TTS requires an enabled production cache directory")
         cache_directory.mkdir(parents=True, exist_ok=True)
-        voice_paths = sorted(
-            {
-                line.speaker.resolved_path.expanduser().resolve()
-                for request in requests
-                for line in request.dialogue_lines
-            },
-            key=str,
+        await asyncio.to_thread(
+            self._prepare_voice_references,
+            requests,
+            cache_directory,
         )
-        self._voice_paths = {
-            path: f"/voices/{index}{path.suffix.lower()}"
-            for index, path in enumerate(voice_paths)
-        }
         args = self._podman_command(cache_directory)
         self._process = await asyncio.create_subprocess_exec(
             *args,
@@ -280,7 +277,7 @@ class ProxyTtsResource(TtsResource):
         # has no meaning.
         if proxy.shm_size is not None and proxy.ipc != "host":
             args.append(f"--shm-size={proxy.shm_size}")
-        for path, target in self._voice_paths.items():
+        for path, target in self._voice_mounts.items():
             args.extend(("--volume", f"{path}:{target}:ro"))
         for mount in proxy.mounts:
             mode = "ro" if mount.read_only else "rw"
@@ -311,14 +308,16 @@ class ProxyTtsResource(TtsResource):
         contents: list[dict[str, object]] = []
         for content in request.dialogue_contents:
             if isinstance(content, DialogueLine):
-                voice_path = content.speaker.resolved_path.expanduser().resolve()
+                speaker_key = self._normalized_speaker_name(
+                    content.speaker.authored_name
+                )
                 contents.append(
                     {
                         "type": "line",
                         "speaker": {
                             "authored_name": content.speaker.authored_name,
                             "voice_name": content.speaker.voice_name,
-                            "voice_path": self._voice_paths[voice_path],
+                            "voice_path": self._voice_paths[speaker_key],
                             "transcript": content.speaker.transcript,
                             "gain": content.speaker.gain,
                         },
@@ -332,6 +331,43 @@ class ProxyTtsResource(TtsResource):
                     {"type": "gap", "label": content.label, "mode": content.mode}
                 )
         return {"dialogue_contents": contents, "first_words": request.first_words}
+
+    def _prepare_voice_references(
+        self,
+        requests: Sequence[ScriptRenderRequest],
+        cache_directory: Path,
+    ) -> None:
+        references = {
+            self._normalized_speaker_name(line.speaker.authored_name): line.speaker
+            for request in requests
+            for line in request.dialogue_lines
+        }
+        voice_directory = cache_directory / "normalized_voices"
+        voice_directory.mkdir(parents=True, exist_ok=True)
+        self._voice_paths = {}
+        self._voice_mounts = {}
+        for index, (speaker_name, reference) in enumerate(sorted(references.items())):
+            cache_path = voice_directory / self._voice_cache_filename(speaker_name)
+            if not cache_path.exists():
+                audio, sample_rate = load_preprocessed_voice_reference(
+                    reference.resolved_path,
+                    gain_db=reference.gain,
+                )
+                sf.write(cache_path, audio, sample_rate, subtype="PCM_16")
+            target = f"/voices/{index}.wav"
+            self._voice_paths[speaker_name] = target
+            self._voice_mounts[cache_path.resolve()] = target
+
+    @staticmethod
+    def _normalized_speaker_name(name: str) -> str:
+        return name.strip().lower()
+
+    @staticmethod
+    def _voice_cache_filename(speaker_name: str) -> str:
+        label = re.sub(r"[^A-Za-z0-9]+", "_", speaker_name).strip("_")[:40]
+        label = label or "speaker"
+        digest = hashlib.sha256(speaker_name.encode("utf-8")).hexdigest()[:16]
+        return f"{label}_{digest}.wav"
 
     def _resolve_result_path(self, result: Mapping[str, object]) -> Path:
         relative_wav = Path(str(result["wav"] or ""))

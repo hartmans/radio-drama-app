@@ -8,6 +8,7 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 from carthage.dependency_injection import AsyncInjector, InjectionKey
 from radio_drama.proxy import ProxyMount, load_proxy_tts_configs
 from radio_drama.proxy import ProxyTtsConfig, ProxyTtsResource
@@ -68,6 +69,7 @@ def test_proxy_podman_command_omits_shm_size_for_host_ipc(tmp_path: Path):
         shm_size="32g",
     )
     resource._voice_paths = {}
+    resource._voice_mounts = {}
 
     command = resource._podman_command(tmp_path)
 
@@ -129,7 +131,11 @@ def test_write_pcm16_wav_uses_standard_library(tmp_path: Path):
 
 def test_proxy_resource_renders_through_stub_engine(tmp_path: Path):
     voice_path = tmp_path / "voice.wav"
-    voice_path.write_bytes(b"the stub does not inspect voice audio")
+    write_pcm16_wav(
+        voice_path,
+        0.1 * np.sin(2 * np.pi * 220 * np.arange(16_000) / 8_000),
+        sample_rate=8000,
+    )
     engine_path = Path(__file__).resolve().parents[1] / "tts_engines" / "stub" / "engine.py"
 
     class StubProxyResource(ProxyTtsResource):
@@ -199,7 +205,7 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
 
         async def _ensure_process(self, requests):
             self._capabilities = {"needs_transcript"}
-            self._voice_paths = {voice_path.resolve(): "/voices/0.wav"}
+            self._voice_paths = {"narrator": "/voices/0.wav"}
 
         async def _exchange(self, message):
             seen["exchanges"] += 1
@@ -269,3 +275,40 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
         "gain": 0.0,
     }
     assert serialized_lines[0]["speaker"] == serialized_lines[1]["speaker"]
+
+
+def test_proxy_prepares_and_reuses_normalized_voice_by_speaker_name(
+    tmp_path: Path, monkeypatch
+):
+    voice_path = tmp_path / "voice.wav"
+    voice_path.write_bytes(b"source is replaced by the fake loader")
+    calls = []
+
+    def fake_load(path, *, gain_db):
+        calls.append((Path(path), gain_db))
+        return np.array([0.0, 0.25, -0.25], dtype=np.float32), 16_000
+
+    monkeypatch.setattr("radio_drama.proxy.load_preprocessed_voice_reference", fake_load)
+    resource = object.__new__(ProxyTtsResource)
+    speaker = SpeakerVoiceReference(
+        authored_name=" Narrator ",
+        voice_name="voice",
+        resolved_path=voice_path,
+        gain=3.0,
+    )
+    request = ScriptRenderRequest(
+        dialogue_lines=[DialogueLine(speaker=speaker, spoken_text="Hello.")]
+    )
+
+    resource._prepare_voice_references([request], tmp_path / "cache")
+    first_mounts = dict(resource._voice_mounts)
+    resource._prepare_voice_references([request], tmp_path / "cache")
+
+    assert calls == [(voice_path, 3.0)]
+    assert resource._voice_paths == {"narrator": "/voices/0.wav"}
+    assert resource._voice_mounts == first_mounts
+    cached_path = next(iter(resource._voice_mounts))
+    assert cached_path.parent == (tmp_path / "cache" / "normalized_voices").resolve()
+    audio, sample_rate = sf.read(cached_path, dtype="float32")
+    assert sample_rate == 16_000
+    assert np.allclose(audio, [0.0, 0.25, -0.25], atol=1 / 32768)

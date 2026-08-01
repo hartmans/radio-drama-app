@@ -111,17 +111,6 @@ class HiggsTtsEngine:
                 for item in lines:
                     item["path"].unlink(missing_ok=True)
 
-    def render_request(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
-        prepared = self._prepare_request(request)
-        try:
-            for item in prepared["lines"]:
-                self.synthesize_line(item["line"], item["path"])
-            return self._finish_request(prepared)
-        finally:
-            if not keep_line_wavs():
-                for item in prepared["lines"]:
-                    item["path"].unlink(missing_ok=True)
-
     def _prepare_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
         output_path = Path(artifact_name(request))
         return {
@@ -170,23 +159,6 @@ class HiggsTtsEngine:
             if content.get("type") == "line"
             and str(content.get("spoken_text", "")).strip()
         ]
-
-    def synthesize_line(self, line: Mapping[str, Any], output_path: Path) -> None:
-        self.ensure_server()
-        payload = self._line_payload(line)
-        self._add_initial_codec_chunk_frames(payload)
-        request = urllib.request.Request(
-            f"{self.base_url}/v1/audio/speech",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request) as response:
-                output_path.write_bytes(response.read())
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Higgs synthesis failed ({exc.code}): {detail}") from exc
 
     def synthesize_batch(
         self, lines: Sequence[Mapping[str, Any]]
