@@ -77,14 +77,20 @@ class ZonosEngine:
             device=model.device,
         ).view(-1, 1, 1),)
         conditioning = model.prepare_conditioning(combined)
+        eos_tracker = _EosTracker(len(lines), model.eos_token_id)
         codes = model.generate(
             conditioning,
             batch_size=len(lines),
             max_new_tokens=int(os.environ.get("ZONOS_MAX_NEW_TOKENS", str(86 * 30))),
             cfg_scale=float(os.environ.get("ZONOS_CFG_SCALE", "2.0")),
             progress_bar=False,
+            callback=eos_tracker,
         )
-        return model.autoencoder.decode(codes).cpu()
+        lengths = eos_tracker.lengths(default=codes.shape[-1])
+        return [
+            model.autoencoder.decode(codes[index : index + 1, :, :length]).cpu()[0]
+            for index, length in enumerate(lengths)
+        ]
 
     def render_batch(self, requests: Sequence[Mapping[str, Any]]):
         import torchaudio
@@ -114,6 +120,26 @@ def _batched_prefill(model, prefix_hidden_states, input_ids, inference_params, c
         input_ids = torch.cat((input_ids, input_ids), dim=0)
     hidden_states = torch.cat((prefix_hidden_states, model.embed_codes(input_ids)), dim=1)
     return model._compute_logits(hidden_states, inference_params, cfg_scale)
+
+
+class _EosTracker:
+    """Record each batch item's valid codec length before its first EOS."""
+
+    def __init__(self, batch_size: int, eos_token_id: int) -> None:
+        self.eos_token_id = eos_token_id
+        self._lengths: list[int | None] = [None] * batch_size
+
+    def __call__(self, frame, step: int, _max_steps: int) -> bool:
+        ended = (frame[:, 0, 0] == self.eos_token_id).detach().cpu().tolist()
+        for index, is_ended in enumerate(ended):
+            if is_ended and self._lengths[index] is None:
+                # Codebook zero is delayed by one frame. At callback step N,
+                # its EOS maps to output code index N, leaving N valid codes.
+                self._lengths[index] = step
+        return True
+
+    def lengths(self, *, default: int) -> list[int]:
+        return [default if length is None else length for length in self._lengths]
 
 
 def main() -> None:

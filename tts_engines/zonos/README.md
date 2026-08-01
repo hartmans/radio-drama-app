@@ -5,6 +5,8 @@ cloning from radio-drama's preprocessed references. It batches dialogue lines
 across all pending scripts through Zonos' native batched generator, then
 returns exact segment-derived line starts. The model stays resident and speaker
 embeddings are reused for the container lifetime.
+Each item is decoded only through its own EOS position; the rectangular token
+padding needed by batched generation is never decoded as audio.
 
 Build from the repository root and copy the example configuration into your
 TTS configuration. `ZONOS_LANGUAGE` is an eSpeak language code (default

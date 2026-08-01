@@ -10,7 +10,7 @@ import numpy as np
 from radio_drama.proxy import load_proxy_tts_configs
 from radio_drama_tts_container import finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
-from tts_engines.zonos.engine import ZonosEngine
+from tts_engines.zonos.engine import ZonosEngine, _EosTracker
 
 
 def _request(label: str, words: tuple[str, ...]) -> dict:
@@ -72,6 +72,17 @@ def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
     assert seen == [["one", "two"], ["three"]]
     assert [len(result["dialogue_line_start_positions"]) for result in results] == [2, 1]
     assert not list(tmp_path.glob("*.line-*.wav"))
+
+
+def test_zonos_tracks_each_batched_items_eos_before_padding():
+    import torch
+
+    tracker = _EosTracker(batch_size=2, eos_token_id=1024)
+
+    assert tracker(torch.tensor([[[7]], [[8]]]), 1, 20)
+    assert tracker(torch.tensor([[[1024]], [[9]]]), 4, 20)
+    assert tracker(torch.tensor([[[1024]], [[1024]]]), 9, 20)
+    assert tracker.lengths(default=20) == [4, 9]
 
 
 def test_chatterbox_reuses_each_speaker_conditioning():
