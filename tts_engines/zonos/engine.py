@@ -127,6 +127,10 @@ class _EosTracker:
         self._lengths: list[int | None] = [None] * batch_size
 
     def __call__(self, frame, step: int, _max_steps: int) -> bool:
+        if frame.shape[-1] == 0:
+            # Zonos may invoke the callback once with an empty end slice when
+            # the generation cursor reaches the allocated token buffer.
+            return True
         ended = (frame[:, 0, 0] == self.eos_token_id).detach().cpu().tolist()
         for index, is_ended in enumerate(ended):
             if is_ended and self._lengths[index] is None:

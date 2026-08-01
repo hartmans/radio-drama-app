@@ -10,6 +10,8 @@ padding needed by batched generation is never decoded as audio.
 An initial EOS produces no codec frames; because this is a stochastic model
 failure, the engine retries it up to `ZONOS_GENERATION_ATTEMPTS` times (default
 3) before returning a descriptive error.
+The EOS tracker also tolerates the empty final callback slice emitted when the
+upstream generation cursor reaches the end of its allocated token buffer.
 
 Build from the repository root and copy the example configuration into your
 TTS configuration. `ZONOS_LANGUAGE` is an eSpeak language code (default

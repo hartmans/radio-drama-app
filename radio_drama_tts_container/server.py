@@ -5,6 +5,7 @@ import json
 import re
 import struct
 import sys
+import traceback
 import wave
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import redirect_stdout
@@ -102,6 +103,7 @@ def run_server(
                 raise ValueError("Engine returned the wrong number of results")
             response["results"] = results
         except Exception as exc:
+            traceback.print_exc(file=sys.stderr)
             response["error"] = {"type": type(exc).__name__, "message": str(exc)}
         _write_json(output_stream, response)
 

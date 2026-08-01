@@ -79,6 +79,7 @@ def test_zonos_tracks_each_batched_items_eos_before_padding():
 
     tracker = _EosTracker(batch_size=2, eos_token_id=1024)
 
+    assert tracker(torch.empty((2, 9, 0), dtype=torch.long), 0, 20)
     assert tracker(torch.tensor([[[7]], [[8]]]), 1, 20)
     assert tracker(torch.tensor([[[1024]], [[9]]]), 4, 20)
     assert tracker(torch.tensor([[[1024]], [[1024]]]), 9, 20)
