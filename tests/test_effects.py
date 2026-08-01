@@ -12,7 +12,7 @@ from carthage.dependency_injection import InjectionKey, inject
 import radio_drama.effects as effects_module
 from radio_drama.audio import AudioPlan, ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import ScriptPlan, ScriptRenderRequest
+from radio_drama.dialogue import ScriptPlan, ScriptRenderRequest, TtsResource
 from radio_drama.document import parse_production_string
 from radio_drama.effects import (
     EffectChainRegistry,
@@ -352,7 +352,7 @@ def test_preset_bus_preserves_script_timeline_length(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -389,7 +389,7 @@ def test_nested_script_presets_keep_outer_compose_scope(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -482,7 +482,7 @@ def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -530,7 +530,7 @@ def test_unknown_preset_raises_document_error(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """

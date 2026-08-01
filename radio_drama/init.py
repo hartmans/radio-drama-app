@@ -9,6 +9,8 @@ from .cache import CACHE_OUTPUT_PATH_KEY, CacheManager
 from .config import ProductionConfig
 from .forced_alignment import WhisperXResource
 from .qwen_tts import QwenTtsResource
+from .dialogue import TtsResource
+from .proxy import configured_proxy_resource, load_proxy_tts_configs
 from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
 
@@ -53,10 +55,21 @@ def radio_drama_injector(
         )
     if injector.injector_containing(CacheManager) is None:
         injector.add_provider(CacheManager)
-    if injector.injector_containing(VibeVoiceResource) is None:
-        injector.add_provider(VibeVoiceResource)
-    if injector.injector_containing(QwenTtsResource) is None:
-        injector.add_provider(QwenTtsResource)
+    proxy_configs = load_proxy_tts_configs()
+    builtin_tts_resources = {
+        "vibevoice": VibeVoiceResource,
+        "qwen": QwenTtsResource,
+    }
+    for name, resource_type in builtin_tts_resources.items():
+        if name in proxy_configs:
+            continue
+        resource_key = InjectionKey(TtsResource, tts=name)
+        if injector.injector_containing(resource_key) is None:
+            injector.add_provider(resource_key, resource_type)
+    for name, proxy_config in proxy_configs.items():
+        proxy_key = InjectionKey(TtsResource, tts=name)
+        if injector.injector_containing(proxy_key) is None:
+            injector.add_provider(proxy_key, configured_proxy_resource(proxy_config))
     if injector.injector_containing(WhisperXResource) is None:
         injector.add_provider(WhisperXResource)
     if injector.injector_containing(NormalizedSoundCache) is None:

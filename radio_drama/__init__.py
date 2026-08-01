@@ -18,8 +18,10 @@ from .dialogue import (
     ScriptGap,
     ScriptPlan,
     ScriptRenderRequest,
+    RegisteredTtsRequest,
     SpeakerMapPlan,
     SpeakerVoiceReference,
+    TtsResource,
 )
 from .document import (
     AudioPlanContext,
@@ -75,6 +77,7 @@ from .forced_alignment import AlignedScriptResult, AlignedScriptSource, ScriptSl
 from .init import radio_drama_injector
 from .planning import PlanningNode
 from .production import ProductionPlan
+from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
 from .rendering import ProductionResult, RenderResult
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
@@ -98,6 +101,7 @@ __all__ = [
     "convert_audio_format",
     "convert_channel_count",
     "DialogueLine",
+    "RegisteredTtsRequest",
     "DocumentError",
     "DocumentNode",
     "ElementNode",
@@ -139,6 +143,9 @@ __all__ = [
     "ProductionDocumentPath",
     "ProductionNode",
     "ProductionPlan",
+    "ProxyMount",
+    "ProxyTtsConfig",
+    "ProxyTtsResource",
     "PresetMapNode",
     "ProductionResult",
     "QwenTtsResource",
@@ -158,6 +165,7 @@ __all__ = [
     "SpeakerMapNode",
     "SpeakerMapPlan",
     "SpeakerVoiceReference",
+    "TtsResource",
     "SoundPlan",
     "TextNode",
     "validate_expression",

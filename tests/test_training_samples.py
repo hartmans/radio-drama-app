@@ -9,7 +9,7 @@ import soundfile as sf
 from carthage.dependency_injection import AsyncInjector, InjectionKey
 
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference
+from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference, TtsResource
 from radio_drama.document import parse_production_string
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.init import radio_drama_injector
@@ -78,7 +78,7 @@ def test_production_plan_all_plans_deduplicates_shared_aligned_source(tmp_path: 
             ProductionConfig(voice_directory=tmp_path),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -135,7 +135,7 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
             ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeTimedVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTimedVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -205,7 +205,7 @@ def test_export_training_samples_from_plan_resamples_output(tmp_path: Path):
             ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeTimedVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTimedVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -265,7 +265,7 @@ def test_export_training_samples_from_plan_defaults_to_backend_sample_rate(tmp_p
             ProductionConfig(voice_directory=tmp_path, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeNativeRateVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeNativeRateVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -345,7 +345,7 @@ def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
         try:
             ainjector = injector(AsyncInjector)
             resource = await ainjector(FakeCachedVibeVoiceResource)
-            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), resource, close=False)
             injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
             root = parse_production_string(
                 """

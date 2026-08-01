@@ -3,13 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Literal, Mapping, Protocol, Sequence
 
 import yaml
-from carthage.dependency_injection import ExistingProvider, Injector, inject
+from carthage.dependency_injection import (
+    AsyncInjectable,
+    ExistingProvider,
+    InjectionFailed,
+    InjectionKey,
+    inject,
+)
 
 from .audio import AudioPlan, ComposeAudioPlan, SUPPORTED_AUDIO_EXTENSIONS
 from .config import ProductionConfig
@@ -32,6 +39,24 @@ if TYPE_CHECKING:
 
 
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
+
+
+class RegisteredTtsRequest(Protocol):
+    """A registered speech request that can be rendered later."""
+
+    async def render(self) -> RenderResult:
+        ...
+
+
+class TtsResource(AsyncInjectable, ABC):
+    """Backend-independent interface for production speech resources."""
+
+    @abstractmethod
+    async def register_request(
+        self,
+        request: ScriptRenderRequest | None,
+    ) -> RegisteredTtsRequest:
+        """Register a semantic script request for later rendering."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,12 +234,13 @@ class SpeakerMapPlan(PlanningNode):
             voices_by_key[key] = voice_reference
 
         self._voices_by_key = voices_by_key
-        production_injector = self._production_injector()
-        if production_injector is not None:
-            try:
-                production_injector.add_provider(self)
-            except ExistingProvider as exc:
-                raise self.document_error("A <production> may contain only one <speaker-map>") from exc
+        production_injector = await self.ainjector.get_instance_async(
+            PRODUCTION_PLANNING_INJECTOR_KEY
+        )
+        try:
+            production_injector.add_provider(self)
+        except ExistingProvider as exc:
+            raise self.document_error("A <production> may contain only one <speaker-map>") from exc
         return await super().async_ready()
 
     def _parse_speaker_value(
@@ -268,12 +294,6 @@ class SpeakerMapPlan(PlanningNode):
             gain=gain,
             effect_expression=effect_expression,
         )
-
-    def _production_injector(self) -> Injector | None:
-        provider_injector = self.ainjector.injector.injector_containing(PRODUCTION_PLANNING_INJECTOR_KEY)
-        if provider_injector is None:
-            return None
-        return provider_injector.get_instance(PRODUCTION_PLANNING_INJECTOR_KEY)
 
     def lookup(self, speaker_name: str) -> SpeakerVoiceReference:
         return self._voices_by_key[speaker_name.strip().lower()]
@@ -362,7 +382,7 @@ class ScriptPlan(AudioPlan):
     async def async_ready(self):
         """Normalize dialogue and prepare the base audio render path."""
 
-        self.speaker_map_plan = self._require_speaker_map_plan()
+        self.speaker_map_plan = await self._require_speaker_map_plan()
         self.script_events = await self._parse_script_events()
         if (
             any(
@@ -387,25 +407,23 @@ class ScriptPlan(AudioPlan):
             await self.register_render_request()
         return await super().async_ready()
 
-    def _tts_resource_type(self):
-        if self.node.tts == "qwen":
-            from .qwen_tts import QwenTtsResource
-
-            return QwenTtsResource
-        from .vibevoice import VibeVoiceResource
-
-        return VibeVoiceResource
-
-    def _require_speaker_map_plan(self) -> SpeakerMapPlan:
-        provider_injector = self.ainjector.injector.injector_containing(SpeakerMapPlan)
-        if provider_injector is None:
+    async def _require_speaker_map_plan(self) -> SpeakerMapPlan:
+        try:
+            return await self.ainjector.get_instance_async(SpeakerMapPlan)
+        except (InjectionFailed, KeyError):
             raise self.document_error(
                 "A <script> requires a <speaker-map> to be planned before it"
-            )
-        return provider_injector.get_instance(SpeakerMapPlan)
+            ) from None
 
     async def register_render_request(self) -> None:
-        resource = await self.ainjector.get_instance_async(self._tts_resource_type())
+        try:
+            resource = await self.ainjector.get_instance_async(
+                InjectionKey(TtsResource, tts=self.node.tts)
+            )
+        except (InjectionFailed, KeyError):
+            raise self.document_error(
+                f"No TTS resource is configured for {self.node.tts!r}"
+            ) from None
         self._registered_request = await resource.register_request(self.render_request)
 
     async def render_base_audio(self) -> RenderResult:
@@ -886,6 +904,8 @@ __all__ = [
     "ScriptGap",
     "ScriptPlan",
     "ScriptRenderRequest",
+    "RegisteredTtsRequest",
     "SpeakerMapPlan",
     "SpeakerVoiceReference",
+    "TtsResource",
 ]

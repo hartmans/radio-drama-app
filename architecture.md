@@ -151,7 +151,7 @@ Planning rule for presets:
 * sibling children that land on the same preset bus share DSP state across adjacency and across silence within that compose timeline
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
-* a script may select its speech backend with `tts="vibevoice"` or `tts="qwen"`; the default is `vibevoice`
+* a script selects its speech backend by resolving `InjectionKey(TtsResource, tts=<name>)`; the default name is `vibevoice`, while additional names may be supplied by application or proxy configuration
 * `<sound-script>` and `AudioScriptPlan` have been removed; all dialogue uses `<script>`, whose sources can be mixed line-by-line
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
@@ -164,6 +164,9 @@ Resources own model lifecycle, batching, and other shared external state.
 
 Current resource contract:
 
+* `TtsResource` is the backend-independent injectable speech interface; its `register_request()` method accepts a script-level `ScriptRenderRequest` and returns a registration with an asynchronous `render()` method
+* `VibeVoiceResource`, `QwenTtsResource`, and `ProxyTtsResource` implement `TtsResource`
+* concrete injectable classes are registered as factories under qualified `TtsResource` keys, so document TTS names do not require hard-coded dispatch in `ScriptPlan`
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
 * `ScriptRenderRequest` carries ordered `DialogueLine` objects plus a short leading-text label for cache/debug artifacts
@@ -175,6 +178,13 @@ Current resource contract:
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
+* proxy TTS definitions are loaded from `$XDG_CONFIG_HOME/radio-drama/tts.toml`, falling back to `~/.config/radio-drama/tts.toml`; each definition names a Podman image and may provide a command, environment, network mode, and explicit persistent bind mounts
+* `ProxyTtsResource` retains registrations until rendering begins, launches a persistent Podman container with all referenced voices mounted read-only, and mounts the production cache root read-write as `/cache` and as the container working directory
+* proxy stdin and stdout carry protocol-versioned JSON objects one per line; stderr remains available for container diagnostics
+* proxy render requests serialize semantic dialogue lines and script gaps, replacing host voice paths with their read-only container mount paths
+* proxy responses return cache-relative WAV paths and optional dialogue-line start positions; the host rejects absolute and parent-traversing paths, reads the artifact from the production cache, and converts it to the configured output format
+* `radio_drama_tts_container` is a Python-standard-library-only helper package for container engines; it supplies the protocol loop, deterministic artifact naming, and PCM16 WAV writing, while each `tts_engines/<name>` directory owns its Containerfile and engine-specific dependencies and code
+* container builds use the repository root as their build context so engine images can copy `radio_drama_tts_container` without publishing it separately
 * `CacheManager` is the production-scoped mapping from cache type names such as `vibevoice` and `qwentts` to `CacheCollection` objects
 * `CacheManager` derives the shared cache root from the production `output_path`, while still allowing a direct `InjectionKey("cache_dir")` override for callers that need to place the cache elsewhere
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix

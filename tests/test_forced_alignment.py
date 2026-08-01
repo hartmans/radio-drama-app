@@ -32,6 +32,7 @@ from radio_drama.dialogue import (
     ScriptGap,
     ScriptRenderRequest,
     SpeakerVoiceReference,
+    TtsResource,
 )
 from radio_drama.rendering import RenderResult, ScriptRenderResult
 from radio_drama.vibevoice import VibeVoiceResource
@@ -145,7 +146,7 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(

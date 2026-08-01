@@ -13,7 +13,7 @@ from typing import Sequence
 import numpy as np
 import soundfile as sf
 import torch
-from carthage.dependency_injection import AsyncInjectable, inject
+from carthage.dependency_injection import inject
 from vibevoice.modular.modeling_vibevoice_inference import (
     VibeVoiceForConditionalGenerationInference,
 )
@@ -25,7 +25,7 @@ from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .effects import load_preprocessed_voice_reference
 from .model_loading import shared_model_load
-from .dialogue import ScriptRenderRequest
+from .dialogue import ScriptRenderRequest, TtsResource
 from .rendering import RenderResult
 
 
@@ -50,7 +50,7 @@ class _PendingRender:
 
 
 @inject(config=ProductionConfig, cache_manager=CacheManager)
-class VibeVoiceResource(AsyncInjectable):
+class VibeVoiceResource(TtsResource):
     """Shared VibeVoice model resource for script-level render requests.
 
     Scripts register requests during planning. Rendering any registered request

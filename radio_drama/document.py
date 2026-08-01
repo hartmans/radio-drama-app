@@ -286,8 +286,6 @@ class ScriptNode(ElementNode):
         normalized = tts_name.strip().lower()
         if not normalized:
             raise self.error("<script> tts attribute cannot be empty")
-        if normalized not in {"vibevoice", "qwen"}:
-            raise self.error("<script> tts must be either 'vibevoice' or 'qwen'")
         return normalized
 
     async def plan(self, ainjector):

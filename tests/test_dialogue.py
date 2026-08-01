@@ -9,7 +9,7 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.audio import ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptPlan, ScriptRenderRequest
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptPlan, ScriptRenderRequest, TtsResource
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
@@ -91,7 +91,7 @@ def test_speaker_map_mapping_applies_effect_in_special_script_slice(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -133,7 +133,7 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -150,7 +150,6 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
                 source_name="stanza.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             return await root.script_nodes[0].plan(ainjector)
         finally:
             injector.close()
@@ -190,8 +189,8 @@ def test_script_plan_routes_qwen_scripts_to_qwen_resource(tmp_path: Path):
     async def runner():
         injector, ainjector = await make_async_injector(config)
         fake_qwen = FakeQwen()
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(QwenTtsResource), fake_qwen, close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="qwen"), fake_qwen, close=False)
         try:
             root = parse_production_string(
                 """
@@ -203,7 +202,6 @@ def test_script_plan_routes_qwen_scripts_to_qwen_resource(tmp_path: Path):
                 source_name="qwen-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             script_plan = await root.script_nodes[0].plan(ainjector)
             return fake_qwen, script_plan
         finally:
@@ -229,7 +227,7 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -243,7 +241,6 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
                 source_name="empty-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             script_plan = await root.script_nodes[0].plan(ainjector)
             return script_plan.render_request, await script_plan.render()
         finally:
@@ -253,6 +250,34 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
     assert render_request is None
     assert render_result.frame_count == 0
     assert render_result.channel_count == 2
+
+
+def test_script_plan_reports_unconfigured_tts_as_document_error(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"fake")
+
+    async def runner():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(voice_directory=tmp_path)
+        )
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script tts="not-configured">Anna: Hello.</script>
+                </production>
+                """,
+                source_name="unknown-tts.xml",
+            )
+            await root.speaker_map_node.plan(ainjector)
+            await root.script_nodes[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="No TTS resource is configured") as excinfo:
+        asyncio.run(runner())
+
+    assert "unknown-tts.xml" in str(excinfo.value)
 
 
 def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
@@ -275,8 +300,9 @@ def test_script_plan_reports_missing_speaker_map(tmp_path: Path):
         finally:
             injector.close()
 
-    with pytest.raises(DocumentError, match="requires a <speaker-map> to be planned before it"):
+    with pytest.raises(DocumentError, match="requires a <speaker-map> to be planned before it") as excinfo:
         asyncio.run(runner())
+    assert excinfo.value.__cause__ is None
 
 
 def test_production_plan_rejects_duplicate_speaker_maps(tmp_path: Path):
@@ -335,7 +361,7 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -431,7 +457,7 @@ def test_recording_script_renders_without_tts_registration(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -448,7 +474,6 @@ def test_recording_script_renders_without_tts_registration(tmp_path: Path):
                 source_name=str(xml_path),
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             script_plan = await root.script_nodes[0].plan(ainjector)
             return script_plan, await script_plan.render()
         finally:
@@ -509,7 +534,7 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -528,7 +553,6 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
                 source_name=str(xml_path),
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             production_plan = await root.plan(ainjector)
             audio_plan = production_plan.audio_plans[0]
             first_slice = audio_plan.audio_plans[0]
@@ -616,7 +640,7 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -693,7 +717,7 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -745,7 +769,7 @@ def test_recording_projection_tracks_current_dialogue_source(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -831,7 +855,7 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
@@ -847,7 +871,6 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
                 source_name="ignore-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             script_audio_plan = await root.script_nodes[0].plan(ainjector)
             return script_audio_plan, await script_audio_plan.render()
         finally:
@@ -890,7 +913,7 @@ def test_script_line_without_audio_attrs_does_not_create_extra_script_slice(tmp_
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -955,7 +978,7 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
@@ -1024,7 +1047,7 @@ def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
@@ -1087,7 +1110,7 @@ def test_script_group_attrs_create_special_script_slices(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
@@ -1151,7 +1174,6 @@ def test_script_plan_rejects_non_speaker_prefix(tmp_path: Path):
                 source_name="bad-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             await root.script_nodes[0].plan(ainjector)
         finally:
             injector.close()
@@ -1196,7 +1218,6 @@ def test_recording_script_missing_speaker_after_gap_reports_chunk_start(tmp_path
                 source_name="bad-recording-script.xml",
             )
             speaker_map_plan = await root.speaker_map_node.plan(ainjector)
-            injector.add_provider(InjectionKey(type(speaker_map_plan)), speaker_map_plan, close=False)
             await root.script_nodes[0].plan(ainjector)
         finally:
             injector.close()

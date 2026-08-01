@@ -11,6 +11,7 @@ from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.effects import EffectChainRegistry
 from radio_drama.init import radio_drama_injector
+from radio_drama.planning import PRODUCTION_PLANNING_INJECTOR_KEY
 
 
 _TEST_SPEAKER_LINE_RE = re.compile(r"^Speaker\s+(\d+)\s*:\s*(.*)$")
@@ -38,6 +39,7 @@ async def make_async_injector(
         output_path=output_path,
     )
     injector.add_provider(EffectChainRegistry() if effect_chains is None else effect_chains)
+    injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, injector)
     return injector, injector(AsyncInjector)
 
 

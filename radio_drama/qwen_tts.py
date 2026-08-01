@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 import soundfile as sf
 import torch
-from carthage.dependency_injection import AsyncInjectable, inject
+from carthage.dependency_injection import inject
 
 from .audio import convert_audio_format
 from .cache import CacheCollection, CacheKey, CacheManager
@@ -19,7 +19,7 @@ from .config import ProductionConfig
 from .effects import VOICE_PREPROCESS_VERSION, load_preprocessed_voice_reference
 from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
-from .dialogue import DialogueLine, ScriptRenderRequest
+from .dialogue import DialogueLine, ScriptRenderRequest, TtsResource
 from .rendering import RenderResult, ScriptRenderResult
 from .vibevoice import RegisteredRenderRequest
 
@@ -48,7 +48,7 @@ class _PendingRender:
     whisperx_resource=WhisperXResource,
     cache_manager=CacheManager,
 )
-class QwenTtsResource(AsyncInjectable):
+class QwenTtsResource(TtsResource):
     """Shared Qwen voice-clone resource for script-level render requests."""
 
     def __init__(self, whisperx_resource: WhisperXResource, **kwargs) -> None:

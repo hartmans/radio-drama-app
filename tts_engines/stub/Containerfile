@@ -1,0 +1,6 @@
+FROM python:3.13-slim
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/stub/engine.py /opt/engine.py
+ENV PYTHONPATH=/opt
+ENTRYPOINT ["python", "/opt/engine.py"]

@@ -22,6 +22,7 @@ from radio_drama.dialogue import (
     ScriptPlan,
     ScriptRenderRequest,
     SpeakerVoiceReference,
+    TtsResource,
 )
 from radio_drama.forced_alignment import (
     AlignedScriptSource,
@@ -126,7 +127,7 @@ def test_aligned_script_source_render_keeps_audio_and_records_markers(tmp_path: 
 
     async def runner():
         injector, ainjector = await _make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -200,7 +201,7 @@ def test_script_slice_and_concat_splice_sound_audio(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
@@ -314,7 +315,7 @@ def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: 
         injector, ainjector = await _make_async_injector(config)
         try:
             resource = await ainjector(FakeCutBatchingResource)
-            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), resource, close=False)
             injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
             root = parse_production_string(
                 """
@@ -389,7 +390,7 @@ def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(t
         injector, ainjector = await _make_async_injector(config, document_path=production_path)
         try:
             resource = await ainjector(FakeCutBatchingResource)
-            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), resource, close=False)
             injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
             injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
             root = parse_production_string(
@@ -456,7 +457,7 @@ def test_cut_after_mark_drops_vibevoice_requests_after_mark(tmp_path: Path):
         injector, ainjector = await _make_async_injector(config)
         try:
             resource = await ainjector(FakeCutBatchingResource)
-            injector.replace_provider(InjectionKey(VibeVoiceResource), resource, close=False)
+            injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), resource, close=False)
             injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
             root = parse_production_string(
                 """
@@ -548,7 +549,7 @@ def test_script_length_must_be_non_negative(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.replace_provider(InjectionKey(VibeVoiceResource), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
         try:
             root = parse_production_string(
                 """
