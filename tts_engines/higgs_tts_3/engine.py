@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -91,29 +92,63 @@ class HiggsTtsEngine:
     def render_batch(
         self, requests: Sequence[Mapping[str, Any]]
     ) -> list[Mapping[str, Any]]:
-        return [self.render_request(request) for request in requests]
+        prepared = [self._prepare_request(request) for request in requests]
+        lines = [line for item in prepared for line in item["lines"]]
+        try:
+            if lines:
+                self.ensure_server()
+            batch_size = int(os.environ.get("HIGGS_BATCH_SIZE", "16"))
+            if batch_size < 1:
+                raise ValueError("HIGGS_BATCH_SIZE must be at least 1")
+            for start in range(0, len(lines), batch_size):
+                chunk = lines[start : start + batch_size]
+                audio_results = self.synthesize_batch([item["line"] for item in chunk])
+                for item, audio in zip(chunk, audio_results, strict=True):
+                    item["path"].write_bytes(audio)
+            return [self._finish_request(item) for item in prepared]
+        finally:
+            if not keep_line_wavs():
+                for item in lines:
+                    item["path"].unlink(missing_ok=True)
 
     def render_request(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
+        prepared = self._prepare_request(request)
+        try:
+            for item in prepared["lines"]:
+                self.synthesize_line(item["line"], item["path"])
+            return self._finish_request(prepared)
+        finally:
+            if not keep_line_wavs():
+                for item in prepared["lines"]:
+                    item["path"].unlink(missing_ok=True)
+
+    def _prepare_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
         output_path = Path(artifact_name(request))
-        segment_paths: list[Path] = []
+        return {
+            "output_path": output_path,
+            "lines": [
+                {
+                    "line": line,
+                    "path": output_path.with_suffix(f".line-{index}.wav"),
+                }
+                for index, line in enumerate(self.synthesized_lines(request))
+            ],
+        }
+
+    def _finish_request(self, prepared: Mapping[str, Any]) -> Mapping[str, Any]:
+        output_path = prepared["output_path"]
+        segment_paths = [item["path"] for item in prepared["lines"]]
         line_starts: list[float] = []
         frame_count = 0
-        try:
-            for index, line in enumerate(self.synthesized_lines(request)):
-                segment_path = output_path.with_suffix(f".line-{index}.wav")
-                segment_paths.append(segment_path)
-                self.synthesize_line(line, segment_path)
-                segment_frames, sample_rate = wav_frame_count(segment_path)
-                if sample_rate != SAMPLE_RATE:
-                    raise RuntimeError(
-                        f"Higgs returned {sample_rate} Hz audio; expected {SAMPLE_RATE} Hz"
-                    )
-                line_starts.append(frame_count / SAMPLE_RATE)
-                frame_count += segment_frames
-            concatenate_wavs(segment_paths, output_path, sample_rate=SAMPLE_RATE)
-        finally:
-            for segment_path in segment_paths:
-                segment_path.unlink(missing_ok=True)
+        for segment_path in segment_paths:
+            segment_frames, sample_rate = wav_frame_count(segment_path)
+            if sample_rate != SAMPLE_RATE:
+                raise RuntimeError(
+                    f"Higgs returned {sample_rate} Hz audio; expected {SAMPLE_RATE} Hz"
+                )
+            line_starts.append(frame_count / SAMPLE_RATE)
+            frame_count += segment_frames
+        concatenate_wavs(segment_paths, output_path, sample_rate=SAMPLE_RATE)
         return {
             "wav": output_path.name,
             "dialogue_line_start_positions": line_starts,
@@ -138,20 +173,7 @@ class HiggsTtsEngine:
 
     def synthesize_line(self, line: Mapping[str, Any], output_path: Path) -> None:
         self.ensure_server()
-        speaker = line["speaker"]
-        payload: dict[str, Any] = {
-            "model": MODEL,
-            "input": expand_control_expressions(line["spoken_text"]),
-            "references": [
-                {
-                    "audio_path": speaker["voice_path"],
-                    "text": speaker["transcript"],
-                }
-            ],
-            "temperature": float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
-            "top_k": int(os.environ.get("HIGGS_TOP_K", "50")),
-            "max_new_tokens": int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
-        }
+        payload = self._line_payload(line)
         request = urllib.request.Request(
             f"{self.base_url}/v1/audio/speech",
             data=json.dumps(payload).encode("utf-8"),
@@ -164,6 +186,69 @@ class HiggsTtsEngine:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Higgs synthesis failed ({exc.code}): {detail}") from exc
+
+    def synthesize_batch(
+        self, lines: Sequence[Mapping[str, Any]]
+    ) -> list[bytes]:
+        payload: dict[str, Any] = {
+            "model": MODEL,
+            "temperature": float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
+            "top_k": int(os.environ.get("HIGGS_TOP_K", "50")),
+            "max_new_tokens": int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
+            "items": [self._line_payload(line, include_defaults=False) for line in lines],
+        }
+        request = urllib.request.Request(
+            f"{self.base_url}/v1/audio/speech/batch",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request) as response:
+                result = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Higgs batch synthesis failed ({exc.code}): {detail}") from exc
+        results = result["results"]
+        if len(results) != len(lines):
+            raise RuntimeError("Higgs batch response has the wrong number of results")
+        audio: list[bytes] = []
+        for index, item in enumerate(results):
+            if item.get("index") != index:
+                raise RuntimeError("Higgs batch response is out of order")
+            if item.get("status") != "success":
+                raise RuntimeError(f"Higgs batch item {index} failed: {item.get('error')}")
+            audio.append(base64.b64decode(item["audio_data"], validate=True))
+        return audio
+
+    @staticmethod
+    def _line_payload(
+        line: Mapping[str, Any], *, include_defaults: bool = True
+    ) -> dict[str, Any]:
+        speaker = line["speaker"]
+        payload: dict[str, Any] = {
+            "input": expand_control_expressions(line["spoken_text"]),
+            "references": [
+                {
+                    "audio_path": speaker["voice_path"],
+                    "text": speaker["transcript"],
+                }
+            ],
+        }
+        if include_defaults:
+            payload.update(
+                model=MODEL,
+                temperature=float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
+                top_k=int(os.environ.get("HIGGS_TOP_K", "50")),
+                max_new_tokens=int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
+            )
+        return payload
+
+
+def keep_line_wavs() -> bool:
+    return os.environ.get("HIGGS_KEEP_LINE_WAVS", "").lower() in {
+        "1", "true", "yes", "on"
+    }
 
 
 def wav_frame_count(path: Path) -> tuple[int, int]:

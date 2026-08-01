@@ -10,6 +10,16 @@ uses its shared, cached reference ASR resource to enrich each speaker reference
 before rendering. The adapter supplies both the mounted reference audio path
 and that transcript to Higgs voice cloning.
 
+Dialogue lines remain independent synthesis items, but the adapter submits
+them to SGLang-Omni's batch speech endpoint in bounded groups. Set
+`HIGGS_BATCH_SIZE` to control the group size; the default is `16`.
+
+For boundary debugging, set `HIGGS_KEEP_LINE_WAVS=1`. The adapter will retain
+the exact WAV returned for every line alongside the concatenated cache artifact
+as `<artifact>.line-0.wav`, `<artifact>.line-1.wav`, and so on. These files are
+normally removed after concatenation. Batch operation does not alter their
+meaning: each retained file is still one batch item's unmodified response.
+
 The image is self-contained except for the model checkpoint. Its build installs
 SGLang-Omni and the Higgs inference runtime into the image. At container
 startup, the engine entrypoint launches `sgl-omni serve` inside the same
