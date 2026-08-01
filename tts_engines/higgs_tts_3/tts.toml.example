@@ -7,7 +7,6 @@ image = "localhost/radio-drama-higgs-tts-3:latest"
 network = "host"
 devices = ["nvidia.com/gpu=all"]
 ipc = "host"
-shm_size = "32g"
 
 [tts.higgs.environment]
 HF_HOME = "/models/huggingface"

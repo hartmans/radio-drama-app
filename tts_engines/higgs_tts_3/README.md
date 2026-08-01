@@ -37,8 +37,9 @@ enough room for the unpacked layers.
 
 Copy `tts.toml.example` to `$XDG_CONFIG_HOME/radio-drama/tts.toml`, then select
 the engine with `<script tts="higgs">`. The sample uses Podman's NVIDIA CDI
-device name, host IPC, a 32 GiB shared-memory allocation, host networking for
-the initial checkpoint download, and a host Hugging Face cache bind mount.
+device name, host IPC, host networking for the initial checkpoint download,
+and a host Hugging Face cache bind mount. Create that host cache directory
+before the first run.
 Adjust the device name if the host's Podman/NVIDIA setup exposes a different
 CDI device. Once the checkpoint is populated, the network policy can be made
 more restrictive if the local runtime does not need network access.

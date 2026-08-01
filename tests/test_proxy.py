@@ -58,6 +58,22 @@ def test_load_proxy_tts_configs(tmp_path: Path):
     )
 
 
+def test_proxy_podman_command_omits_shm_size_for_host_ipc(tmp_path: Path):
+    resource = object.__new__(ProxyTtsResource)
+    resource.proxy_config = ProxyTtsConfig(
+        name="demo",
+        image="localhost/demo:latest",
+        ipc="host",
+        shm_size="32g",
+    )
+    resource._voice_paths = {}
+
+    command = resource._podman_command(tmp_path)
+
+    assert "--ipc=host" in command
+    assert "--shm-size=32g" not in command
+
+
 def test_container_server_handshake_and_render():
     request = {
         "first_words": "Hello there",

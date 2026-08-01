@@ -1,9 +1,12 @@
 FROM docker.io/lmsysorg/sglang-omni:dev
 
+# The base image currently supplies 0.6.11 cubins. Keep the Python package
+# aligned; FlashInfer refuses to initialize mismatched versions.
 RUN git clone --depth 1 https://github.com/sgl-project/sglang-omni.git /opt/sglang-omni \
     && uv venv --python 3.12 --system-site-packages /opt/sglang-omni/.venv \
     && cd /opt/sglang-omni \
-    && uv pip install --python .venv/bin/python --no-cache -e .
+    && uv pip install --python .venv/bin/python --no-cache -e . \
+    && uv pip install --python .venv/bin/python --no-cache flashinfer-python==0.6.11.post1
 
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
 COPY tts_engines/higgs_tts_3/engine.py /opt/higgs_tts_3_engine.py

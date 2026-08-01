@@ -233,7 +233,10 @@ class ProxyTtsResource(TtsResource):
             args.extend(("--device", device))
         if proxy.ipc is not None:
             args.append(f"--ipc={proxy.ipc}")
-        if proxy.shm_size is not None:
+        # Podman rejects --shm-size with the host IPC namespace.  In that mode
+        # the container already uses the host's /dev/shm, so the size setting
+        # has no meaning.
+        if proxy.shm_size is not None and proxy.ipc != "host":
             args.append(f"--shm-size={proxy.shm_size}")
         for path, target in self._voice_paths.items():
             args.extend(("--volume", f"{path}:{target}:ro"))

@@ -179,7 +179,7 @@ Current resource contract:
 * requests are registered during planning and may remain pending until some caller renders one of them
 * rendering any registered request may drain additional queued requests in the same batch
 * resource output is returned in the configured production sample rate and channel layout
-* proxy TTS definitions are loaded from `$XDG_CONFIG_HOME/radio-drama/tts.toml`, falling back to `~/.config/radio-drama/tts.toml`; each definition names a Podman image and may provide a command, environment, network mode, and explicit persistent bind mounts
+* proxy TTS definitions are loaded from `$XDG_CONFIG_HOME/radio-drama/tts.toml`, falling back to `~/.config/radio-drama/tts.toml`; each definition names a Podman image and may provide a command, environment, network and IPC modes, a private shared-memory size, and explicit persistent bind mounts; a shared-memory size is ignored with host IPC because the container uses the host's `/dev/shm`
 * `ProxyTtsResource` retains registrations until rendering begins, launches a persistent Podman container with all referenced voices mounted read-only, and mounts the production cache root read-write as `/cache` and as the container working directory
 * proxy stdin and stdout carry protocol-versioned JSON objects one per line; stderr remains available for container diagnostics, and the initial container response advertises a set of capabilities
 * the currently defined capability is `needs_transcript`; when advertised, the host transcribes each encountered shared speaker reference before sending render requests, while containers without it do not cause reference ASR work

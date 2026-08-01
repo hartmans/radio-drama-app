@@ -28,7 +28,7 @@ def test_higgs_sample_proxy_config_enables_checkpoint_cache_and_gpu():
 
     assert config.devices == ("nvidia.com/gpu=all",)
     assert config.ipc == "host"
-    assert config.shm_size == "32g"
+    assert config.shm_size is None
     assert config.mounts[0].target == "/models/huggingface"
     assert not config.mounts[0].read_only
 
