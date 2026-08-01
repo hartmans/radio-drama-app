@@ -33,6 +33,22 @@ def test_higgs_sample_proxy_config_enables_checkpoint_cache_and_gpu():
     assert not config.mounts[0].read_only
 
 
+def test_higgs_containerfile_installs_and_launches_local_sglang():
+    containerfile = (
+        Path(__file__).resolve().parents[1]
+        / "tts_engines"
+        / "higgs_tts_3"
+        / "Containerfile"
+    ).read_text(encoding="utf-8")
+
+    assert "FROM docker.io/lmsysorg/sglang-omni:dev" in containerfile
+    assert "uv venv --python 3.12 --system-site-packages" in containerfile
+    assert "uv pip install --python .venv/bin/python" in containerfile
+    assert "PATH=/opt/sglang-omni/.venv/bin:$PATH" in containerfile
+    assert 'VOLUME ["/models/huggingface"]' in containerfile
+    assert 'ENTRYPOINT ["python", "/opt/higgs_tts_3_engine.py"]' in containerfile
+
+
 def test_higgs_engine_maps_each_line_to_its_voice_and_concatenates(
     tmp_path: Path, monkeypatch
 ):

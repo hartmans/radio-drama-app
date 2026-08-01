@@ -20,9 +20,14 @@ that location so subsequent containers reuse the downloaded checkpoint.
 Build from the repository root:
 
 ```console
-podman build -f tts_engines/higgs_tts_3/Containerfile \
+TMPDIR=/tmp podman build -f tts_engines/higgs_tts_3/Containerfile \
   -t localhost/radio-drama-higgs-tts-3 .
 ```
+
+The base image and resolved CUDA dependencies are large. Set `TMPDIR` to a
+filesystem with substantial free space; `/tmp` is only an example and may need
+to be replaced on hosts where it is small. Podman's image graph root also needs
+enough room for the unpacked layers.
 
 Copy `tts.toml.example` to `$XDG_CONFIG_HOME/radio-drama/tts.toml`, then select
 the engine with `<script tts="higgs">`. The sample uses Podman's NVIDIA CDI

@@ -1,12 +1,15 @@
-FROM lmsysorg/sglang-omni:dev
+FROM docker.io/lmsysorg/sglang-omni:dev
 
 RUN git clone --depth 1 https://github.com/sgl-project/sglang-omni.git /opt/sglang-omni \
-    && python -m pip install --no-cache-dir -e /opt/sglang-omni
+    && uv venv --python 3.12 --system-site-packages /opt/sglang-omni/.venv \
+    && cd /opt/sglang-omni \
+    && uv pip install --python .venv/bin/python --no-cache -e .
 
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
 COPY tts_engines/higgs_tts_3/engine.py /opt/higgs_tts_3_engine.py
 
-ENV PYTHONPATH=/opt \
+ENV PATH=/opt/sglang-omni/.venv/bin:$PATH \
+    PYTHONPATH=/opt \
     HF_HOME=/models/huggingface \
     HIGGS_MODEL=bosonai/higgs-tts-3-4b
 
