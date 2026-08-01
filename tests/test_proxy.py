@@ -24,6 +24,9 @@ def test_load_proxy_tts_configs(tmp_path: Path):
         [tts.demo]
         image = "localhost/demo:latest"
         command = ["python", "/engine.py"]
+        devices = ["nvidia.com/gpu=all"]
+        ipc = "host"
+        shm_size = "32g"
 
         [tts.demo.environment]
         MODEL = "/models/demo"
@@ -41,6 +44,9 @@ def test_load_proxy_tts_configs(tmp_path: Path):
     assert config.image == "localhost/demo:latest"
     assert config.command == ("python", "/engine.py")
     assert config.environment == {"MODEL": "/models/demo"}
+    assert config.devices == ("nvidia.com/gpu=all",)
+    assert config.ipc == "host"
+    assert config.shm_size == "32g"
     assert config.mounts == (
         ProxyMount(
             source=Path("~/models").expanduser(),

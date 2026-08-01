@@ -1,0 +1,14 @@
+FROM lmsysorg/sglang-omni:dev
+
+RUN git clone --depth 1 https://github.com/sgl-project/sglang-omni.git /opt/sglang-omni \
+    && python -m pip install --no-cache-dir -e /opt/sglang-omni
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/higgs_tts_3/engine.py /opt/higgs_tts_3_engine.py
+
+ENV PYTHONPATH=/opt \
+    HF_HOME=/models/huggingface \
+    HIGGS_MODEL=bosonai/higgs-tts-3-4b
+
+VOLUME ["/models/huggingface"]
+ENTRYPOINT ["python", "/opt/higgs_tts_3_engine.py"]

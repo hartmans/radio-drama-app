@@ -1,0 +1,22 @@
+# Install as $XDG_CONFIG_HOME/radio-drama/tts.toml, normally
+# ~/.config/radio-drama/tts.toml. Build the image from the repository root:
+# podman build -f tts_engines/higgs_tts_3/Containerfile -t localhost/radio-drama-higgs-tts-3 .
+
+[tts.higgs]
+image = "localhost/radio-drama-higgs-tts-3:latest"
+network = "host"
+devices = ["nvidia.com/gpu=all"]
+ipc = "host"
+shm_size = "32g"
+
+[tts.higgs.environment]
+HF_HOME = "/models/huggingface"
+HIGGS_MODEL = "bosonai/higgs-tts-3-4b"
+HIGGS_TEMPERATURE = "0.8"
+HIGGS_TOP_K = "50"
+HIGGS_MAX_NEW_TOKENS = "2048"
+
+[[tts.higgs.mounts]]
+source = "~/.cache/radio-drama/higgs-huggingface"
+target = "/models/huggingface"
+mode = "rw"

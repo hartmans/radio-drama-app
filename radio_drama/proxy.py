@@ -41,7 +41,10 @@ class ProxyTtsConfig:
     command: tuple[str, ...] = ()
     mounts: tuple[ProxyMount, ...] = ()
     environment: Mapping[str, str] = field(default_factory=dict)
+    devices: tuple[str, ...] = ()
     network: str = "none"
+    ipc: str | None = None
+    shm_size: str | None = None
     podman: str = "podman"
 
 
@@ -197,6 +200,12 @@ class ProxyTtsResource(TtsResource):
             "--volume",
             f"{cache_directory.resolve()}:/cache:rw",
         ]
+        for device in proxy.devices:
+            args.extend(("--device", device))
+        if proxy.ipc is not None:
+            args.append(f"--ipc={proxy.ipc}")
+        if proxy.shm_size is not None:
+            args.append(f"--shm-size={proxy.shm_size}")
         for path, target in self._voice_paths.items():
             args.extend(("--volume", f"{path}:{target}:ro"))
         for mount in proxy.mounts:
@@ -313,7 +322,10 @@ def load_proxy_tts_configs(path: Path | None = None) -> dict[str, ProxyTtsConfig
             command=tuple(value.get("command", ())),
             mounts=tuple(mounts_list),
             environment=dict(value.get("environment", {})),
+            devices=tuple(value.get("devices", ())),
             network=value.get("network", "none"),
+            ipc=value.get("ipc"),
+            shm_size=value.get("shm_size"),
             podman=value.get("podman", "podman"),
         )
     return configs
