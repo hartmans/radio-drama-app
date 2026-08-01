@@ -12,6 +12,7 @@ ZONOS_MODEL = "Zyphra/Zonos-v0.1-transformer"
 ZONOS_LANGUAGE = "en-us"
 ZONOS_BATCH_SIZE = "8"
 ZONOS_GENERATION_ATTEMPTS = "3"
+ZONOS_PREROLL_MS = "100"
 
 [[tts.zonos.mounts]]
 source = "~/.cache/radio-drama/zonos-huggingface"

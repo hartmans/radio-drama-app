@@ -12,6 +12,10 @@ failure, the engine retries it up to `ZONOS_GENERATION_ATTEMPTS` times (default
 3) before returning a descriptive error.
 The EOS tracker also tolerates the empty final callback slice emitted when the
 upstream generation cursor reaches the end of its allocated token buffer.
+To avoid starting speech and DAC decoding at token zero, the engine internally
+conditions each line on 100 ms of encoded silence, decodes with that context,
+removes the prefix samples, and applies a 5 ms onset fade. `ZONOS_PREROLL_MS`
+may tune the silence duration.
 
 Build from the repository root and copy the example configuration into your
 TTS configuration. `ZONOS_LANGUAGE` is an eSpeak language code (default

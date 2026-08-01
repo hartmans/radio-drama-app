@@ -21,6 +21,7 @@ class ZonosEngine:
     def __init__(self) -> None:
         self.model = None
         self._speaker_embeddings: dict[str, Any] = {}
+        self._preroll: tuple[Any, int] | None = None
 
     def load_model(self):
         if self.model is None:
@@ -77,17 +78,44 @@ class ZonosEngine:
             device=model.device,
         ).view(-1, 1, 1),)
         conditioning = model.prepare_conditioning(combined)
+        prefix_codes, prefix_samples = self.silence_preroll()
+        prefix_codes = prefix_codes.repeat(len(lines), 1, 1)
         codes, eos_tracker = _generate_nonempty_codes(
             model,
             conditioning,
             batch_size=len(lines),
             attempts=int(os.environ.get("ZONOS_GENERATION_ATTEMPTS", "3")),
+            audio_prefix_codes=prefix_codes,
         )
         lengths = eos_tracker.lengths(default=codes.shape[-1])
         return [
-            model.autoencoder.decode(codes[index : index + 1, :, :length]).cpu()[0]
+            _finish_prerolled_audio(
+                model.autoencoder.decode(
+                    codes[index : index + 1, :, :length]
+                ).cpu()[0],
+                prefix_samples=prefix_samples,
+                sample_rate=model.autoencoder.sampling_rate,
+            )
             for index, length in enumerate(lengths)
         ]
+
+    def silence_preroll(self):
+        """Return cached codec tokens for a short internal silence prefix."""
+
+        if self._preroll is None:
+            import torch
+
+            model = self.load_model()
+            rate = model.autoencoder.sampling_rate
+            requested = round(
+                rate * float(os.environ.get("ZONOS_PREROLL_MS", "100")) / 1000
+            )
+            if requested < 1:
+                raise ValueError("ZONOS_PREROLL_MS must produce at least one sample")
+            samples = ((requested + 511) // 512) * 512
+            silence = torch.zeros((1, 1, samples), device=model.device)
+            self._preroll = (model.autoencoder.encode(silence), samples)
+        return self._preroll
 
     def render_batch(self, requests: Sequence[Mapping[str, Any]]):
         import torchaudio
@@ -122,8 +150,11 @@ def _batched_prefill(model, prefix_hidden_states, input_ids, inference_params, c
 class _EosTracker:
     """Record each batch item's valid codec length before its first EOS."""
 
-    def __init__(self, batch_size: int, eos_token_id: int) -> None:
+    def __init__(
+        self, batch_size: int, eos_token_id: int, *, prefix_length: int = 0
+    ) -> None:
         self.eos_token_id = eos_token_id
+        self.prefix_length = prefix_length
         self._lengths: list[int | None] = [None] * batch_size
 
     def __call__(self, frame, step: int, _max_steps: int) -> bool:
@@ -136,22 +167,29 @@ class _EosTracker:
             if is_ended and self._lengths[index] is None:
                 # Codebook zero is delayed by one frame. At callback step N,
                 # its EOS maps to output code index N, leaving N valid codes.
-                self._lengths[index] = step
+                self._lengths[index] = self.prefix_length + step
         return True
 
     def lengths(self, *, default: int) -> list[int]:
         return [default if length is None else length for length in self._lengths]
 
 
-def _generate_nonempty_codes(model, conditioning, *, batch_size: int, attempts: int):
+def _generate_nonempty_codes(
+    model, conditioning, *, batch_size: int, attempts: int,
+    audio_prefix_codes=None,
+):
     """Retry stochastic initial-EOS generations before invoking the codec."""
 
     if attempts < 1:
         raise ValueError("ZONOS_GENERATION_ATTEMPTS must be at least 1")
     for _attempt in range(attempts):
-        eos_tracker = _EosTracker(batch_size, model.eos_token_id)
+        prefix_length = 0 if audio_prefix_codes is None else audio_prefix_codes.shape[-1]
+        eos_tracker = _EosTracker(
+            batch_size, model.eos_token_id, prefix_length=prefix_length
+        )
         codes = model.generate(
             conditioning,
+            audio_prefix_codes=audio_prefix_codes,
             batch_size=batch_size,
             max_new_tokens=int(os.environ.get("ZONOS_MAX_NEW_TOKENS", str(86 * 30))),
             cfg_scale=float(os.environ.get("ZONOS_CFG_SCALE", "2.0")),
@@ -163,6 +201,19 @@ def _generate_nonempty_codes(model, conditioning, *, batch_size: int, attempts: 
     raise RuntimeError(
         f"Zonos generated no audio tokens in {attempts} consecutive attempts"
     )
+
+
+def _finish_prerolled_audio(audio, *, prefix_samples: int, sample_rate: int):
+    """Remove internal silence context and gently enforce a zero onset."""
+
+    audio = audio[..., prefix_samples:]
+    fade_samples = min(audio.shape[-1], max(1, round(sample_rate * 0.005)))
+    if fade_samples:
+        import torch
+
+        fade = torch.linspace(0, 1, fade_samples, dtype=audio.dtype)
+        audio[..., :fade_samples] *= fade
+    return audio
 
 
 def main() -> None:

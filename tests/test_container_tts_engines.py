@@ -10,7 +10,9 @@ import numpy as np
 from radio_drama.proxy import load_proxy_tts_configs
 from radio_drama_tts_container import finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
-from tts_engines.zonos.engine import ZonosEngine, _EosTracker, _generate_nonempty_codes
+from tts_engines.zonos.engine import (
+    ZonosEngine, _EosTracker, _finish_prerolled_audio, _generate_nonempty_codes,
+)
 
 
 def _request(label: str, words: tuple[str, ...]) -> dict:
@@ -108,6 +110,18 @@ def test_zonos_retries_initial_eos_before_decoding():
     assert model.calls == 2
     assert codes.shape == (2, 9, 5)
     assert tracker.lengths(default=codes.shape[-1]) == [5, 5]
+
+
+def test_zonos_removes_silence_context_and_fades_onset():
+    import torch
+
+    audio = torch.ones((1, 1200))
+    result = _finish_prerolled_audio(audio, prefix_samples=200, sample_rate=1000)
+
+    assert result.shape == (1, 1000)
+    assert result[0, 0] == 0
+    assert 0 < result[0, 1] < 1
+    assert result[0, 4] == 1
 
 
 def test_chatterbox_reuses_each_speaker_conditioning():
