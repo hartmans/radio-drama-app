@@ -10,7 +10,7 @@ import numpy as np
 from radio_drama.proxy import load_proxy_tts_configs
 from radio_drama_tts_container import finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
-from tts_engines.zonos.engine import ZonosEngine, _EosTracker
+from tts_engines.zonos.engine import ZonosEngine, _EosTracker, _generate_nonempty_codes
 
 
 def _request(label: str, words: tuple[str, ...]) -> dict:
@@ -83,6 +83,30 @@ def test_zonos_tracks_each_batched_items_eos_before_padding():
     assert tracker(torch.tensor([[[1024]], [[9]]]), 4, 20)
     assert tracker(torch.tensor([[[1024]], [[1024]]]), 9, 20)
     assert tracker.lengths(default=20) == [4, 9]
+
+
+def test_zonos_retries_initial_eos_before_decoding():
+    import torch
+
+    class FakeModel:
+        eos_token_id = 1024
+
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, _conditioning, **_kwargs):
+            self.calls += 1
+            length = 0 if self.calls == 1 else 5
+            return torch.zeros((2, 9, length), dtype=torch.long)
+
+    model = FakeModel()
+    codes, tracker = _generate_nonempty_codes(
+        model, object(), batch_size=2, attempts=3
+    )
+
+    assert model.calls == 2
+    assert codes.shape == (2, 9, 5)
+    assert tracker.lengths(default=codes.shape[-1]) == [5, 5]
 
 
 def test_chatterbox_reuses_each_speaker_conditioning():

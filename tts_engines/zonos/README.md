@@ -7,6 +7,9 @@ returns exact segment-derived line starts. The model stays resident and speaker
 embeddings are reused for the container lifetime.
 Each item is decoded only through its own EOS position; the rectangular token
 padding needed by batched generation is never decoded as audio.
+An initial EOS produces no codec frames; because this is a stochastic model
+failure, the engine retries it up to `ZONOS_GENERATION_ATTEMPTS` times (default
+3) before returning a descriptive error.
 
 Build from the repository root and copy the example configuration into your
 TTS configuration. `ZONOS_LANGUAGE` is an eSpeak language code (default

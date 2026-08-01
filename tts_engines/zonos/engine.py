@@ -77,14 +77,11 @@ class ZonosEngine:
             device=model.device,
         ).view(-1, 1, 1),)
         conditioning = model.prepare_conditioning(combined)
-        eos_tracker = _EosTracker(len(lines), model.eos_token_id)
-        codes = model.generate(
+        codes, eos_tracker = _generate_nonempty_codes(
+            model,
             conditioning,
             batch_size=len(lines),
-            max_new_tokens=int(os.environ.get("ZONOS_MAX_NEW_TOKENS", str(86 * 30))),
-            cfg_scale=float(os.environ.get("ZONOS_CFG_SCALE", "2.0")),
-            progress_bar=False,
-            callback=eos_tracker,
+            attempts=int(os.environ.get("ZONOS_GENERATION_ATTEMPTS", "3")),
         )
         lengths = eos_tracker.lengths(default=codes.shape[-1])
         return [
@@ -140,6 +137,28 @@ class _EosTracker:
 
     def lengths(self, *, default: int) -> list[int]:
         return [default if length is None else length for length in self._lengths]
+
+
+def _generate_nonempty_codes(model, conditioning, *, batch_size: int, attempts: int):
+    """Retry stochastic initial-EOS generations before invoking the codec."""
+
+    if attempts < 1:
+        raise ValueError("ZONOS_GENERATION_ATTEMPTS must be at least 1")
+    for _attempt in range(attempts):
+        eos_tracker = _EosTracker(batch_size, model.eos_token_id)
+        codes = model.generate(
+            conditioning,
+            batch_size=batch_size,
+            max_new_tokens=int(os.environ.get("ZONOS_MAX_NEW_TOKENS", str(86 * 30))),
+            cfg_scale=float(os.environ.get("ZONOS_CFG_SCALE", "2.0")),
+            progress_bar=False,
+            callback=eos_tracker,
+        )
+        if codes.shape[-1] > 0:
+            return codes, eos_tracker
+    raise RuntimeError(
+        f"Zonos generated no audio tokens in {attempts} consecutive attempts"
+    )
 
 
 def main() -> None:
