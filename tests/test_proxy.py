@@ -7,6 +7,7 @@ import sys
 import wave
 from pathlib import Path
 
+import numpy as np
 from carthage.dependency_injection import AsyncInjector, InjectionKey
 from radio_drama.proxy import ProxyMount, load_proxy_tts_configs
 from radio_drama.proxy import ProxyTtsConfig, ProxyTtsResource
@@ -185,7 +186,7 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
 ):
     voice_path = tmp_path / "voice.wav"
     voice_path.write_bytes(b"fake")
-    seen = {"transcriptions": 0}
+    seen = {"transcriptions": 0, "exchanges": 0}
 
     class FakeTranscriptionResource:
         async def transcribe(self, reference):
@@ -201,11 +202,20 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
             self._voice_paths = {voice_path.resolve(): "/voices/0.wav"}
 
         async def _exchange(self, message):
+            seen["exchanges"] += 1
             seen["message"] = message
             output = tmp_path / "cache" / "result.wav"
             output.parent.mkdir(parents=True, exist_ok=True)
             write_pcm16_wav(output, (0.0,), sample_rate=8000)
-            return {"id": message["id"], "results": [{"wav": "result.wav"}]}
+            return {
+                "id": message["id"],
+                "results": [
+                    {
+                        "wav": "result.wav",
+                        "dialogue_line_start_positions": [0.0, 0.0001],
+                    }
+                ],
+            }
 
     async def runner():
         injector = radio_drama_injector(
@@ -232,15 +242,24 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
                 ]
             )
             result = await (await resource.register_request(request)).render()
-            return speaker, result
+            replay = await (await resource.register_request(request)).render()
+            return speaker, result, replay
         finally:
             injector.close()
 
-    speaker, result = asyncio.run(runner())
+    speaker, result, replay = asyncio.run(runner())
 
     assert isinstance(result, RenderResult)
+    assert isinstance(replay, RenderResult)
+    assert np.array_equal(result.audio, replay.audio)
+    assert result.dialogue_line_start_positions == replay.dialogue_line_start_positions
     assert speaker.transcript == "Reference words."
     assert seen["transcriptions"] == 1
+    assert seen["exchanges"] == 1
+    cache_payload = json.loads(
+        next((tmp_path / "cache").glob("fake_*.json")).read_text(encoding="utf-8")
+    )
+    assert cache_payload["dialogue_line_start_positions"] == [0.0, 0.0001]
     serialized_lines = seen["message"]["requests"][0]["dialogue_contents"]
     assert serialized_lines[0]["speaker"] == {
         "authored_name": "Narrator",
