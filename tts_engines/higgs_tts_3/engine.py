@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -22,6 +23,45 @@ HOST = os.environ.get("HIGGS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("HIGGS_PORT", "8000"))
 STARTUP_TIMEOUT = float(os.environ.get("HIGGS_STARTUP_TIMEOUT", "900"))
 SAMPLE_RATE = 24_000
+
+CONTROL_TAGS = {
+    "emotion": frozenset(
+        {
+            "affection", "amusement", "anger", "arousal", "awe",
+            "bitterness", "confusion", "contemplation", "contentment",
+            "determination", "disgust", "elation", "enthusiasm", "fear",
+            "helplessness", "longing", "pride", "relief", "sadness",
+            "shame", "surprise",
+        }
+    ),
+    "prosody": frozenset(
+        {
+            "speed_very_slow", "speed_slow", "speed_fast", "speed_very_fast",
+            "pitch_low", "pitch_high", "expressive_high", "expressive_low",
+            "pause", "long_pause",
+        }
+    ),
+    "style": frozenset({"singing", "shouting", "whispering"}),
+    "sfx": frozenset(
+        {
+            "cough", "laughter", "crying", "screaming", "burping",
+            "humming", "sigh", "sniff", "sneeze",
+        }
+    ),
+}
+CONTROL_EXPRESSION = re.compile(r"\[([a-z]+):([a-z_]+)\]")
+
+
+def expand_control_expressions(text: str) -> str:
+    """Translate recognized radio-drama brackets to Higgs control tokens."""
+
+    def replace(match: re.Match[str]) -> str:
+        category, tag = match.groups()
+        if tag not in CONTROL_TAGS.get(category, ()):
+            return match.group(0)
+        return f"<|{category}:{tag}|>"
+
+    return CONTROL_EXPRESSION.sub(replace, text)
 
 
 class HiggsTtsEngine:
@@ -101,7 +141,7 @@ class HiggsTtsEngine:
         speaker = line["speaker"]
         payload: dict[str, Any] = {
             "model": MODEL,
-            "input": line["spoken_text"],
+            "input": expand_control_expressions(line["spoken_text"]),
             "references": [
                 {
                     "audio_path": speaker["voice_path"],

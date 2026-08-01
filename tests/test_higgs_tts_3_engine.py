@@ -5,7 +5,7 @@ import wave
 from pathlib import Path
 
 from radio_drama.proxy import load_proxy_tts_configs
-from tts_engines.higgs_tts_3.engine import HiggsTtsEngine
+from tts_engines.higgs_tts_3.engine import CONTROL_TAGS, HiggsTtsEngine, expand_control_expressions
 
 
 def _write_wav(path: Path, frames: bytes) -> None:
@@ -120,7 +120,7 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
 
     HiggsTtsEngine(base_url="http://higgs.test").synthesize_line(
         {
-            "spoken_text": "Hello there.",
+            "spoken_text": "[emotion:affection]Hello [prosody:pause] there.",
             "speaker": {
                 "voice_path": "/voices/7.wav",
                 "transcript": "The reference transcript.",
@@ -131,7 +131,9 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
 
     assert captured["url"] == "http://higgs.test/v1/audio/speech"
     assert captured["payload"]["model"] == "bosonai/higgs-tts-3-4b"
-    assert captured["payload"]["input"] == "Hello there."
+    assert captured["payload"]["input"] == (
+        "<|emotion:affection|>Hello <|prosody:pause|> there."
+    )
     assert captured["payload"]["references"] == [
         {
             "audio_path": "/voices/7.wav",
@@ -139,3 +141,12 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
         }
     ]
     assert output.read_bytes() == b"RIFF-test"
+
+
+def test_higgs_control_expression_catalog_and_unknown_brackets():
+    assert sum(map(len, CONTROL_TAGS.values())) == 43
+    assert expand_control_expressions(
+        "[style:whispering][sfx:sigh]Ahh. [unknown:thing] [aside]"
+    ) == (
+        "<|style:whispering|><|sfx:sigh|>Ahh. [unknown:thing] [aside]"
+    )

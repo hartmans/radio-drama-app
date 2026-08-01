@@ -44,6 +44,46 @@ Adjust the device name if the host's Podman/NVIDIA setup exposes a different
 CDI device. Once the checkpoint is populated, the network policy can be made
 more restrictive if the local runtime does not need network access.
 
+## Speech controls
+
+The in-container adapter translates recognized bracketed expressions in spoken
+text to Higgs control tokens. This keeps Higgs's `<|category:tag|>` syntax out
+of production XML. For example:
+
+```text
+obsidia: [emotion:affection][style:whispering]Come closer.
+obsidia: Wait for it [prosody:long_pause] now.
+obsidia: [sfx:laughter]Haha, I knew you would agree.
+```
+
+Sentence-level controls belong at the start of a sentence: emotions, styles,
+speed, pitch, and expressiveness. Pauses and sound effects belong at the point
+where they occur. Sound effects should be followed immediately by matching
+onomatopoeia, with no space: `[sfx:cough]Ahem`, for example. Controls may be
+stacked. Unknown expressions and ordinary bracketed text are passed through
+unchanged rather than being treated as model controls.
+
+The complete catalog currently documented by the model authors contains 43
+controls:
+
+* `emotion` (21): `affection`, `amusement`, `anger`, `arousal`, `awe`,
+  `bitterness`, `confusion`, `contemplation`, `contentment`, `determination`,
+  `disgust`, `elation`, `enthusiasm`, `fear`, `helplessness`, `longing`,
+  `pride`, `relief`, `sadness`, `shame`, `surprise`
+* `prosody` sentence controls (8): `speed_very_slow`, `speed_slow`,
+  `speed_fast`, `speed_very_fast`, `pitch_low`, `pitch_high`,
+  `expressive_high`, `expressive_low`
+* `prosody` inline controls (2): `pause`, `long_pause`
+* `style` (3): `singing`, `shouting`, `whispering`
+* `sfx` (9): `cough`, `laughter`, `crying`, `screaming`, `burping`,
+  `humming`, `sigh`, `sniff`, `sneeze`
+
+Use `[category:tag]`, such as `[prosody:speed_slow]`. The upstream prompting
+guide notes that `speed_very_slow` has limited slowing range; use inline
+`long_pause` controls when a delivery needs more space. The catalog and
+placement rules come from the model's
+[PROMPTING.md](https://huggingface.co/bosonai/higgs-tts-3-4b/blob/main/PROMPTING.md).
+
 The checkpoint is covered by the Boson Higgs TTS 3 Research and Non-Commercial
 License, including its Creator Use terms and attribution requirement. Review
 the current model license before using generated audio:
