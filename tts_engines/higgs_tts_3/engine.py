@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import base64
+import concurrent.futures
 import json
 import os
 import re
@@ -163,37 +163,26 @@ class HiggsTtsEngine:
     def synthesize_batch(
         self, lines: Sequence[Mapping[str, Any]]
     ) -> list[bytes]:
-        payload: dict[str, Any] = {
-            "model": MODEL,
-            "temperature": float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
-            "top_k": int(os.environ.get("HIGGS_TOP_K", "50")),
-            "max_new_tokens": int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
-            "items": [self._line_payload(line, include_defaults=False) for line in lines],
-        }
+        if not lines:
+            return []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(lines)) as executor:
+            return list(executor.map(self._synthesize_line, lines))
+
+    def _synthesize_line(self, line: Mapping[str, Any]) -> bytes:
+        payload = self._line_payload(line)
         self._add_initial_codec_chunk_frames(payload)
         request = urllib.request.Request(
-            f"{self.base_url}/v1/audio/speech/batch",
+            f"{self.base_url}/v1/audio/speech",
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
             with urllib.request.urlopen(request) as response:
-                result = json.loads(response.read())
+                return response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Higgs batch synthesis failed ({exc.code}): {detail}") from exc
-        results = result["results"]
-        if len(results) != len(lines):
-            raise RuntimeError("Higgs batch response has the wrong number of results")
-        audio: list[bytes] = []
-        for index, item in enumerate(results):
-            if item.get("index") != index:
-                raise RuntimeError("Higgs batch response is out of order")
-            if item.get("status") != "success":
-                raise RuntimeError(f"Higgs batch item {index} failed: {item.get('error')}")
-            audio.append(base64.b64decode(item["audio_data"], validate=True))
-        return audio
+            raise RuntimeError(f"Higgs synthesis failed ({exc.code}): {detail}") from exc
 
     @staticmethod
     def _add_initial_codec_chunk_frames(payload: dict[str, Any]) -> None:
@@ -283,6 +272,8 @@ def start_sglang_server() -> subprocess.Popen:
         HOST,
         "--port",
         str(PORT),
+        "--allowed_local_media_path",
+        "/voices",
     ]
     process = subprocess.Popen(command, stdout=sys.stderr, stderr=sys.stderr)
     deadline = time.monotonic() + STARTUP_TIMEOUT

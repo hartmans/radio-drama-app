@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import io
+import threading
 import wave
-import base64
 from pathlib import Path
 
 from radio_drama.proxy import load_proxy_tts_configs
@@ -53,12 +53,22 @@ def test_higgs_containerfile_installs_and_launches_local_sglang():
         / "Containerfile"
     ).read_text(encoding="utf-8")
 
-    assert "FROM docker.io/lmsysorg/sglang-omni:dev" in containerfile
-    assert "uv venv --python 3.12 --system-site-packages" in containerfile
-    assert "uv pip install --python .venv/bin/python" in containerfile
-    assert "PATH=/opt/sglang-omni/.venv/bin:$PATH" in containerfile
+    assert "FROM docker.io/lmsysorg/sglang-omni@sha256:" in containerfile
+    assert "uv pip install" not in containerfile
+    assert "PATH=/opt/omni/bin:$PATH" in containerfile
     assert 'VOLUME ["/models/huggingface"]' in containerfile
-    assert 'ENTRYPOINT ["python", "/opt/higgs_tts_3_engine.py"]' in containerfile
+    assert 'ENTRYPOINT ["/opt/omni/bin/python", "/opt/higgs_tts_3_engine.py"]' in containerfile
+
+
+def test_higgs_server_limits_local_media_to_prepared_voice_mounts():
+    engine_source = (
+        Path(__file__).resolve().parents[1]
+        / "tts_engines"
+        / "higgs_tts_3"
+        / "engine.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"--allowed_local_media_path",\n        "/voices",' in engine_source
 
 
 def test_higgs_control_expression_catalog_and_unknown_brackets():
@@ -145,11 +155,14 @@ def test_higgs_render_batch_honors_batch_size_and_removes_line_wavs(
     assert list(tmp_path.glob("*.line-*.wav")) == []
 
 
-def test_higgs_synthesis_batch_uses_sglang_batch_endpoint(monkeypatch):
-    captured = {}
-    wav = _wav_bytes(b"\x01\x00")
+def test_higgs_synthesis_batch_uses_concurrent_standard_requests(monkeypatch):
+    captured = []
+    barrier = threading.Barrier(2)
 
     class Response:
+        def __init__(self, wav):
+            self.wav = wav
+
         def __enter__(self):
             return self
 
@@ -157,44 +170,31 @@ def test_higgs_synthesis_batch_uses_sglang_batch_endpoint(monkeypatch):
             return False
 
         def read(self):
-            return json.dumps(
-                {
-                    "results": [
-                        {
-                            "index": 0,
-                            "status": "success",
-                            "audio_data": base64.b64encode(wav).decode("ascii"),
-                        }
-                    ]
-                }
-            ).encode("utf-8")
+            return self.wav
 
     def fake_urlopen(request):
-        captured["url"] = request.full_url
-        captured["payload"] = json.loads(request.data)
-        return Response()
+        payload = json.loads(request.data)
+        captured.append((request.full_url, payload))
+        barrier.wait(timeout=1)
+        return Response(_wav_bytes(payload["input"].encode("ascii")))
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    line = {
-        "spoken_text": "Hello.",
-        "speaker": {
-            "voice_path": "/voices/0.wav",
-            "transcript": "Reference.",
-        },
-    }
-
-    result = HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch([line])
-
-    assert captured["url"] == "http://higgs.test/v1/audio/speech/batch"
-    assert captured["payload"]["items"] == [
+    lines = [
         {
-            "input": "Hello.",
-            "references": [
-                {"audio_path": "/voices/0.wav", "text": "Reference."}
-            ],
+            "spoken_text": text,
+            "speaker": {
+                "voice_path": "/voices/0.wav",
+                "transcript": "Reference.",
+            },
         }
+        for text in ("A.", "B.")
     ]
-    assert result == [wav]
+
+    result = HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch(lines)
+
+    assert {url for url, _ in captured} == {"http://higgs.test/v1/audio/speech"}
+    assert {payload["input"] for _, payload in captured} == {"A.", "B."}
+    assert result == [_wav_bytes(b"A."), _wav_bytes(b"B.")]
 
 
 def test_higgs_synthesis_batch_can_set_initial_codec_chunk_frames(monkeypatch):
@@ -209,17 +209,7 @@ def test_higgs_synthesis_batch_can_set_initial_codec_chunk_frames(monkeypatch):
             return False
 
         def read(self):
-            return json.dumps(
-                {
-                    "results": [
-                        {
-                            "index": 0,
-                            "status": "success",
-                            "audio_data": base64.b64encode(wav).decode("ascii"),
-                        }
-                    ]
-                }
-            ).encode("utf-8")
+            return wav
 
     def fake_urlopen(request):
         captured["payload"] = json.loads(request.data)

@@ -10,9 +10,11 @@ uses its shared, cached reference ASR resource to enrich each speaker reference
 before rendering. The adapter supplies both the mounted reference audio path
 and that transcript to Higgs voice cloning.
 
-Dialogue lines remain independent synthesis items, but the adapter submits
-them to SGLang-Omni's batch speech endpoint in bounded groups. Set
-`HIGGS_BATCH_SIZE` to control the group size; the default is `16`.
+Dialogue lines remain independent synthesis items. For each bounded group, the
+adapter submits concurrent requests to SGLang-Omni's standard
+`/v1/audio/speech` endpoint, allowing its continuous scheduler to batch model
+execution through the officially supported API. Set `HIGGS_BATCH_SIZE` to
+control the maximum concurrency; the default is `16`.
 
 Set `HIGGS_INITIAL_CODEC_CHUNK_FRAMES` to pass SGLang-Omni's
 `initial_codec_chunk_frames` option to Higgs. When it is unset, the adapter
@@ -29,11 +31,15 @@ as `<artifact>.line-0.wav`, `<artifact>.line-1.wav`, and so on. These files are
 normally removed after concatenation. Batch operation does not alter their
 meaning: each retained file is still one batch item's unmodified response.
 
-The image is self-contained except for the model checkpoint. Its build installs
-SGLang-Omni and the Higgs inference runtime into the image. At container
-startup, the engine entrypoint launches `sgl-omni serve` inside the same
+The image is self-contained except for the model checkpoint. It is a thin
+derivative of a digest-pinned official `lmsysorg/sglang-omni` image and uses
+that image's preinstalled `/opt/omni` runtime without resolving or replacing
+any Python, CUDA, or kernel packages. At container startup, the engine
+entrypoint launches `sgl-omni serve` inside the same
 container on the first render request and waits for that local server to become
-ready. The radio-drama JSON-lines handshake happens first, allowing the host to
+ready. The server permits local media reads only under `/voices`, where the
+host mounts its read-only prepared speaker references. The radio-drama
+JSON-lines handshake happens first, allowing the host to
 finish advertised setup such as reference ASR before model loading begins. The
 engine does not require or connect to an externally managed inference server.
 
