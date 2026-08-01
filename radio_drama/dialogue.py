@@ -59,13 +59,14 @@ class TtsResource(AsyncInjectable, ABC):
         """Register a semantic script request for later rendering."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class SpeakerVoiceReference:
     """Resolved voice reference for one canonical speaker name."""
 
     authored_name: str
     voice_name: str
     resolved_path: Path
+    transcript: str | None = None
     gain: float = 0.0
     effect_expression: str | None = None
 

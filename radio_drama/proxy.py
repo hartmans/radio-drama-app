@@ -17,6 +17,7 @@ from .cache import CacheManager
 from .config import ProductionConfig
 from .dialogue import DialogueLine, ScriptGap, ScriptRenderRequest, TtsResource
 from .rendering import RenderResult, ScriptRenderResult
+from .voice_reference import VoiceReferenceTranscriptionResource
 
 
 PROXY_PROTOCOL = "radio-drama-tts"
@@ -58,7 +59,11 @@ class RegisteredProxyTtsRequest:
         return await self.resource.render_registered_request(self)
 
 
-@inject(config=ProductionConfig, cache_manager=CacheManager)
+@inject(
+    config=ProductionConfig,
+    cache_manager=CacheManager,
+    transcription_resource=VoiceReferenceTranscriptionResource,
+)
 class ProxyTtsResource(TtsResource):
     """Render registered scripts through a persistent Podman JSON-lines service.
 
@@ -69,8 +74,13 @@ class ProxyTtsResource(TtsResource):
 
     proxy_config: ProxyTtsConfig
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(
+        self,
+        transcription_resource: VoiceReferenceTranscriptionResource,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
+        self.transcription_resource = transcription_resource
         self._pending: list[weakref.ReferenceType[RegisteredProxyTtsRequest]] = []
         self._pending_lock = asyncio.Lock()
         self._drain_task: asyncio.Task | None = None
@@ -78,6 +88,7 @@ class ProxyTtsResource(TtsResource):
         self._rpc_lock = asyncio.Lock()
         self._request_id = 0
         self._voice_paths: dict[Path, str] = {}
+        self._capabilities: set[str] = set()
 
     async def register_request(
         self, request: ScriptRenderRequest | None
@@ -132,6 +143,18 @@ class ProxyTtsResource(TtsResource):
     ) -> list[ScriptRenderResult]:
         async with self._rpc_lock:
             await self._ensure_process([registration.request for registration in batch])
+            if "needs_transcript" in self._capabilities:
+                references = {
+                    id(line.speaker): line.speaker
+                    for registration in batch
+                    for line in registration.request.dialogue_lines
+                }
+                await asyncio.gather(
+                    *(
+                        self.transcription_resource.transcribe(reference)
+                        for reference in references.values()
+                    )
+                )
             self._request_id += 1
             request_id = self._request_id
             message = {
@@ -181,12 +204,18 @@ class ProxyTtsResource(TtsResource):
         response = await self._exchange(
             {"protocol": PROXY_PROTOCOL, "versions": [PROXY_PROTOCOL_VERSION]}
         )
-        if response != {
-            "protocol": PROXY_PROTOCOL,
-            "version": PROXY_PROTOCOL_VERSION,
-            "ready": True,
-        }:
+        if (
+            response.get("protocol") != PROXY_PROTOCOL
+            or response.get("version") != PROXY_PROTOCOL_VERSION
+            or response.get("ready") is not True
+        ):
             raise RuntimeError(f"TTS proxy rejected protocol handshake: {response!r}")
+        capabilities = response.get("capabilities", [])
+        if not isinstance(capabilities, list) or not all(
+            isinstance(capability, str) for capability in capabilities
+        ):
+            raise RuntimeError("TTS proxy capabilities must be a list of strings")
+        self._capabilities = set(capabilities)
 
     def _podman_command(self, cache_directory: Path) -> list[str]:
         proxy = self.proxy_config
@@ -241,10 +270,13 @@ class ProxyTtsResource(TtsResource):
                 contents.append(
                     {
                         "type": "line",
-                        "speaker": content.speaker.authored_name,
-                        "voice_name": content.speaker.voice_name,
-                        "voice_path": self._voice_paths[voice_path],
-                        "gain": content.speaker.gain,
+                        "speaker": {
+                            "authored_name": content.speaker.authored_name,
+                            "voice_name": content.speaker.voice_name,
+                            "voice_path": self._voice_paths[voice_path],
+                            "transcript": content.speaker.transcript,
+                            "gain": content.speaker.gain,
+                        },
                         "spoken_text": content.spoken_text,
                         "handling": content.handling,
                         "source": content.source,

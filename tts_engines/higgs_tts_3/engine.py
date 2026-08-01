@@ -29,6 +29,24 @@ class HiggsTtsEngine:
 
     def __init__(self, *, base_url: str | None = None) -> None:
         self.base_url = base_url or f"http://{HOST}:{PORT}"
+        self._manage_server = base_url is None
+        self._server: subprocess.Popen | None = None
+
+    def ensure_server(self) -> None:
+        """Start the in-container model server lazily after protocol handshake."""
+
+        if self._manage_server and self._server is None:
+            self._server = start_sglang_server()
+
+    def close(self) -> None:
+        if self._server is None:
+            return
+        self._server.terminate()
+        try:
+            self._server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._server.kill()
+        self._server = None
 
     def render_batch(
         self, requests: Sequence[Mapping[str, Any]]
@@ -79,10 +97,17 @@ class HiggsTtsEngine:
         ]
 
     def synthesize_line(self, line: Mapping[str, Any], output_path: Path) -> None:
+        self.ensure_server()
+        speaker = line["speaker"]
         payload: dict[str, Any] = {
             "model": MODEL,
             "input": line["spoken_text"],
-            "references": [{"audio_path": line["voice_path"]}],
+            "references": [
+                {
+                    "audio_path": speaker["voice_path"],
+                    "text": speaker["transcript"],
+                }
+            ],
             "temperature": float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
             "top_k": int(os.environ.get("HIGGS_TOP_K", "50")),
             "max_new_tokens": int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
@@ -173,15 +198,14 @@ def start_sglang_server() -> subprocess.Popen:
 
 
 def main() -> None:
-    server = start_sglang_server()
+    engine = HiggsTtsEngine()
     try:
-        run_server(HiggsTtsEngine().render_batch)
+        run_server(
+            engine.render_batch,
+            capabilities={"needs_transcript"},
+        )
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
+        engine.close()
 
 
 if __name__ == "__main__":

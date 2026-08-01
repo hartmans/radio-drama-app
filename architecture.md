@@ -170,6 +170,7 @@ Current resource contract:
 * `VibeVoiceResource` accepts script-level `ScriptRenderRequest` objects
 * the VibeVoice-specific resource implementation lives in `radio_drama.vibevoice`
 * `ScriptRenderRequest` carries ordered `DialogueLine` objects plus a short leading-text label for cache/debug artifacts
+* each canonical `SpeakerVoiceReference` is shared by its speaker's dialogue lines and may be enriched in place with derived reference metadata such as an ASR transcript
 * `ScriptRenderRequest` is also the shared speech-cache identity: it owns the stable semantic hash, the human-readable first-words label used in filenames, the common hit validator requiring adjacent `wav` and `json` artifacts, and the shared JSON payload builder used by both speech backends
 * that script-render cache is intentionally production-facing rather than purely implementation-facing: once the director accepts how a production sounds, the cached `ScriptRenderRequest` artifacts may effectively become part of the accepted production assets, so cache-key stability is allowed to be higher there than in purely derived global caches
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines
@@ -180,8 +181,9 @@ Current resource contract:
 * resource output is returned in the configured production sample rate and channel layout
 * proxy TTS definitions are loaded from `$XDG_CONFIG_HOME/radio-drama/tts.toml`, falling back to `~/.config/radio-drama/tts.toml`; each definition names a Podman image and may provide a command, environment, network mode, and explicit persistent bind mounts
 * `ProxyTtsResource` retains registrations until rendering begins, launches a persistent Podman container with all referenced voices mounted read-only, and mounts the production cache root read-write as `/cache` and as the container working directory
-* proxy stdin and stdout carry protocol-versioned JSON objects one per line; stderr remains available for container diagnostics
-* proxy render requests serialize semantic dialogue lines and script gaps, replacing host voice paths with their read-only container mount paths
+* proxy stdin and stdout carry protocol-versioned JSON objects one per line; stderr remains available for container diagnostics, and the initial container response advertises a set of capabilities
+* the currently defined capability is `needs_transcript`; when advertised, the host transcribes each encountered shared speaker reference before sending render requests, while containers without it do not cause reference ASR work
+* proxy render requests serialize semantic dialogue lines and script gaps, replacing host voice paths with their read-only container mount paths and grouping speaker reference metadata in a nested speaker object
 * proxy responses return cache-relative WAV paths and optional dialogue-line start positions; the host rejects absolute and parent-traversing paths, reads the artifact from the production cache, and converts it to the configured output format
 * `radio_drama_tts_container` is a Python-standard-library-only helper package for container engines; it supplies the protocol loop, deterministic artifact naming, and PCM16 WAV writing, while each `tts_engines/<name>` directory owns its Containerfile and engine-specific dependencies and code
 * container builds use the repository root as their build context so engine images can copy `radio_drama_tts_container` without publishing it separately
@@ -190,6 +192,7 @@ Current resource contract:
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
 * both speech resources persist model-native WAV output plus adjacent JSON metadata keyed by the semantic render request, and cache reuse touches artifact mtimes
 * cache lookup may run a validator over the discovered subtype-to-path mapping; validation failures delete the stale files before the miss path repopulates the cache
+* `VoiceReferenceTranscriptionResource` owns WhisperX transcription and a preprocessing-versioned global text cache for reference voices; Qwen uses it while constructing prompt features, and proxy resources use it only when requested by container capabilities
 * Qwen also keeps a separate global prompt-feature cache for reference voices; unlike the production script-render cache, that prompt cache is implementation-facing and therefore includes the current reference-voice preprocessing version in its cache key
 * `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
 * WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them

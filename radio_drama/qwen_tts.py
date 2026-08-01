@@ -17,11 +17,11 @@ from .audio import convert_audio_format
 from .cache import CacheCollection, CacheKey, CacheManager
 from .config import ProductionConfig
 from .effects import VOICE_PREPROCESS_VERSION, load_preprocessed_voice_reference
-from .forced_alignment import WhisperXResource
 from .model_loading import shared_model_load
-from .dialogue import DialogueLine, ScriptRenderRequest, TtsResource
+from .dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference, TtsResource
 from .rendering import RenderResult, ScriptRenderResult
 from .vibevoice import RegisteredRenderRequest
+from .voice_reference import VoiceReferenceTranscriptionResource
 
 
 if TYPE_CHECKING:
@@ -45,15 +45,19 @@ class _PendingRender:
 
 @inject(
     config=ProductionConfig,
-    whisperx_resource=WhisperXResource,
     cache_manager=CacheManager,
+    transcription_resource=VoiceReferenceTranscriptionResource,
 )
 class QwenTtsResource(TtsResource):
     """Shared Qwen voice-clone resource for script-level render requests."""
 
-    def __init__(self, whisperx_resource: WhisperXResource, **kwargs) -> None:
+    def __init__(
+        self,
+        transcription_resource: VoiceReferenceTranscriptionResource,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.whisperx_resource = whisperx_resource
+        self.transcription_resource = transcription_resource
         self.device = self._normalize_device(self.config.resolved_device)
         self._model: Qwen3TTSModel | None = None
         self._sample_rate: int | None = None
@@ -204,12 +208,14 @@ class QwenTtsResource(TtsResource):
                 for _ in batch
             ]
 
-        voice_paths = {
-            str(Path(line.speaker.resolved_path).expanduser().resolve())
+        references_by_path = {
+            str(Path(line.speaker.resolved_path).expanduser().resolve()): line.speaker
             for registration in batch
             for line in self._script_lines(registration.request)
         }
-        prompt_items_by_voice = self._prompt_items_by_voice_sync(sorted(voice_paths))
+        prompt_items_by_voice = self._prompt_items_by_voice_sync(
+            [references_by_path[path] for path in sorted(references_by_path)]
+        )
 
         line_texts: list[str] = []
         line_prompts: list[VoiceClonePromptItem] = []
@@ -341,17 +347,20 @@ class QwenTtsResource(TtsResource):
 
     def _prompt_items_by_voice_sync(
         self,
-        voice_paths: Sequence[str],
+        references: Sequence[SpeakerVoiceReference],
     ) -> dict[str, list[VoiceClonePromptItem]]:
         return {
-            voice_path: self._prompt_items_for_voice_sync(voice_path)
-            for voice_path in voice_paths
+            str(reference.resolved_path.expanduser().resolve()): (
+                self._prompt_items_for_voice_sync(reference)
+            )
+            for reference in references
         }
 
     def _prompt_items_for_voice_sync(
         self,
-        voice_path: str,
+        reference: SpeakerVoiceReference,
     ) -> list[VoiceClonePromptItem]:
+        voice_path = str(reference.resolved_path.expanduser().resolve())
         with self._prompt_cache_lock:
             cached = self._voice_prompt_cache.get(voice_path)
             if cached is not None:
@@ -363,7 +372,7 @@ class QwenTtsResource(TtsResource):
                 torch.load(cache_path, map_location="cpu")
             )
         else:
-            prompt_items = self._build_prompt_items_for_voice_sync(voice_path)
+            prompt_items = self._build_prompt_items_for_voice_sync(reference)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(self._serialize_prompt_items(prompt_items), cache_path)
 
@@ -373,11 +382,13 @@ class QwenTtsResource(TtsResource):
 
     def _build_prompt_items_for_voice_sync(
         self,
-        voice_path: str,
+        reference: SpeakerVoiceReference,
     ) -> list[VoiceClonePromptItem]:
+        voice_path = str(reference.resolved_path.expanduser().resolve())
         model = self._ensure_loaded()
         reference_audio, sample_rate = self._preprocessed_voice_reference_sync(voice_path)
-        transcript = self.whisperx_resource.transcribe_audio_sample_sync(
+        transcript = self.transcription_resource.transcribe_sync(
+            reference,
             reference_audio,
             sample_rate,
         )

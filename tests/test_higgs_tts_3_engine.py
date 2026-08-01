@@ -57,16 +57,22 @@ def test_higgs_engine_maps_each_line_to_its_voice_and_concatenates(
         "dialogue_contents": [
             {
                 "type": "line",
-                "speaker": "Alice",
-                "voice_path": "/voices/0.wav",
+                "speaker": {
+                    "authored_name": "Alice",
+                    "voice_path": "/voices/0.wav",
+                    "transcript": "Alice reference.",
+                },
                 "spoken_text": "One.",
                 "source": "tts",
             },
             {"type": "gap", "mode": "exclude", "label": "gap"},
             {
                 "type": "line",
-                "speaker": "Bob",
-                "voice_path": "/voices/1.wav",
+                "speaker": {
+                    "authored_name": "Bob",
+                    "voice_path": "/voices/1.wav",
+                    "transcript": "Bob reference.",
+                },
                 "spoken_text": "Two.",
                 "source": "recording",
             },
@@ -82,7 +88,7 @@ def test_higgs_engine_maps_each_line_to_its_voice_and_concatenates(
     monkeypatch.chdir(tmp_path)
     result = FakeEngine().render_request(request)
 
-    assert [line["voice_path"] for line in seen_lines] == [
+    assert [line["speaker"]["voice_path"] for line in seen_lines] == [
         "/voices/0.wav",
         "/voices/1.wav",
     ]
@@ -115,7 +121,10 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
     HiggsTtsEngine(base_url="http://higgs.test").synthesize_line(
         {
             "spoken_text": "Hello there.",
-            "voice_path": "/voices/7.wav",
+            "speaker": {
+                "voice_path": "/voices/7.wav",
+                "transcript": "The reference transcript.",
+            },
         },
         output,
     )
@@ -124,6 +133,9 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
     assert captured["payload"]["model"] == "bosonai/higgs-tts-3-4b"
     assert captured["payload"]["input"] == "Hello there."
     assert captured["payload"]["references"] == [
-        {"audio_path": "/voices/7.wav"}
+        {
+            "audio_path": "/voices/7.wav",
+            "text": "The reference transcript.",
+        }
     ]
     assert output.read_bytes() == b"RIFF-test"

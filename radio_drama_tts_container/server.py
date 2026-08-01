@@ -49,6 +49,7 @@ def write_pcm16_wav(
 def run_server(
     render_batch: RenderBatch,
     *,
+    capabilities: Iterable[str] = (),
     input_stream: TextIO | None = None,
     output_stream: TextIO | None = None,
 ) -> None:
@@ -71,7 +72,12 @@ def run_server(
         raise RuntimeError("Host does not support this TTS proxy protocol")
     _write_json(
         output_stream,
-        {"protocol": PROTOCOL, "version": PROTOCOL_VERSION, "ready": True},
+        {
+            "protocol": PROTOCOL,
+            "version": PROTOCOL_VERSION,
+            "ready": True,
+            "capabilities": sorted(set(capabilities)),
+        },
     )
     for line in input_stream:
         if not line.strip():

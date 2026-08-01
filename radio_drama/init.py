@@ -13,6 +13,7 @@ from .dialogue import TtsResource
 from .proxy import configured_proxy_resource, load_proxy_tts_configs
 from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
+from .voice_reference import VoiceReferenceTranscriptionResource
 
 
 def radio_drama_injector(
@@ -72,6 +73,8 @@ def radio_drama_injector(
             injector.add_provider(proxy_key, configured_proxy_resource(proxy_config))
     if injector.injector_containing(WhisperXResource) is None:
         injector.add_provider(WhisperXResource)
+    if injector.injector_containing(VoiceReferenceTranscriptionResource) is None:
+        injector.add_provider(VoiceReferenceTranscriptionResource)
     if injector.injector_containing(NormalizedSoundCache) is None:
         injector.add_provider(NormalizedSoundCache)
     return injector

@@ -9,6 +9,7 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.cache import CacheCollection
 from radio_drama.config import ProductionConfig
+from radio_drama.dialogue import SpeakerVoiceReference
 from radio_drama.effects import VOICE_PREPROCESS_VERSION
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.qwen_tts import QwenTtsResource
@@ -218,11 +219,20 @@ def test_qwentts_resource_preprocesses_reference_voice_before_prompt_build(
         injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
         try:
             resource = await ainjector(FakeQwenTtsResource)
-            return resource._build_prompt_items_for_voice_sync(str(voice_path))
+            resource.transcription_resource.cache_path = (
+                lambda _path: tmp_path / "reference-transcript.txt"
+            )
+            reference = SpeakerVoiceReference(
+                authored_name="Anna",
+                voice_name="anna",
+                resolved_path=voice_path,
+            )
+            prompt_items = resource._build_prompt_items_for_voice_sync(reference)
+            return prompt_items, reference
         finally:
             injector.close()
 
-    prompt_items = asyncio.run(runner())
+    prompt_items, reference = asyncio.run(runner())
     assert len(prompt_items) == 1
     assert seen["voice_path"] == str(voice_path)
     np.testing.assert_allclose(seen["transcribe_audio"], np.array([0.25, -0.25], dtype=np.float32))
@@ -231,6 +241,7 @@ def test_qwentts_resource_preprocesses_reference_voice_before_prompt_build(
     np.testing.assert_allclose(ref_audio, np.array([0.25, -0.25], dtype=np.float32))
     assert ref_sample_rate == 12345
     assert seen["ref_text"] == "reference transcript"
+    assert reference.transcript == "reference transcript"
     assert seen["x_vector_only_mode"] is False
 
 

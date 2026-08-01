@@ -7,13 +7,15 @@ import sys
 import wave
 from pathlib import Path
 
-from carthage.dependency_injection import AsyncInjector
+from carthage.dependency_injection import AsyncInjector, InjectionKey
 from radio_drama.proxy import ProxyMount, load_proxy_tts_configs
 from radio_drama.proxy import ProxyTtsConfig, ProxyTtsResource
 from radio_drama.cache import CACHE_DIRECTORY_KEY
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
 from radio_drama.init import radio_drama_injector
+from radio_drama.rendering import RenderResult
+from radio_drama.voice_reference import VoiceReferenceTranscriptionResource
 from radio_drama_tts_container import artifact_name, run_server, write_pcm16_wav
 
 
@@ -82,6 +84,7 @@ def test_container_server_handshake_and_render():
 
     run_server(
         lambda requests: [{"wav": artifact_name(requests[0])}],
+        capabilities={"needs_transcript"},
         input_stream=input_stream,
         output_stream=output_stream,
     )
@@ -91,6 +94,7 @@ def test_container_server_handshake_and_render():
         "protocol": "radio-drama-tts",
         "version": 1,
         "ready": True,
+        "capabilities": ["needs_transcript"],
     }
     assert responses[1] == {"id": 7, "results": [{"wav": artifact_name(request)}]}
 
@@ -158,3 +162,75 @@ def test_proxy_resource_renders_through_stub_engine(tmp_path: Path):
     result = asyncio.run(runner())
 
     assert result.audio.shape == (2000,)
+
+
+def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
+    tmp_path: Path,
+):
+    voice_path = tmp_path / "voice.wav"
+    voice_path.write_bytes(b"fake")
+    seen = {"transcriptions": 0}
+
+    class FakeTranscriptionResource:
+        async def transcribe(self, reference):
+            seen["transcriptions"] += 1
+            reference.transcript = "Reference words."
+            return reference.transcript
+
+    class FakeProxyResource(ProxyTtsResource):
+        proxy_config = ProxyTtsConfig(name="fake", image="unused")
+
+        async def _ensure_process(self, requests):
+            self._capabilities = {"needs_transcript"}
+            self._voice_paths = {voice_path.resolve(): "/voices/0.wav"}
+
+        async def _exchange(self, message):
+            seen["message"] = message
+            output = tmp_path / "cache" / "result.wav"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            write_pcm16_wav(output, (0.0,), sample_rate=8000)
+            return {"id": message["id"], "results": [{"wav": "result.wav"}]}
+
+    async def runner():
+        injector = radio_drama_injector(
+            config=ProductionConfig(output_sample_rate=8000, output_channels=1),
+            event_loop=asyncio.get_running_loop(),
+        )
+        injector.add_provider(CACHE_DIRECTORY_KEY, tmp_path / "cache")
+        injector.replace_provider(
+            InjectionKey(VoiceReferenceTranscriptionResource),
+            FakeTranscriptionResource(),
+            close=False,
+        )
+        try:
+            resource = await injector(AsyncInjector)(FakeProxyResource)
+            speaker = SpeakerVoiceReference(
+                authored_name="Narrator",
+                voice_name="voice",
+                resolved_path=voice_path,
+            )
+            request = ScriptRenderRequest(
+                dialogue_lines=[
+                    DialogueLine(speaker=speaker, spoken_text="One."),
+                    DialogueLine(speaker=speaker, spoken_text="Two."),
+                ]
+            )
+            result = await (await resource.register_request(request)).render()
+            return speaker, result
+        finally:
+            injector.close()
+
+    speaker, result = asyncio.run(runner())
+
+    assert isinstance(result, RenderResult)
+    assert speaker.transcript == "Reference words."
+    assert seen["transcriptions"] == 1
+    serialized_lines = seen["message"]["requests"][0]["dialogue_contents"]
+    assert serialized_lines[0]["speaker"] == {
+        "authored_name": "Narrator",
+        "voice_name": "voice",
+        "voice_path": "/voices/0.wav",
+        "transcript": "Reference words.",
+        "gain": 0.0,
+    }
+    assert serialized_lines[0]["speaker"] == serialized_lines[1]["speaker"]

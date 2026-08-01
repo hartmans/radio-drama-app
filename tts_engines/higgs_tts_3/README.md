@@ -5,12 +5,18 @@ API provided by SGLang-Omni for `bosonai/higgs-tts-3-4b`. Each dialogue line is
 synthesized with its resolved speaker reference and the returned WAV segments
 are concatenated into one script artifact in `/cache`.
 
+The engine advertises the proxy `needs_transcript` capability. The host then
+uses its shared, cached reference ASR resource to enrich each speaker reference
+before rendering. The adapter supplies both the mounted reference audio path
+and that transcript to Higgs voice cloning.
+
 The image is self-contained except for the model checkpoint. Its build installs
 SGLang-Omni and the Higgs inference runtime into the image. At container
 startup, the engine entrypoint launches `sgl-omni serve` inside the same
-container, waits for that local server to become ready, and then starts the
-radio-drama JSON-lines protocol on stdin/stdout. It does not require or connect
-to an externally managed inference server.
+container on the first render request and waits for that local server to become
+ready. The radio-drama JSON-lines handshake happens first, allowing the host to
+finish advertised setup such as reference ASR before model loading begins. The
+engine does not require or connect to an externally managed inference server.
 
 The checkpoint is downloaded by the in-container Hugging Face client on first
 use and stored under `/models/huggingface`, which is declared as a Containerfile

@@ -83,6 +83,7 @@ from .rendering import ProductionResult, RenderResult
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
 from .text import normalize_text_punctuation
 from .vibevoice import VibeVoiceResource
+from .voice_reference import VoiceReferenceTranscriptionResource
 
 __all__ = [
     "ArrayExpression",
@@ -170,6 +171,7 @@ __all__ = [
     "TextNode",
     "validate_expression",
     "VibeVoiceResource",
+    "VoiceReferenceTranscriptionResource",
     "WhisperXResource",
     "numpy_stage",
     "normalize_effect_chain_name",
