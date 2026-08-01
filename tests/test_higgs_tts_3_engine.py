@@ -128,6 +128,7 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
         return Response()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("HIGGS_INITIAL_CODEC_CHUNK_FRAMES", "8")
     output = tmp_path / "line.wav"
 
     HiggsTtsEngine(base_url="http://higgs.test").synthesize_line(
@@ -152,6 +153,7 @@ def test_higgs_synthesis_uses_openai_voice_clone_request(tmp_path: Path, monkeyp
             "text": "The reference transcript.",
         }
     ]
+    assert captured["payload"]["initial_codec_chunk_frames"] == 8
     assert output.read_bytes() == b"RIFF-test"
 
 
@@ -289,3 +291,46 @@ def test_higgs_synthesis_batch_uses_sglang_batch_endpoint(monkeypatch):
         }
     ]
     assert result == [wav]
+
+
+def test_higgs_synthesis_batch_can_set_initial_codec_chunk_frames(monkeypatch):
+    captured = {}
+    wav = _wav_bytes(b"\x01\x00")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "results": [
+                        {
+                            "index": 0,
+                            "status": "success",
+                            "audio_data": base64.b64encode(wav).decode("ascii"),
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request):
+        captured["payload"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("HIGGS_INITIAL_CODEC_CHUNK_FRAMES", "8")
+    line = {
+        "spoken_text": "Hello.",
+        "speaker": {
+            "voice_path": "/voices/0.wav",
+            "transcript": "Reference.",
+        },
+    }
+
+    HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch([line])
+
+    assert captured["payload"]["initial_codec_chunk_frames"] == 8

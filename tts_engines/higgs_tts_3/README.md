@@ -14,6 +14,15 @@ Dialogue lines remain independent synthesis items, but the adapter submits
 them to SGLang-Omni's batch speech endpoint in bounded groups. Set
 `HIGGS_BATCH_SIZE` to control the group size; the default is `16`.
 
+Set `HIGGS_INITIAL_CODEC_CHUNK_FRAMES` to pass SGLang-Omni's
+`initial_codec_chunk_frames` option to Higgs. When it is unset, the adapter
+leaves the option out and SGLang-Omni applies its current default. This is an
+engine tuning and diagnostic option: changing the first codec decode chunk can
+affect time to first audio and the quality of the beginning of an utterance.
+With the current Higgs pipeline, unset or `0` uses the full first codec chunk;
+positive values below the steady chunk size request an earlier, smaller first
+decode. Values at or above the steady size are clamped to the steady size.
+
 For boundary debugging, set `HIGGS_KEEP_LINE_WAVS=1`. The adapter will retain
 the exact WAV returned for every line alongside the concatenated cache artifact
 as `<artifact>.line-0.wav`, `<artifact>.line-1.wav`, and so on. These files are

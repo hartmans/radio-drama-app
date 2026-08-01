@@ -174,6 +174,7 @@ class HiggsTtsEngine:
     def synthesize_line(self, line: Mapping[str, Any], output_path: Path) -> None:
         self.ensure_server()
         payload = self._line_payload(line)
+        self._add_initial_codec_chunk_frames(payload)
         request = urllib.request.Request(
             f"{self.base_url}/v1/audio/speech",
             data=json.dumps(payload).encode("utf-8"),
@@ -197,6 +198,7 @@ class HiggsTtsEngine:
             "max_new_tokens": int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
             "items": [self._line_payload(line, include_defaults=False) for line in lines],
         }
+        self._add_initial_codec_chunk_frames(payload)
         request = urllib.request.Request(
             f"{self.base_url}/v1/audio/speech/batch",
             data=json.dumps(payload).encode("utf-8"),
@@ -220,6 +222,14 @@ class HiggsTtsEngine:
                 raise RuntimeError(f"Higgs batch item {index} failed: {item.get('error')}")
             audio.append(base64.b64decode(item["audio_data"], validate=True))
         return audio
+
+    @staticmethod
+    def _add_initial_codec_chunk_frames(payload: dict[str, Any]) -> None:
+        initial_codec_chunk_frames = os.environ.get(
+            "HIGGS_INITIAL_CODEC_CHUNK_FRAMES"
+        )
+        if initial_codec_chunk_frames is not None:
+            payload["initial_codec_chunk_frames"] = int(initial_codec_chunk_frames)
 
     @staticmethod
     def _line_payload(

@@ -14,6 +14,8 @@ HIGGS_MODEL = "bosonai/higgs-tts-3-4b"
 HIGGS_TEMPERATURE = "0.8"
 HIGGS_TOP_K = "50"
 HIGGS_MAX_NEW_TOKENS = "2048"
+# Optional low-latency diagnostic; leave unset for the full first codec chunk.
+# HIGGS_INITIAL_CODEC_CHUNK_FRAMES = "1"
 
 [[tts.higgs.mounts]]
 source = "~/.cache/radio-drama/higgs-huggingface"
