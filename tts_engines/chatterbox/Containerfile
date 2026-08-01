@@ -1,0 +1,24 @@
+FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+
+ARG CHATTERBOX_COMMIT=5de7a54aa4e5e2baadb0182dde554908b48b85c2
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg git \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone https://github.com/resemble-ai/chatterbox.git /opt/chatterbox \
+ && git -C /opt/chatterbox checkout "$CHATTERBOX_COMMIT" \
+ && uv pip install --python /opt/omni/bin/python --no-cache --no-deps -e /opt/chatterbox \
+ && uv pip install --python /opt/omni/bin/python --no-cache librosa==0.11.0 s3tokenizer transformers==5.2.0 \
+      diffusers==0.29.0 conformer==0.3.2 safetensors==0.5.3 spacy-pkuseg \
+      pykakasi==2.3.0 pyloudnorm omegaconf \
+      'resemble-perth @ git+https://github.com/resemble-ai/Perth.git@ce86c49d029f42272c1902eccb675556b9ed2330' \
+ && /opt/omni/bin/python -c 'from spacy_pkuseg import pkuseg; pkuseg()'
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/chatterbox/engine.py /opt/chatterbox_engine.py
+
+ENV PYTHONPATH=/opt \
+    HF_HOME=/models/huggingface \
+    CHATTERBOX_LANGUAGE=en
+
+VOLUME ["/models/huggingface"]
+ENTRYPOINT ["/opt/omni/bin/python", "/opt/chatterbox_engine.py"]

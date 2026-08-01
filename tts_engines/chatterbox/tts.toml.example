@@ -1,0 +1,16 @@
+# Build from the repository root. Example paths deliberately stay under home:
+# podman build -f tts_engines/chatterbox/Containerfile -t localhost/radio-drama-chatterbox .
+
+[tts.chatterbox]
+image = "localhost/radio-drama-chatterbox:latest"
+devices = ["nvidia.com/gpu=all"]
+ipc = "host"
+
+[tts.chatterbox.environment]
+HF_HOME = "/models/huggingface"
+CHATTERBOX_LANGUAGE = "en"
+
+[[tts.chatterbox.mounts]]
+source = "~/.cache/radio-drama/chatterbox-huggingface"
+target = "/models/huggingface"
+mode = "rw"

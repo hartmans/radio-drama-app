@@ -1,0 +1,21 @@
+FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+
+ARG ZONOS_COMMIT=bc40d98e1e1ab54fc65c483be127a90e3c7c0645
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends espeak-ng git \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone https://github.com/Zyphra/Zonos.git /opt/zonos \
+ && git -C /opt/zonos checkout "$ZONOS_COMMIT" \
+ && uv pip install --python /opt/omni/bin/python --no-cache --no-deps -e /opt/zonos \
+ && uv pip install --python /opt/omni/bin/python --no-cache inflect kanjize phonemizer sudachidict-full sudachipy \
+      'transformers>=4.48.1' 'huggingface-hub>=0.28.1' descript-audio-codec
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/zonos/engine.py /opt/zonos_engine.py
+
+ENV PYTHONPATH=/opt \
+    HF_HOME=/models/huggingface \
+    ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+
+VOLUME ["/models/huggingface"]
+ENTRYPOINT ["/opt/omni/bin/python", "/opt/zonos_engine.py"]

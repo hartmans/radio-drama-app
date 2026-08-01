@@ -7,6 +7,7 @@ from .server import (
     run_server,
     write_pcm16_wav,
 )
+from .lines import LineWork, finish_line_work, prepare_line_work, remove_line_work
 
 __all__ = [
     "PROTOCOL",
@@ -14,4 +15,8 @@ __all__ = [
     "artifact_name",
     "run_server",
     "write_pcm16_wav",
+    "LineWork",
+    "finish_line_work",
+    "prepare_line_work",
+    "remove_line_work",
 ]
