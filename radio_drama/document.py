@@ -282,7 +282,12 @@ class ScriptNode(ElementNode):
 
     @property
     def tts(self) -> str:
-        tts_name = self.attributes.get("tts", "vibevoice")
+        tts_name = self.attributes.get("tts")
+        if tts_name is None:
+            ancestor = self.parent
+            while ancestor is not None and not isinstance(ancestor, ProductionNode):
+                ancestor = ancestor.parent
+            tts_name = ancestor.tts if ancestor is not None else "vibevoice"
         normalized = tts_name.strip().lower()
         if not normalized:
             raise self.error("<script> tts attribute cannot be empty")
@@ -433,7 +438,18 @@ class ProductionNode(ElementNode):
     }
     accepts_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
+    @property
+    def tts(self) -> str:
+        """Return the default speech backend name for scripts in this production."""
+
+        tts_name = self.attributes.get("tts", "vibevoice")
+        normalized = tts_name.strip().lower()
+        if not normalized:
+            raise self.error("<production> tts attribute cannot be empty")
+        return normalized
+
     def validate_document(self) -> None:
+        self.tts
         preset_maps = self.child_elements_named("preset-map")
         if len(preset_maps) > 1:
             raise preset_maps[1].error("A <production> may contain only one <preset-map>")

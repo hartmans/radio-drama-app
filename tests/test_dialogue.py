@@ -212,6 +212,66 @@ def test_script_plan_routes_qwen_scripts_to_qwen_resource(tmp_path: Path):
     assert script_plan.node.tts == "qwen"
 
 
+def test_scripts_inherit_production_tts_and_may_override_it(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"fake")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeTts:
+        def __init__(self):
+            self.requests = []
+
+        async def register_request(self, request):
+            self.requests.append(request)
+
+            class Registered:
+                async def render(self):
+                    return RenderResult.empty(channels=2)
+
+            return Registered()
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        fake_qwen = FakeTts()
+        fake_vibevoice = FakeTts()
+        injector.replace_provider(
+            InjectionKey(TtsResource, tts="qwen"), fake_qwen, close=False
+        )
+        injector.replace_provider(
+            InjectionKey(TtsResource, tts="vibevoice"), fake_vibevoice, close=False
+        )
+        try:
+            root = parse_production_string(
+                """
+                <production tts="QWEN">
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>Anna: Inherited.</script>
+                  <script tts="vibevoice">Anna: Overridden.</script>
+                </production>
+                """,
+                source_name="production-tts.xml",
+            )
+            await root.speaker_map_node.plan(ainjector)
+            plans = [await node.plan(ainjector) for node in root.script_nodes]
+            return root, plans, fake_qwen, fake_vibevoice
+        finally:
+            injector.close()
+
+    root, plans, fake_qwen, fake_vibevoice = asyncio.run(runner())
+
+    assert root.tts == "qwen"
+    assert [plan.node.tts for plan in plans] == ["qwen", "vibevoice"]
+    assert len(fake_qwen.requests) == 1
+    assert len(fake_vibevoice.requests) == 1
+
+
+def test_production_tts_defaults_to_vibevoice_and_rejects_empty_value():
+    root = parse_production_string("<production />")
+    assert root.tts == "vibevoice"
+
+    with pytest.raises(DocumentError, match="<production> tts attribute cannot be empty"):
+        parse_production_string('<production tts=" " />')
+
+
 def test_script_plan_allows_empty_script(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

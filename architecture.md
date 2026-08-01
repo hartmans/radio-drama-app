@@ -151,7 +151,7 @@ Planning rule for presets:
 * sibling children that land on the same preset bus share DSP state across adjacency and across silence within that compose timeline
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
-* a script selects its speech backend by resolving `InjectionKey(TtsResource, tts=<name>)`; the default name is `vibevoice`, while additional names may be supplied by application or proxy configuration
+* a script selects its speech backend by resolving `InjectionKey(TtsResource, tts=<name>)`; an explicit `<script tts="...">` wins, otherwise the script inherits `<production tts="...">`, whose backward-compatible default is `vibevoice`, while additional names may be supplied by application or proxy configuration
 * `<sound-script>` and `AudioScriptPlan` have been removed; all dialogue uses `<script>`, whose sources can be mixed line-by-line
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
