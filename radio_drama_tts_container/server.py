@@ -7,6 +7,7 @@ import struct
 import sys
 import wave
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -92,7 +93,11 @@ def run_server(
             if message.get("method") != "render_batch":
                 raise ValueError("Unsupported proxy method")
             requests = message["requests"]
-            results = list(render_batch(requests))
+            # Model libraries frequently print status and progress messages to
+            # stdout. Reserve stdout for JSON-lines protocol responses even
+            # when an engine cannot configure the third-party library's logs.
+            with redirect_stdout(sys.stderr):
+                results = list(render_batch(requests))
             if len(results) != len(requests):
                 raise ValueError("Engine returned the wrong number of results")
             response["results"] = results

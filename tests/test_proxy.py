@@ -101,8 +101,12 @@ def test_container_server_handshake_and_render():
     )
     output_stream = io.StringIO()
 
+    def render_with_library_noise(requests):
+        print("third-party model status")
+        return [{"wav": artifact_name(requests[0])}]
+
     run_server(
-        lambda requests: [{"wav": artifact_name(requests[0])}],
+        render_with_library_noise,
         capabilities={"needs_transcript"},
         input_stream=input_stream,
         output_stream=output_stream,
