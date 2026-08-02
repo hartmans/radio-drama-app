@@ -8,12 +8,13 @@ from pathlib import Path
 import numpy as np
 
 from radio_drama.proxy import load_proxy_tts_configs
-from radio_drama_tts_container import finish_line_work, prepare_line_work
+from radio_drama_tts_container import artifact_name, finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
 from tts_engines.zonos.engine import (
     ZonosEngine, _EosTracker, _finish_prerolled_audio, _generate_nonempty_codes,
 )
 from tts_engines.voxcpm2.engine import VoxCPM2Engine
+from tts_engines.moss_ttsd.engine import MossTtsdEngine, PreparedRequest
 
 
 def _request(label: str, words: tuple[str, ...]) -> dict:
@@ -179,6 +180,55 @@ def test_voxcpm2_serializes_prompt_cloned_lines(tmp_path, monkeypatch):
     assert "prompt_wav_path" not in calls[-1]
 
 
+def test_moss_ttsd_batches_complete_scripts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MOSS_TTSD_BATCH_SIZE", "2")
+    seen = []
+
+    class FakeEngine(MossTtsdEngine):
+        def prepare_request(self, request):
+            return PreparedRequest(
+                output_path=tmp_path / f"{request['first_words']}.wav",
+                conversation=request["first_words"],
+            )
+
+        def synthesize_batch(self, prepared):
+            seen.append([item.conversation for item in prepared])
+            return [np.zeros(24_000) for _ in prepared]
+
+        def write_audio(self, path, _audio):
+            _save_wav(str(path), np.zeros(24_000), 24_000)
+
+    results = FakeEngine().render_batch(
+        [
+            _request("first", ("one",)),
+            _request("second", ("two",)),
+            _request("third", ("three",)),
+        ]
+    )
+
+    assert seen == [["first", "second"], ["third"]]
+    assert [result["wav"] for result in results] == [
+        "first.wav",
+        "second.wav",
+        "third.wav",
+    ]
+
+
+def test_moss_ttsd_accepts_empty_scripts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    results = MossTtsdEngine().render_batch(
+        [{"first_words": "empty", "dialogue_contents": []}]
+    )
+
+    assert results == [
+        {"wav": artifact_name({"first_words": "empty", "dialogue_contents": []})}
+    ]
+    with wave.open(results[0]["wav"], "rb") as source:
+        assert source.getframerate() == 24_000
+        assert source.getnframes() == 0
+
+
 def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
     root = Path(__file__).resolve().parents[1] / "tts_engines"
     zonos = load_proxy_tts_configs(root / "zonos" / "tts.toml.example")["zonos"]
@@ -188,8 +238,11 @@ def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
     voxcpm2 = load_proxy_tts_configs(root / "voxcpm2" / "tts.toml.example")[
         "voxcpm2"
     ]
+    moss_ttsd = load_proxy_tts_configs(root / "moss_ttsd" / "tts.toml.example")[
+        "moss-ttsd"
+    ]
 
-    for config in (zonos, chatterbox, voxcpm2):
+    for config in (zonos, chatterbox, voxcpm2, moss_ttsd):
         assert config.devices == ("nvidia.com/gpu=all",)
         assert config.ipc == "host"
         assert config.environment["HF_HOME"] == "/models/huggingface"
@@ -197,3 +250,4 @@ def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
         assert not config.mounts[0].read_only
     assert zonos.environment["ZONOS_MODEL"] == "Zyphra/Zonos-v0.1-transformer"
     assert voxcpm2.environment["VOXCPM_MODEL"] == "openbmb/VoxCPM2"
+    assert moss_ttsd.environment["MOSS_TTSD_BATCH_SIZE"] == "10"

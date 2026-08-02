@@ -1,0 +1,28 @@
+# Install as $XDG_CONFIG_HOME/radio-drama/tts.toml, normally
+# ~/.config/radio-drama/tts.toml. Build from the repository root:
+# TMPDIR=/tmp podman build -f tts_engines/moss_ttsd/Containerfile -t localhost/radio-drama-moss-ttsd .
+
+[tts.moss-ttsd]
+image = "localhost/radio-drama-moss-ttsd:latest"
+devices = ["nvidia.com/gpu=all"]
+ipc = "host"
+
+[tts.moss-ttsd.environment]
+HF_HOME = "/models/huggingface"
+HF_HUB_OFFLINE = "1"
+TRANSFORMERS_OFFLINE = "1"
+MOSS_TTSD_MODEL = "OpenMOSS-Team/MOSS-TTSD-v1.0"
+MOSS_TTSD_DEVICE = "cuda"
+MOSS_TTSD_ATTN_IMPLEMENTATION = "sdpa"
+MOSS_TTSD_BATCH_SIZE = "10"
+MOSS_TTSD_LOCAL_FILES_ONLY = "true"
+MOSS_TTSD_MAX_NEW_TOKENS = "4096"
+MOSS_TTSD_TEMPERATURE = "1.1"
+MOSS_TTSD_TOP_P = "0.9"
+MOSS_TTSD_TOP_K = "50"
+MOSS_TTSD_REPETITION_PENALTY = "1.1"
+
+[[tts.moss-ttsd.mounts]]
+source = "~/.cache/radio-drama/moss-ttsd-huggingface"
+target = "/models/huggingface"
+mode = "rw"
