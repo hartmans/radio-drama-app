@@ -16,6 +16,16 @@ adapter submits concurrent requests to SGLang-Omni's standard
 execution through the officially supported API. Set `HIGGS_BATCH_SIZE` to
 control the maximum concurrency; the default is `16`.
 
+Higgs can occasionally return an utterance with a pathological high-amplitude
+onset. The adapter detects an initial 100 ms whose RMS is both at least `0.25`
+of full scale and at least three times the following 400 ms. It retries only
+the affected lines, concurrently within each retry round, up to two times. The
+first clean result is used; if all attempts are affected, the least severe
+result is retained. `HIGGS_ONSET_RETRIES` changes the retry count (use `0` to
+disable retries), while `HIGGS_ONSET_RMS_THRESHOLD` and
+`HIGGS_ONSET_RATIO_THRESHOLD` tune the two detection gates. Rejected attempts
+are reported on standard error so the behavior can be monitored.
+
 Set `HIGGS_INITIAL_CODEC_CHUNK_FRAMES` to pass SGLang-Omni's
 `initial_codec_chunk_frames` option to Higgs. When it is unset, the adapter
 leaves the option out and SGLang-Omni applies its current default. This is an

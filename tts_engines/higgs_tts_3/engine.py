@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import array
 import concurrent.futures
+import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -165,6 +168,38 @@ class HiggsTtsEngine:
     ) -> list[bytes]:
         if not lines:
             return []
+        results = self._request_batch(lines)
+        scores = [onset_failure_score(audio) for audio in results]
+        retries = int(os.environ.get("HIGGS_ONSET_RETRIES", "2"))
+        if retries < 0:
+            raise ValueError("HIGGS_ONSET_RETRIES must not be negative")
+
+        # Higgs occasionally emits a very loud, unnatural burst at the beginning
+        # of an otherwise usable utterance. SGLang does not currently expose a
+        # way to prevent that model failure, so retain the best generation and
+        # resubmit only affected lines. Each round is still submitted concurrently
+        # so healthy items never forfeit the normal continuous-batching path.
+        pending = [index for index, score in enumerate(scores) if score > 0]
+        for attempt in range(1, retries + 1):
+            if not pending:
+                break
+            print(
+                f"Higgs onset check rejected {len(pending)} utterance(s); "
+                f"retry {attempt}/{retries}",
+                file=sys.stderr,
+            )
+            replacements = self._request_batch([lines[index] for index in pending])
+            for index, replacement in zip(pending, replacements, strict=True):
+                replacement_score = onset_failure_score(replacement)
+                if replacement_score < scores[index]:
+                    results[index] = replacement
+                    scores[index] = replacement_score
+            pending = [index for index in pending if scores[index] > 0]
+        return results
+
+    def _request_batch(self, lines: Sequence[Mapping[str, Any]]) -> list[bytes]:
+        """Submit one concurrent generation attempt for each supplied line."""
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(lines)) as executor:
             return list(executor.map(self._synthesize_line, lines))
 
@@ -220,6 +255,45 @@ def keep_line_wavs() -> bool:
     return os.environ.get("HIGGS_KEEP_LINE_WAVS", "").lower() in {
         "1", "true", "yes", "on"
     }
+
+
+def onset_failure_score(audio: bytes) -> float:
+    """Score a pathological loud onset, returning zero for acceptable audio.
+
+    The absolute RMS gate identifies genuinely high-amplitude audio, while the
+    ratio to the following speech distinguishes the Higgs failure from a loud
+    but consistently delivered utterance. A positive result is also suitable
+    for choosing the least objectionable result when every retry fails.
+    """
+
+    with wave.open(io.BytesIO(audio), "rb") as source:
+        if source.getcomptype() != "NONE" or source.getsampwidth() != 2:
+            raise RuntimeError("Higgs returned unsupported audio for onset analysis")
+        sample_rate = source.getframerate()
+        channels = source.getnchannels()
+        samples = array.array("h", source.readframes(source.getnframes()))
+    if sys.byteorder != "little":
+        samples.byteswap()
+
+    onset_frames = max(1, round(sample_rate * 0.1))
+    reference_frames = max(1, round(sample_rate * 0.4))
+    onset_end = min(len(samples), onset_frames * channels)
+    reference_end = min(len(samples), (onset_frames + reference_frames) * channels)
+    if onset_end == 0 or reference_end <= onset_end:
+        return 0.0
+
+    onset_rms = _normalized_rms(samples[:onset_end])
+    reference_rms = _normalized_rms(samples[onset_end:reference_end])
+    rms_threshold = float(os.environ.get("HIGGS_ONSET_RMS_THRESHOLD", "0.25"))
+    ratio_threshold = float(os.environ.get("HIGGS_ONSET_RATIO_THRESHOLD", "3.0"))
+    ratio = onset_rms / max(reference_rms, 1 / 32768)
+    if onset_rms < rms_threshold or ratio < ratio_threshold:
+        return 0.0
+    return ratio * onset_rms
+
+
+def _normalized_rms(samples: Sequence[int]) -> float:
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
 
 
 def wav_frame_count(path: Path) -> tuple[int, int]:

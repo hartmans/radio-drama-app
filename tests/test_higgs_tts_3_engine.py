@@ -7,7 +7,12 @@ import wave
 from pathlib import Path
 
 from radio_drama.proxy import load_proxy_tts_configs
-from tts_engines.higgs_tts_3.engine import CONTROL_TAGS, HiggsTtsEngine, expand_control_expressions
+from tts_engines.higgs_tts_3.engine import (
+    CONTROL_TAGS,
+    HiggsTtsEngine,
+    expand_control_expressions,
+    onset_failure_score,
+)
 
 
 def _write_wav(path: Path, frames: bytes) -> None:
@@ -26,6 +31,14 @@ def _wav_bytes(frames: bytes) -> bytes:
         output.setframerate(24_000)
         output.writeframes(frames)
     return stream.getvalue()
+
+
+def _constant_wav(*sections: tuple[int, int]) -> bytes:
+    frames = b"".join(
+        int(amplitude).to_bytes(2, "little", signed=True) * frame_count
+        for amplitude, frame_count in sections
+    )
+    return _wav_bytes(frames)
 
 
 def test_higgs_sample_proxy_config_enables_checkpoint_cache_and_gpu():
@@ -228,3 +241,46 @@ def test_higgs_synthesis_batch_can_set_initial_codec_chunk_frames(monkeypatch):
     HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch([line])
 
     assert captured["payload"]["initial_codec_chunk_frames"] == 8
+
+
+def test_higgs_onset_check_distinguishes_burst_from_loud_delivery():
+    pathological = _constant_wav((16_000, 2_400), (1_000, 9_600))
+    consistently_loud = _constant_wav((16_000, 2_400), (12_000, 9_600))
+    quiet_start = _constant_wav((2_000, 2_400), (1_000, 9_600))
+
+    assert onset_failure_score(pathological) > 0
+    assert onset_failure_score(consistently_loud) == 0
+    assert onset_failure_score(quiet_start) == 0
+
+
+def test_higgs_retries_only_bad_onsets_and_preserves_batch_order():
+    bad = _constant_wav((16_000, 2_400), (1_000, 9_600))
+    good_a = _constant_wav((1_000, 2_400), (2_000, 9_600))
+    good_b = _constant_wav((2_000, 2_400), (2_000, 9_600))
+    calls = []
+
+    class FakeEngine(HiggsTtsEngine):
+        def _request_batch(self, lines):
+            calls.append([line["spoken_text"] for line in lines])
+            if len(calls) == 1:
+                return [bad, good_b]
+            return [good_a]
+
+    lines = [{"spoken_text": "Bad"}, {"spoken_text": "Good"}]
+
+    assert FakeEngine().synthesize_batch(lines) == [good_a, good_b]
+    assert calls == [["Bad", "Good"], ["Bad"]]
+
+
+def test_higgs_returns_least_bad_generation_after_retry_limit(monkeypatch):
+    worst = _constant_wav((24_000, 2_400), (1_000, 9_600))
+    better = _constant_wav((12_000, 2_400), (1_000, 9_600))
+    calls = iter(([worst], [better], [worst]))
+
+    class FakeEngine(HiggsTtsEngine):
+        def _request_batch(self, lines):
+            return next(calls)
+
+    monkeypatch.setenv("HIGGS_ONSET_RETRIES", "2")
+
+    assert FakeEngine().synthesize_batch([{"spoken_text": "Still bad"}]) == [better]
