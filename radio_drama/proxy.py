@@ -232,6 +232,7 @@ class ProxyTtsResource(TtsResource):
             requests,
             cache_directory,
         )
+        await asyncio.to_thread(self._ensure_mount_directories)
         args = self._podman_command(cache_directory)
         self._process = await asyncio.create_subprocess_exec(
             *args,
@@ -255,6 +256,11 @@ class ProxyTtsResource(TtsResource):
         ):
             raise RuntimeError("TTS proxy capabilities must be a list of strings")
         self._capabilities = set(capabilities)
+
+    def _ensure_mount_directories(self) -> None:
+        """Create configured host mount directories before Podman starts."""
+        for mount in self.proxy_config.mounts:
+            mount.source.expanduser().mkdir(parents=True, exist_ok=True)
 
     def _podman_command(self, cache_directory: Path) -> list[str]:
         proxy = self.proxy_config

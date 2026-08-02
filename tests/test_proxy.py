@@ -77,6 +77,20 @@ def test_proxy_podman_command_omits_shm_size_for_host_ipc(tmp_path: Path):
     assert "--shm-size=32g" not in command
 
 
+def test_proxy_creates_missing_configured_mount_directory(tmp_path: Path):
+    source = tmp_path / "models" / "checkpoint-cache"
+    resource = object.__new__(ProxyTtsResource)
+    resource.proxy_config = ProxyTtsConfig(
+        name="demo",
+        image="localhost/demo:latest",
+        mounts=(ProxyMount(source=source, target="/models", read_only=False),),
+    )
+
+    resource._ensure_mount_directories()
+
+    assert source.is_dir()
+
+
 def test_container_server_handshake_and_render():
     request = {
         "first_words": "Hello there",

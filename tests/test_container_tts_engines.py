@@ -13,6 +13,7 @@ from tts_engines.chatterbox.engine import ChatterboxEngine
 from tts_engines.zonos.engine import (
     ZonosEngine, _EosTracker, _finish_prerolled_audio, _generate_nonempty_codes,
 )
+from tts_engines.voxcpm2.engine import VoxCPM2Engine
 
 
 def _request(label: str, words: tuple[str, ...]) -> dict:
@@ -145,17 +146,54 @@ def test_chatterbox_reuses_each_speaker_conditioning():
     assert calls == ["/voices/one.wav"]
 
 
+def test_voxcpm2_serializes_prompt_cloned_lines(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    class FakeModel:
+        tts_model = types.SimpleNamespace(sample_rate=48_000)
+
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return np.zeros(48_000, dtype=np.float32)
+
+    engine = VoxCPM2Engine()
+    engine.model = FakeModel()
+    requests = [_request("first", ("one", "two"))]
+    requests[0]["dialogue_contents"][0]["speaker"]["transcript"] = "Reference."
+
+    results = engine.render_batch(requests)
+
+    assert [call["text"] for call in calls] == ["one", "two"]
+    assert calls[0]["reference_wav_path"] == "/voices/narrator.wav"
+    assert calls[0]["prompt_wav_path"] == "/voices/narrator.wav"
+    assert calls[0]["prompt_text"] == "Reference."
+    assert calls[1]["prompt_wav_path"] == "/voices/narrator.wav"
+    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0]
+    assert not list(tmp_path.glob("*.line-*.wav"))
+
+    engine.synthesize_line(
+        {"spoken_text": "fallback", "speaker": {"voice_path": "/voices/other.wav"}}
+    )
+    assert calls[-1]["reference_wav_path"] == "/voices/other.wav"
+    assert "prompt_wav_path" not in calls[-1]
+
+
 def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
     root = Path(__file__).resolve().parents[1] / "tts_engines"
     zonos = load_proxy_tts_configs(root / "zonos" / "tts.toml.example")["zonos"]
     chatterbox = load_proxy_tts_configs(root / "chatterbox" / "tts.toml.example")[
         "chatterbox"
     ]
+    voxcpm2 = load_proxy_tts_configs(root / "voxcpm2" / "tts.toml.example")[
+        "voxcpm2"
+    ]
 
-    for config in (zonos, chatterbox):
+    for config in (zonos, chatterbox, voxcpm2):
         assert config.devices == ("nvidia.com/gpu=all",)
         assert config.ipc == "host"
         assert config.environment["HF_HOME"] == "/models/huggingface"
         assert config.mounts[0].target == "/models/huggingface"
         assert not config.mounts[0].read_only
     assert zonos.environment["ZONOS_MODEL"] == "Zyphra/Zonos-v0.1-transformer"
+    assert voxcpm2.environment["VOXCPM_MODEL"] == "openbmb/VoxCPM2"

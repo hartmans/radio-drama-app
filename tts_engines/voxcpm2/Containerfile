@@ -1,0 +1,16 @@
+FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+
+# VoxCPM2 requires a much newer Transformers release than the main project.
+RUN uv pip install --python /opt/omni/bin/python --no-cache \
+    voxcpm==2.0.3 transformers==5.14.1
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/voxcpm2/engine.py /opt/voxcpm2_engine.py
+
+ENV PYTHONPATH=/opt \
+    HF_HOME=/models/huggingface \
+    VOXCPM_MODEL=openbmb/VoxCPM2 \
+    VOXCPM_DEVICE=cuda
+
+VOLUME ["/models/huggingface"]
+ENTRYPOINT ["/opt/omni/bin/python", "/opt/voxcpm2_engine.py"]
