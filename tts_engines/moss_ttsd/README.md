@@ -15,10 +15,12 @@ MOSS-TTSD v1.0's documented conditioning surface is deliberately small:
 
 The engine supplies the `[S1]`, `[S2]`, and subsequent tags itself, maps them
 to the speakers in a script, and obtains the reference transcripts from the
-radio-drama voice configuration.  Accurate transcripts are important: MOSS
-uses them as part of the continuation prefix for cloning, rather than as style
-instructions.  Write normal dialogue and punctuation in the script; they are
-passed to MOSS as the generated text.
+radio-drama voice configuration.  It emits a tag only when the speaker changes:
+consecutive authored stanzas by one speaker stay in one MOSS dialogue turn.
+Accurate transcripts are important: MOSS uses them as part of the continuation
+prefix for cloning, rather than as style instructions.  The engine normalizes
+typographic quotes, dashes, and ellipses to ASCII before passing dialogue and
+reference transcripts to MOSS.
 
 The published TTSD v1.0 documentation does **not** describe inline controls
 for emotion, speaking rate, duration, pauses, pronunciation, or a per-line

@@ -215,6 +215,63 @@ def test_moss_ttsd_batches_complete_scripts(tmp_path, monkeypatch):
     ]
 
 
+def test_moss_ttsd_normalizes_text_and_coalesces_same_speaker_turns(monkeypatch):
+    seen = {}
+
+    class FakeProcessor:
+        model_config = types.SimpleNamespace(sampling_rate=24_000)
+
+        def encode_audios_from_wav(self, _wavs, *, sampling_rate):
+            assert sampling_rate == 24_000
+            return ["prompt-audio"]
+
+        def build_user_message(self, **kwargs):
+            seen.update(kwargs)
+            return kwargs
+
+        def build_assistant_message(self, **kwargs):
+            return kwargs
+
+    class FakeEngine(MossTtsdEngine):
+        def load_model(self):
+            return object(), FakeProcessor()
+
+        def _reference_audio(self, path):
+            return np.zeros((1, 1)), f"codes-{path}"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        types.SimpleNamespace(cat=lambda values, dim: np.concatenate(values, axis=dim)),
+    )
+    first = {
+        "authored_name": "first",
+        "voice_path": "/voices/first.wav",
+        "transcript": "“Reference”—one…",
+    }
+    second = {
+        "authored_name": "second",
+        "voice_path": "/voices/second.wav",
+        "transcript": "“Reference two”.",
+    }
+    FakeEngine().prepare_request(
+        {
+            "first_words": "test",
+            "dialogue_contents": [
+                {"type": "line", "speaker": first, "spoken_text": "“One”—here."},
+                {"type": "line", "speaker": first, "spoken_text": "Then… there."},
+                {"type": "line", "speaker": second, "spoken_text": "“Two”."},
+                {"type": "line", "speaker": first, "spoken_text": "Three."},
+            ],
+        }
+    )
+
+    assert seen["text"] == (
+        '[S1] "Reference"---one... [S2] "Reference two". '
+        '[S1] "One"---here. Then... there. [S2] "Two". [S1] Three.'
+    )
+
+
 def test_moss_ttsd_accepts_empty_scripts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     results = MossTtsdEngine().render_batch(

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from radio_drama.text import normalize_text_punctuation
 from radio_drama_tts_container import artifact_name, run_server, write_pcm16_wav
 
 
@@ -93,15 +94,22 @@ class MossTtsdEngine:
         """Translate one proxy script into a MOSS continuation conversation."""
         speakers: dict[str, tuple[str, Mapping[str, Any]]] = {}
         generated_lines: list[str] = []
+        previous_speaker_key: str | None = None
         for content in request["dialogue_contents"]:
             if content.get("type") != "line":
+                previous_speaker_key = None
                 continue
             speaker = content["speaker"]
             speaker_key = str(speaker["authored_name"])
             if speaker_key not in speakers:
                 speakers[speaker_key] = (f"S{len(speakers) + 1}", speaker)
             speaker_tag, _speaker = speakers[speaker_key]
-            generated_lines.append(f"[{speaker_tag}] {content['spoken_text']}")
+            text = normalize_text_punctuation(str(content["spoken_text"]))
+            if speaker_key != previous_speaker_key:
+                generated_lines.append(f"[{speaker_tag}] {text}")
+            else:
+                generated_lines.append(text)
+            previous_speaker_key = speaker_key
 
         output_path = Path(artifact_name(request))
         if not speakers:
@@ -118,7 +126,9 @@ class MossTtsdEngine:
             wav, codes = self._reference_audio(str(speaker["voice_path"]))
             prompt_wavs.append(wav)
             reference_codes.append(codes)
-            prompt_texts.append(f"[{speaker_tag}] {speaker['transcript']}")
+            prompt_texts.append(
+                f"[{speaker_tag}] {normalize_text_punctuation(str(speaker['transcript']))}"
+            )
 
         prompt_audio = processor.encode_audios_from_wav(
             [torch.cat(prompt_wavs, dim=-1)],

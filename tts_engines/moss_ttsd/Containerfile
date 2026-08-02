@@ -4,6 +4,7 @@ FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d
 RUN uv pip install --python /opt/omni/bin/python --no-cache transformers==5.14.1
 
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY radio_drama/text.py /opt/radio_drama/text.py
 COPY tts_engines/moss_ttsd/engine.py /opt/moss_ttsd_engine.py
 
 ENV PYTHONPATH=/opt \
