@@ -11,7 +11,10 @@ from radio_drama.proxy import load_proxy_tts_configs
 from radio_drama_tts_container import artifact_name, finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
 from tts_engines.zonos.engine import (
-    ZonosEngine, _EosTracker, _finish_prerolled_audio, _generate_nonempty_codes,
+    ZonosEngine,
+    _EosTracker,
+    _finish_prerolled_audio,
+    _generate_nonempty_codes,
 )
 from tts_engines.voxcpm2.engine import VoxCPM2Engine
 from tts_engines.moss_ttsd.engine import MossTtsdEngine, PreparedRequest
@@ -22,8 +25,7 @@ def _request(label: str, words: tuple[str, ...]) -> dict:
     return {
         "first_words": label,
         "dialogue_contents": [
-            {"type": "line", "spoken_text": word, "speaker": speaker}
-            for word in words
+            {"type": "line", "spoken_text": word, "speaker": speaker} for word in words
         ],
     }
 
@@ -37,7 +39,9 @@ def _save_wav(path: str, samples, sample_rate: int) -> None:
         output.writeframes((values * 32767).astype("<i2").tobytes())
 
 
-def test_shared_line_assembly_preserves_script_boundaries_and_timing(tmp_path, monkeypatch):
+def test_shared_line_assembly_preserves_script_boundaries_and_timing(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     outputs, work = prepare_line_work(
         [_request("first", ("one", "two")), _request("second", ("three",))]
@@ -56,7 +60,9 @@ def test_shared_line_assembly_preserves_script_boundaries_and_timing(tmp_path, m
 def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ZONOS_BATCH_SIZE", "2")
-    monkeypatch.setitem(sys.modules, "torchaudio", types.SimpleNamespace(save=_save_wav))
+    monkeypatch.setitem(
+        sys.modules, "torchaudio", types.SimpleNamespace(save=_save_wav)
+    )
     seen = []
 
     class FakeEngine(ZonosEngine):
@@ -74,7 +80,10 @@ def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
     )
 
     assert seen == [["one", "two"], ["three"]]
-    assert [len(result["dialogue_line_start_positions"]) for result in results] == [2, 1]
+    assert [len(result["dialogue_line_start_positions"]) for result in results] == [
+        2,
+        1,
+    ]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
 
@@ -105,9 +114,7 @@ def test_zonos_retries_initial_eos_before_decoding():
             return torch.zeros((2, 9, length), dtype=torch.long)
 
     model = FakeModel()
-    codes, tracker = _generate_nonempty_codes(
-        model, object(), batch_size=2, attempts=3
-    )
+    codes, tracker = _generate_nonempty_codes(model, object(), batch_size=2, attempts=3)
 
     assert model.calls == 2
     assert codes.shape == (2, 9, 5)
@@ -147,7 +154,9 @@ def test_chatterbox_reuses_each_speaker_conditioning():
     assert calls == ["/voices/one.wav"]
 
 
-def test_voxcpm2_serializes_prompt_cloned_lines(tmp_path, monkeypatch):
+def test_voxcpm2_serializes_prompt_cloned_lines_and_keeps_controls_unprompted(
+    tmp_path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
     calls = []
 
@@ -160,17 +169,21 @@ def test_voxcpm2_serializes_prompt_cloned_lines(tmp_path, monkeypatch):
 
     engine = VoxCPM2Engine()
     engine.model = FakeModel()
-    requests = [_request("first", ("one", "two"))]
+    requests = [_request("first", ("one", "(flustered) two", "three"))]
     requests[0]["dialogue_contents"][0]["speaker"]["transcript"] = "Reference."
 
     results = engine.render_batch(requests)
 
-    assert [call["text"] for call in calls] == ["one", "two"]
+    assert [call["text"] for call in calls] == ["one", "(flustered) two", "three"]
     assert calls[0]["reference_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_text"] == "Reference."
-    assert calls[1]["prompt_wav_path"] == "/voices/narrator.wav"
-    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0]
+    assert calls[1]["reference_wav_path"] == "/voices/narrator.wav"
+    assert "prompt_wav_path" not in calls[1]
+    assert calls[2]["reference_wav_path"] == "/voices/narrator.wav"
+    assert calls[2]["prompt_wav_path"].endswith(".line-1.wav")
+    assert calls[2]["prompt_text"] == "two"
+    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0, 2.0]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
     engine.synthesize_line(
@@ -292,9 +305,7 @@ def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
     chatterbox = load_proxy_tts_configs(root / "chatterbox" / "tts.toml.example")[
         "chatterbox"
     ]
-    voxcpm2 = load_proxy_tts_configs(root / "voxcpm2" / "tts.toml.example")[
-        "voxcpm2"
-    ]
+    voxcpm2 = load_proxy_tts_configs(root / "voxcpm2" / "tts.toml.example")["voxcpm2"]
     moss_ttsd = load_proxy_tts_configs(root / "moss_ttsd" / "tts.toml.example")[
         "moss-ttsd"
     ]
