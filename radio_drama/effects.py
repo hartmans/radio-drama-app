@@ -494,6 +494,11 @@ def pan(pan_expression: ArrayExpression) -> EffectStage:
             np.float32,
             copy=False,
         )
+        power_normalizer = np.sqrt(
+            np.float32(2.0) / (np.square(left_gain) + np.square(right_gain))
+        ).astype(np.float32, copy=False)
+        left_gain *= power_normalizer
+        right_gain *= power_normalizer
         audio[:, 0] *= left_gain
         audio[:, 1] *= right_gain
 

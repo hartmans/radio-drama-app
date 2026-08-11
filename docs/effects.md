@@ -75,6 +75,38 @@ The effect takes the first 5+ milliseconds of silence and fills it with spatial 
 
 ---
 
+## pan
+
+Applies an automated stereo balance to rendered stereo audio. `pan` takes an
+array expression whose values range from `-1` (hard left), through `0`
+(center), to `1` (hard right). Values outside that range are clamped.
+
+The favored channel remains present while the opposite channel is attenuated.
+The resulting pair of gains is normalized so that its summed squared gain
+(stereo power) stays equal to the centered signal. This keeps the perceived
+loudness approximately stable as the balance moves.
+
+At center, both channels retain a gain of `1.0`. At a hard pan, the remaining
+channel has a gain of `sqrt(2)` (approximately `1.414`, or +3 dB), while the
+opposite channel is silent. Account for that additional headroom when setting
+gain or mastering a production.
+
+### Examples
+
+Keep a sound centered:
+
+```python
+pan(line(0))
+```
+
+Move from left to right over one second:
+
+```python
+pan(line(0 * s, -1, 1 * s, 1))
+```
+
+---
+
 ## Other Effects
 
 TBD: Document additional effect functions as they are developed.
