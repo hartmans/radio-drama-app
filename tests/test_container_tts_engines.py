@@ -154,7 +154,7 @@ def test_chatterbox_reuses_each_speaker_conditioning():
     assert calls == ["/voices/one.wav"]
 
 
-def test_voxcpm2_serializes_prompt_cloned_lines_and_keeps_controls_unprompted(
+def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
@@ -169,12 +169,19 @@ def test_voxcpm2_serializes_prompt_cloned_lines_and_keeps_controls_unprompted(
 
     engine = VoxCPM2Engine()
     engine.model = FakeModel()
-    requests = [_request("first", ("one", "(flustered) two", "three"))]
+    requests = [
+        _request("first", ("one", "(flustered) two", "three", "four"))
+    ]
     requests[0]["dialogue_contents"][0]["speaker"]["transcript"] = "Reference."
 
     results = engine.render_batch(requests)
 
-    assert [call["text"] for call in calls] == ["one", "(flustered) two", "three"]
+    assert [call["text"] for call in calls] == [
+        "one",
+        "(flustered) two",
+        "three",
+        "four",
+    ]
     assert calls[0]["reference_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_text"] == "Reference."
@@ -183,7 +190,10 @@ def test_voxcpm2_serializes_prompt_cloned_lines_and_keeps_controls_unprompted(
     assert calls[2]["reference_wav_path"] == "/voices/narrator.wav"
     assert calls[2]["prompt_wav_path"].endswith(".line-1.wav")
     assert calls[2]["prompt_text"] == "two"
-    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0, 2.0]
+    assert calls[3]["reference_wav_path"] == "/voices/narrator.wav"
+    assert calls[3]["prompt_wav_path"].endswith(".line-1.wav")
+    assert calls[3]["prompt_text"] == "two"
+    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0, 2.0, 3.0]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
     engine.synthesize_line(

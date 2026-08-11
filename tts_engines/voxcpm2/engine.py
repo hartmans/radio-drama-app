@@ -116,7 +116,8 @@ class VoxCPM2Engine:
                     model.tts_model.sample_rate,
                     subtype="PCM_16",
                 )
-                prompts[speaker_key] = (str(item.path), audible_text)
+                if has_instruction:
+                    prompts[speaker_key] = (str(item.path), audible_text)
             return finish_line_work(
                 outputs, work, sample_rate=model.tts_model.sample_rate
             )

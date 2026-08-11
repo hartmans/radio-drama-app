@@ -11,10 +11,11 @@ mode does not support style controls.
 
 For every other line, the engine uses continuation cloning.  The first such
 line for a speaker is prompted with that speaker's original reference WAV and
-its reference transcript.  Later lines use that speaker's preceding generated
-line and its audible text as the prompt.  A controlled line also becomes the
-prompt for the speaker's next un-controlled line; its parenthetical control is
-excluded from the stored prompt text.
+its reference transcript. A controlled line becomes the continuation prompt
+for later un-controlled lines from that speaker; its parenthetical control is
+excluded from the stored prompt text. The engine keeps that prompt fixed rather
+than chaining each generated line into the next, avoiding progressive voice
+degradation.
 
 Prompt state is scoped to one render request, so concurrently submitted script
 requests do not condition one another.
