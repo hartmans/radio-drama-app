@@ -170,6 +170,38 @@ pan(line(0 * s, -1, 1 * s, 1))
 
 ---
 
+## compress_audio
+
+Applies Pedalboard's dynamic-range compressor to the complete audio buffer,
+then applies optional makeup gain. Stereo input is processed as one plugin
+stream; the compressor's channel-linking and envelope behavior are defined by
+Pedalboard and may differ from a sample-by-sample peak compressor.
+
+```python
+compress_audio(
+    threshold_db=-28.0,
+    ratio=2.8,
+    attack_ms=5.0,
+    release_ms=240.0,
+    makeup_db=2.2,
+)
+```
+
+| Parameter | Meaning |
+|-----------|---------|
+| `threshold_db` | Level in dB above which gain reduction begins |
+| `ratio` | Compression ratio; it must be positive |
+| `attack_ms` | Time for compression to engage after the signal crosses the threshold |
+| `release_ms` | Time for compression to disengage after the signal falls below the threshold |
+| `makeup_db` | Gain in dB applied after compression; defaults to 0 dB |
+
+Lower thresholds and higher ratios produce stronger compression. Very short
+attack times control peaks more aggressively, while longer attacks retain more
+of a sound's initial transient. Makeup gain raises both the compressed signal
+and its noise floor, so leave headroom for later mixing and mastering.
+
+---
+
 ## Other Effects
 
 TBD: Document additional effect functions as they are developed.

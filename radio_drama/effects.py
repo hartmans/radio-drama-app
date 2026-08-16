@@ -335,34 +335,29 @@ def compress_audio(
     release_ms: float,
     makeup_db: float = 0.0,
 ) -> EffectStage:
-    @numpy_stage
-    def stage(audio: np.ndarray, sample_rate: int) -> None:
-        if ratio <= 0:
-            raise ValueError("ratio must be positive")
-        frames = audio if audio.ndim == 2 else audio[:, np.newaxis]
-        envelope = np.max(np.abs(frames), axis=1)
-        attack_coeff = math.exp(-1.0 / max(sample_rate * attack_ms / 1000.0, 1.0))
-        release_coeff = math.exp(-1.0 / max(sample_rate * release_ms / 1000.0, 1.0))
-        smoothed = np.zeros_like(envelope)
-        level = 0.0
-        for index, sample in enumerate(envelope):
-            coeff = attack_coeff if sample > level else release_coeff
-            level = coeff * level + (1.0 - coeff) * sample
-            smoothed[index] = level
+    if ratio <= 0:
+        raise ValueError("ratio must be positive")
 
-        envelope_db = 20.0 * np.log10(np.maximum(smoothed, 1e-6))
-        gain_reduction_db = np.where(
-            envelope_db > threshold_db,
-            (threshold_db + (envelope_db - threshold_db) / ratio) - envelope_db,
-            0.0,
+    def board_factory() -> object:
+        from pedalboard import Compressor
+
+        return Compressor(
+            threshold_db=threshold_db,
+            ratio=ratio,
+            attack_ms=attack_ms,
+            release_ms=release_ms,
         )
-        gain = np.power(10.0, (gain_reduction_db + makeup_db) / 20.0).astype(np.float32)
-        if audio.ndim == 1:
-            audio *= gain
-        else:
-            audio *= gain[:, np.newaxis]
 
-    return stage
+    compressor = pedalboard_stage(board_factory)
+    if not makeup_db:
+        return compressor
+
+    @numpy_stage
+    def makeup_stage(audio: np.ndarray, sample_rate: int) -> None:
+        del sample_rate
+        audio *= np.float32(_db_to_gain(makeup_db))
+
+    return compressor | makeup_stage
 
 
 @effect_chain_function

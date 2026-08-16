@@ -5,4 +5,4 @@ vibevoice @ git+https://github.com/vibevoice-community/vibevoice
 whisperx
 carthage
 qwen-tts
-
+pedalboard>=0.9,<1

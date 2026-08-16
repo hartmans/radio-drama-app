@@ -18,6 +18,7 @@ from radio_drama.effects import (
     EffectChainRegistry,
     EffectMixer,
     EffectPipeline,
+    compress_audio,
     effect_chain,
     effect_chain_function,
     effect_chain_variables,
@@ -31,6 +32,30 @@ from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector, normalized_script_from_request
+
+
+def test_compress_audio_reduces_loud_audio_and_applies_makeup_gain():
+    sample_rate = 48_000
+    source = np.ones((sample_rate, 2), dtype=np.float32)
+    compressed = source.copy()
+    compressed_with_makeup = source.copy()
+
+    compress_audio(
+        threshold_db=-20.0,
+        ratio=4.0,
+        attack_ms=1.0,
+        release_ms=100.0,
+    ).apply(compressed, sample_rate=sample_rate)
+    compress_audio(
+        threshold_db=-20.0,
+        ratio=4.0,
+        attack_ms=1.0,
+        release_ms=100.0,
+        makeup_db=6.0206,
+    ).apply(compressed_with_makeup, sample_rate=sample_rate)
+
+    assert np.max(np.abs(compressed[-sample_rate // 2 :])) < 0.5
+    np.testing.assert_allclose(compressed_with_makeup, compressed * 2.0, atol=1e-4)
 
 
 def test_sound_plan_applies_gain_from_node(tmp_path: Path):
