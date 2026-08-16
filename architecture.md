@@ -156,7 +156,7 @@ Planning rule for presets:
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
 
-`radio_drama_injector()` is the standard way to create an injector for radio-drama planning and rendering. It installs shared production-scoped resources while preserving caller overrides from a parent injector. When callers supply an `output_path`, it also installs the production-scoped `CacheManager`, which derives the shared speech-cache root from that output path unless the caller overrides `InjectionKey("cache_dir")` directly.
+`radio_drama_injector()` is the standard one-time application initialization for radio-drama planning and rendering. It installs shared resources while preserving caller overrides from a parent injector and sizes the supplied event loop's default executor to the logical CPUs available to the process. When callers supply an `output_path`, it also installs the `CacheManager`, which derives the shared speech-cache root from that output path unless the caller overrides `InjectionKey("cache_dir")` directly. Planning a production creates a plain child injector for its production-scoped planning state and effect registry; it inherits application resources rather than repeating application initialization.
 
 ## Resource layer
 

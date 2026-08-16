@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import io
 import textwrap
 import xml.sax
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
+
+from carthage.dependency_injection import Injector
 
 from .errors import DocumentError, SourceLocation
 
@@ -469,17 +470,13 @@ class ProductionNode(ElementNode):
 
     async def plan(self, ainjector):
         """Plan the production in a child injector with shared production resources."""
-        from .init import radio_drama_injector
         from .audio import AudioPlan
         from .planning import PRODUCTION_PLANNING_INJECTOR_KEY
         from .production import ProductionPlan
         from .sound import ProductionDocumentPath
         from .effects import EffectChainRegistry
 
-        production_injector = radio_drama_injector(
-            ainjector.injector,
-            event_loop=asyncio.get_running_loop(),
-        )
+        production_injector = Injector(parent_injector=ainjector.injector)
         if (
             production_injector.injector_containing(ProductionDocumentPath) is None
             and self.location.source is not None

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import weakref
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from carthage.dependency_injection import InjectionKey, Injector
@@ -14,6 +17,24 @@ from .proxy import configured_proxy_resource, load_proxy_tts_configs
 from .vibevoice import VibeVoiceResource
 from .sound import NormalizedSoundCache, ProductionDocumentPath
 from .voice_reference import VoiceReferenceTranscriptionResource
+
+
+_executor_configured_loops: weakref.WeakSet[asyncio.AbstractEventLoop] = weakref.WeakSet()
+
+
+def _configure_default_executor(event_loop: asyncio.AbstractEventLoop) -> None:
+    """Give one application loop a worker for each CPU available to this process."""
+
+    if event_loop in _executor_configured_loops:
+        return
+    process_cpu_count = getattr(os, "process_cpu_count", os.cpu_count)
+    event_loop.set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=process_cpu_count() or 1,
+            thread_name_prefix="radio-drama",
+        )
+    )
+    _executor_configured_loops.add(event_loop)
 
 
 def radio_drama_injector(
@@ -49,6 +70,7 @@ def radio_drama_injector(
         if resolved_output_path is not None:
             injector.add_provider(CACHE_OUTPUT_PATH_KEY, resolved_output_path)
     if event_loop is not None:
+        _configure_default_executor(event_loop)
         injector.replace_provider(
             InjectionKey(asyncio.AbstractEventLoop),
             event_loop,
