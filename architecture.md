@@ -329,6 +329,7 @@ Current backend contract:
 
 * `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`; optional `--cut-before` and `--cut-after` mark bounds are applied to the shared production plan before that render
 * the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
+* the backend retains the production-scoped `EffectChainRegistry` after planning, so preview expressions use built-ins and `<preset-map>` additions or replacements from the production rather than a separate preset catalog
 * the preview backend also exposes a dry `none` option that returns slices from the unprocessed base render
 * preset preparation runs concurrently and reuses the same `EffectStage` interface as document-driven render-time presets
 * audio slice requests address a prepared preset plus a playback time, and the backend responds with a WAV stream starting at that point in the production

@@ -20,6 +20,7 @@ from scipy.io import wavfile
 from radio_drama.config import ProductionConfig
 from radio_drama.document import parse_production_file
 from radio_drama.effects import (
+    EffectChainRegistry,
     effect_chain_variables,
 )
 from radio_drama.expressions import eval_expression
@@ -56,7 +57,7 @@ class ApplyExpressionResponse(BaseModel):
 class ExpressionCacheStore:
     """Maintains cache of rendered audio for expressions.
     
-    Cache mapping: sha256(base audio + expression string) -> cached_wav_filename
+    Cache mapping: sha256(base audio + production presets + expression) -> cached_wav_filename
     All files stored in cache_directory/{sha256}.wav
     
     The frontend accesses these via static mount at /api/cache/{filename}
@@ -65,7 +66,7 @@ class ExpressionCacheStore:
     base_result: RenderResult
     sample_rate: int
     cache_dir: Path
-    preset_expressions: dict[str, str]  # Loaded from injector after planning
+    effect_chains: EffectChainRegistry
     
     _base_audio_filename: str = field(default_factory=lambda: "_base.wav", init=False)
     _base_audio_hash: bytes = field(init=False, repr=False)
@@ -76,6 +77,11 @@ class ExpressionCacheStore:
         base_hasher = hashlib.sha256()
         base_hasher.update(str(self.sample_rate).encode("ascii"))
         base_hasher.update(self.base_result.audio.tobytes())
+        for name, expression in self.preset_expressions.items():
+            base_hasher.update(b"\0preset\0")
+            base_hasher.update(name.encode("utf-8"))
+            base_hasher.update(b"\0")
+            base_hasher.update(expression.encode("utf-8"))
         self._base_audio_hash = base_hasher.digest()
         self._save_base_audio(self._base_audio_path())
     
@@ -93,6 +99,16 @@ class ExpressionCacheStore:
         if self.sample_rate <= 0:
             return 0.0
         return self.base_result.frame_count / self.sample_rate
+
+    @property
+    def preset_expressions(self) -> dict[str, str]:
+        """Return expressions from the production-scoped preset registry."""
+
+        return {
+            name: expression
+            for name in self.effect_chains.names()
+            if (expression := self.effect_chains.get_expression(name)) is not None
+        }
     
     def _expression_sha256(self, expression: str) -> str:
         """Compute a cache key for an expression applied to this base render."""
@@ -122,7 +138,7 @@ class ExpressionCacheStore:
             rendered = RenderResult(audio=np.array(self.base_result.audio, copy=True))
             
             # Build effect chain from expression using current preset variables
-            variables = effect_chain_variables()
+            variables = effect_chain_variables(self.effect_chains.stages())
             try:
                 chain = eval_expression(expression, variables, _effect_chain)
                 await asyncio.to_thread(chain.apply, rendered.audio, sample_rate=self.sample_rate)
@@ -250,13 +266,8 @@ async def render_production_result(
     config: ProductionConfig,
     cut_before: str | None = None,
     cut_after: str | None = None,
-) -> RenderResult:
-    """Render a production file to get base audio, optionally bounded by marks.
-    
-    For now we use builtin presets - the expression-based architecture extracts 
-    preset expressions from production planning.
-    """
-    from radio_drama.effects import EffectChainRegistry
+) -> tuple[RenderResult, EffectChainRegistry]:
+    """Render a production and return its production-scoped effect registry."""
     
     production_node = parse_production_file(production_path)
     injector = radio_drama_injector(
@@ -266,12 +277,10 @@ async def render_production_result(
     )
     
     try:
-        # Add EffectChainRegistry (needed for preset evaluation during planning)
-        injector.add_provider(EffectChainRegistry())
-        
         # Get AsyncInjector and plan/render
         async_injector = injector(AsyncInjector)
         production_plan = await production_node.plan(async_injector)
+        effect_chains = production_plan.effect_chains
         if cut_before is not None:
             production_plan.cut_before_mark(cut_before)
             gc.collect()
@@ -280,76 +289,10 @@ async def render_production_result(
             gc.collect()
         base_result = await production_plan.render()
             
-        return base_result
+        return base_result, effect_chains
             
     finally:
         injector.close()
-
-
-# Fallback to default presets if no production-specific ones are available
-_builtin_preset_expressions = {
-    "narrator": (
-        'filter_audio(btype="highpass", cutoff_hz=85.0) | '\
-        'compress_audio(threshold_db=-28.0, ratio=2.8, attack_ms=5.0, release_ms=240.0, makeup_db=2.2) | '\
-        'mid_side_mix(mid_gain=1.18, side_gain=0.62) | '\
-        'tilt_tone(low_band_db=-1.4, high_band_db=1.6) | '\
-        'early_reflections(taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)), dry_mix=0.96)'
-    ),
-    "narrator_nofocus": (
-        'filter_audio(btype="highpass", cutoff_hz=85.0) | '\
-        'compress_audio(threshold_db=-28.0, ratio=2.8, attack_ms=5.0, release_ms=240.0, makeup_db=2.2) | '\
-        'tilt_tone(low_band_db=-1.4, high_band_db=1.6) | '\
-        'early_reflections(taps=((9.0, 0.09, 0.12), (18.0, 0.07, 0.05), (31.0, 0.04, 0.06)), dry_mix=0.96)'
-    ),
-    "thoughts": (
-        'filter_audio(btype="highpass", cutoff_hz=90.0) | '\
-        'compress_audio(threshold_db=-30.0, ratio=3.2, attack_ms=4.0, release_ms=260.0, makeup_db=2.4) | '\
-        'mid_side_mix(mid_gain=1.14, side_gain=0.72) | '\
-        'tilt_tone(low_band_db=-1.3, high_band_db=1.8) | '\
-        'feedback_reverb(delay_ms=44.0, stereo_offset_ms=7.0, feedback=0.58, repeats=4, wet_gain=0.08, dry_mix=0.96)'
-    ),
-    "outdoor1": (
-        'filter_audio(btype="highpass", cutoff_hz=100.0) | '\
-        'tilt_tone(low_band_db=-0.6, high_band_db=1.0) | '\
-        'mid_side_mix(mid_gain=0.98, side_gain=1.18) | '\
-        'mix_white_noise(relative_db=-28.0) | '\
-        'early_reflections(taps=((24.0, 0.04, 0.05), (46.0, 0.03, 0.025)), dry_mix=0.99)'
-    ),
-    "outdoor2": (
-        'filter_audio(btype="highpass", cutoff_hz=115.0) | '\
-        'mid_side_mix(mid_gain=0.97, side_gain=1.12) | '\
-        'mix_white_noise(relative_db=-24.0) | '\
-        'feedback_reverb(delay_ms=66.0, stereo_offset_ms=10.0, feedback=0.6, repeats=5, wet_gain=0.1, dry_mix=0.94) | '\
-        'tilt_tone(low_band_db=-0.8, high_band_db=1.2)'
-    ),
-    "indoor1": (
-        'filter_audio(btype="highpass", cutoff_hz=80.0) | '\
-        'early_reflections(taps=((12.0, 0.14, 0.09), (21.0, 0.09, 0.14), (33.0, 0.06, 0.06), (48.0, 0.04, 0.04)), dry_mix=0.93) | '\
-        'mid_side_mix(mid_gain=1.08, side_gain=0.74) | '\
-        'tilt_tone(low_band_db=0.8, high_band_db=-0.6) | '\
-        'filter_audio(btype="lowpass", cutoff_hz=8200.0)'
-    ),
-    "indoor2": (
-        'filter_audio(btype="highpass", cutoff_hz=85.0) | '\
-        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '\
-        'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '\
-        'mid_side_mix(mid_gain=1.1, side_gain=0.66) | '\
-        'filter_audio(btype="lowpass", cutoff_hz=6500.0)'
-    ),
-    "background": (
-        'filter_audio(btype="highpass", cutoff_hz=85.0) | '\
-        'compress_audio(threshold_db=-27.0, ratio=2.2, attack_ms=7.0, release_ms=200.0, makeup_db=1.2) | '\
-        'early_reflections(taps=((15.0, 0.16, 0.1), (28.0, 0.1, 0.16), (42.0, 0.07, 0.08), (63.0, 0.05, 0.05)), dry_mix=0.9) | '\
-        'mid_side_mix(mid_gain=0.4, side_gain=1.8) | '\
-        'filter_audio(btype="lowpass", cutoff_hz=4500.0)'
-    ),
-    "phone": (
-        'filter_audio(btype="highpass", cutoff_hz=320.0) | '\
-        'filter_audio(btype="lowpass", cutoff_hz=3200.0) | '\
-        'compress_audio(threshold_db=-30.0, ratio=3.6, attack_ms=3.0, release_ms=160.0, makeup_db=3.0) | '\
-        'mix_white_noise(relative_db=-34.0)'
-    ),
-}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -405,7 +348,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = build_config(args)
     
     # Render production to get base audio
-    base_result = asyncio.run(
+    base_result, effect_chains = asyncio.run(
         render_production_result(
             args.production_xml,
             config=config,
@@ -423,14 +366,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     
     cache_path.mkdir(parents=True, exist_ok=True)
     
-    # For now use builtin expressions - should be extracted from injector after planning
-    preset_expressions = _builtin_preset_expressions.copy()
-    
     audio_store = ExpressionCacheStore(
         base_result=base_result,
         sample_rate=config.resolved_output_sample_rate,
         cache_dir=cache_path,
-        preset_expressions=preset_expressions,
+        effect_chains=effect_chains,
     )
     
     uvicorn.run(
