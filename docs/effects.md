@@ -75,6 +75,69 @@ The effect takes the first 5+ milliseconds of silence and fills it with spatial 
 
 ---
 
+## feedback_reverb
+
+Adds a finite series of progressively quieter delayed copies. The left and
+right copies use slightly different delay times, giving the repeats stereo
+width. This is a compact echo-like ambience rather than a physical room model.
+
+```python
+feedback_reverb(
+    delay_ms=73.0,
+    stereo_offset_ms=13.0,
+    feedback=0.55,
+    repeats=5,
+    wet_mix=0.10,
+    dry_mix=0.97,
+)
+```
+
+`wet_mix` sets the linear amplitude of the first delayed copy; each later copy
+is multiplied by `feedback` again. `dry_mix` independently sets the linear
+amplitude of the original. They are mixing coefficients and do not need to sum
+to one. The effect does not extend the audio buffer, so repeats that would land
+after its end are discarded.
+
+---
+
+## modulated_delay
+
+Mixes the input with a short delayed copy whose delay time moves sinusoidally.
+Fractional delay positions are linearly interpolated. On stereo audio, the
+right-channel oscillator is phase-offset from the left, creating slow movement
+in both pitch and apparent position without moving the dry signal.
+
+```python
+modulated_delay(
+    delay_ms=21.0,
+    depth_ms=4.5,
+    rate_hz=0.17,
+    wet_mix=0.20,
+    dry_mix=0.90,
+    stereo_phase_degrees=110.0,
+)
+```
+
+| Parameter | Meaning |
+|-----------|---------|
+| `delay_ms` | Center delay in milliseconds |
+| `depth_ms` | Maximum movement on either side of the center delay; it may not exceed `delay_ms` |
+| `rate_hz` | Oscillator cycles per second |
+| `wet_mix` | Linear amplitude of the moving delayed copy |
+| `dry_mix` | Linear amplitude of the original signal |
+| `stereo_phase_degrees` | Right oscillator's phase offset from the left; defaults to 90 degrees |
+| `phase_degrees` | Deterministic starting phase of the left oscillator; defaults to 0 degrees |
+
+`wet_mix` and `dry_mix` are independent mixing coefficients rather than a
+crossfade, so they do not need to sum to one. Values around 15–25 ms of delay,
+3–6 ms of depth, and 0.1–0.25 Hz produce a slow dreamlike drift. Faster rates
+and shorter delays sound more like a conventional chorus or vibrato.
+
+Like the other effect stages, `modulated_delay` preserves the input length. Its
+initial delayed samples therefore contain only the scaled dry signal.
+
+---
+
 ## pan
 
 Applies an automated stereo balance to rendered stereo audio. `pan` takes an

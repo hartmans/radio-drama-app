@@ -22,6 +22,7 @@ from radio_drama.effects import (
     effect_chain_function,
     effect_chain_variables,
     load_preprocessed_voice_reference,
+    modulated_delay,
     numpy_stage,
 )
 from radio_drama.errors import DocumentError
@@ -575,6 +576,53 @@ def test_effect_chain_function_decorator_adds_factory_to_expression_variables():
         return EffectPipeline(())
 
     assert effect_chain_variables()["test_stage"] is test_stage
+
+
+def test_modulated_delay_mixes_dry_and_delayed_audio():
+    audio = np.zeros(8, dtype=np.float32)
+    audio[0] = 1.0
+    stage = modulated_delay(
+        delay_ms=2.0,
+        depth_ms=0.0,
+        rate_hz=0.0,
+        wet_mix=0.25,
+        dry_mix=0.5,
+    )
+
+    stage.apply(audio, sample_rate=1000)
+
+    np.testing.assert_allclose(
+        audio,
+        np.array([0.5, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
+
+
+def test_modulated_delay_uses_stereo_phase_offset():
+    audio = np.column_stack(
+        [np.arange(8, dtype=np.float32), np.arange(8, dtype=np.float32)]
+    )
+    stage = modulated_delay(
+        delay_ms=2.0,
+        depth_ms=1.0,
+        rate_hz=0.0,
+        wet_mix=1.0,
+        dry_mix=0.0,
+        stereo_phase_degrees=90.0,
+    )
+
+    stage.apply(audio, sample_rate=1000)
+
+    np.testing.assert_allclose(audio[4], np.array([2.0, 1.0], dtype=np.float32))
+
+
+def test_modulated_delay_rejects_noncausal_depth():
+    with pytest.raises(ValueError, match="depth_ms must not exceed delay_ms"):
+        modulated_delay(
+            delay_ms=2.0,
+            depth_ms=3.0,
+            rate_hz=0.1,
+            wet_mix=0.2,
+        )
 
 
 def test_effect_chain_variables_include_presets_and_aliases():

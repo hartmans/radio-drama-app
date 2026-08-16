@@ -414,7 +414,7 @@ def feedback_reverb(
     stereo_offset_ms: float,
     feedback: float,
     repeats: int,
-    wet_gain: float,
+    wet_mix: float,
     dry_mix: float,
 ) -> EffectStage:
     @numpy_stage
@@ -427,12 +427,68 @@ def feedback_reverb(
                 1,
                 int(round(sample_rate * (delay_ms + stereo_offset_ms) * repeat / 1000.0)),
             )
-            gain = wet_gain * (feedback ** (repeat - 1))
+            gain = wet_mix * (feedback ** (repeat - 1))
             left_delayed = np.pad(mono_source, (base_delay_frames, 0))[: mono_source.shape[0]]
             right_delayed = np.pad(mono_source, (stereo_delay_frames, 0))[: mono_source.shape[0]]
             rendered[:, 0] += left_delayed * gain
             rendered[:, 1] += right_delayed * (gain * 0.92)
         audio[...] = normalize_audio_array(rendered)
+
+    return stage
+
+
+@effect_chain_function
+@register_effect_stage
+def modulated_delay(
+    *,
+    delay_ms: float,
+    depth_ms: float,
+    rate_hz: float,
+    wet_mix: float,
+    dry_mix: float = 1.0,
+    stereo_phase_degrees: float = 90.0,
+    phase_degrees: float = 0.0,
+) -> EffectStage:
+    """Mix the input with a sinusoidally moving, fractional-delay copy."""
+
+    if delay_ms < 0.0:
+        raise ValueError("delay_ms must be non-negative")
+    if depth_ms < 0.0:
+        raise ValueError("depth_ms must be non-negative")
+    if depth_ms > delay_ms:
+        raise ValueError("depth_ms must not exceed delay_ms")
+    if rate_hz < 0.0:
+        raise ValueError("rate_hz must be non-negative")
+
+    @numpy_stage
+    def stage(audio: np.ndarray, sample_rate: int) -> None:
+        frames = audio if audio.ndim == 2 else audio[:, np.newaxis]
+        frame_positions = np.arange(frames.shape[0], dtype=np.float64)
+        time_seconds = frame_positions / sample_rate
+        rendered = frames * dry_mix
+        base_phase = math.radians(phase_degrees)
+        stereo_phase = math.radians(stereo_phase_degrees)
+        delay_scale = sample_rate / 1000.0
+
+        for channel in range(frames.shape[1]):
+            channel_phase = base_phase + (stereo_phase if channel % 2 else 0.0)
+            delay = delay_ms + depth_ms * np.sin(
+                math.tau * rate_hz * time_seconds + channel_phase
+            )
+            source_positions = frame_positions - delay * delay_scale
+            delayed = np.interp(
+                source_positions,
+                frame_positions,
+                frames[:, channel],
+                left=0.0,
+                right=0.0,
+            )
+            rendered[:, channel] += delayed * wet_mix
+
+        if audio.ndim == 1:
+            audio[...] = rendered[:, 0]
+        else:
+            audio[...] = rendered
 
     return stage
 
@@ -538,7 +594,7 @@ _PRESET_EXPRESSIONS: Mapping[str, str] = {
         'compress_audio(threshold_db=-30.0, ratio=3.2, attack_ms=4.0, release_ms=260.0, makeup_db=2.4) | '
         'mid_side_mix(mid_gain=1.14, side_gain=0.72) | '
         'tilt_tone(low_band_db=-1.3, high_band_db=1.8) | '
-        'feedback_reverb(delay_ms=44.0, stereo_offset_ms=7.0, feedback=0.58, repeats=4, wet_gain=0.08, dry_mix=0.96)'
+        'feedback_reverb(delay_ms=44.0, stereo_offset_ms=7.0, feedback=0.58, repeats=4, wet_mix=0.08, dry_mix=0.96)'
     ),
     "outdoor1": (
         'filter_audio(btype="highpass", cutoff_hz=100.0) | '
@@ -551,7 +607,7 @@ _PRESET_EXPRESSIONS: Mapping[str, str] = {
         'filter_audio(btype="highpass", cutoff_hz=115.0) | '
         'mid_side_mix(mid_gain=0.97, side_gain=1.12) | '
         'mix_white_noise(relative_db=-24.0) | '
-        'feedback_reverb(delay_ms=66.0, stereo_offset_ms=10.0, feedback=0.6, repeats=5, wet_gain=0.1, dry_mix=0.94) | '
+        'feedback_reverb(delay_ms=66.0, stereo_offset_ms=10.0, feedback=0.6, repeats=5, wet_mix=0.1, dry_mix=0.94) | '
         'tilt_tone(low_band_db=-0.8, high_band_db=1.2)'
     ),
     "indoor1": (
