@@ -19,6 +19,10 @@ from radio_drama.effects import (
     EffectMixer,
     EffectPipeline,
     compress_audio,
+    control_array,
+    crossfade,
+    dry,
+    equalizer,
     effect_chain,
     effect_chain_function,
     effect_chain_variables,
@@ -27,11 +31,134 @@ from radio_drama.effects import (
     numpy_stage,
 )
 from radio_drama.errors import DocumentError
+from radio_drama.expressions import line
 from radio_drama.rendering import RenderResult
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector, normalized_script_from_request
+
+
+def test_control_array_expands_constants_and_array_expressions():
+    np.testing.assert_array_equal(
+        control_array(0.25, 4),
+        np.full(4, 0.25, dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        control_array(line(0, -1, 4, 1), 4),
+        np.array([-1.0, -0.5, 0.0, 0.5], dtype=np.float32),
+    )
+
+
+def test_dry_leaves_audio_unchanged():
+    audio = np.array([0.25, -0.5], dtype=np.float32)
+    expected = audio.copy()
+
+    dry().apply(audio, sample_rate=48_000)
+
+    np.testing.assert_array_equal(audio, expected)
+
+
+def test_crossfade_gives_both_branches_the_original_input():
+    @numpy_stage
+    def add_one(audio: np.ndarray, sample_rate: int) -> None:
+        del sample_rate
+        audio += 1.0
+
+    @numpy_stage
+    def multiply_three(audio: np.ndarray, sample_rate: int) -> None:
+        del sample_rate
+        audio *= 3.0
+
+    audio = np.ones(3, dtype=np.float32)
+    crossfade(
+        add_one,
+        multiply_three,
+        line(0, -1, 2, 1),
+    ).apply(audio, sample_rate=48_000)
+
+    np.testing.assert_allclose(
+        audio,
+        np.array([2.0, 2.5, 3.0], dtype=np.float32),
+    )
+
+
+def test_crossfade_supports_array_mix_controls():
+    audio = np.ones(3, dtype=np.float32)
+    crossfade(
+        dry(),
+        dry(),
+        0,
+        a_mix=line(0, 0, 2, 1),
+        b_mix=0,
+    ).apply(audio, sample_rate=48_000)
+
+    np.testing.assert_allclose(
+        audio,
+        np.array([0.0, 0.25, 0.5], dtype=np.float32),
+    )
+
+
+def test_audio_plan_crossfade_effect_uses_render_time_variables():
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        async def layout_node(self) -> None:
+            self.inner_last = 1.0
+            self.advance = self.inner_last
+            self.mark_positions = {"middle": 0.5}
+
+        async def render_node(self) -> RenderResult:
+            return RenderResult(audio=np.ones(4, dtype=np.float32))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            plan = await ainjector(
+                FakeAudioPlan,
+                attrs={
+                    "effect": (
+                        "crossfade(dry(), gain(line(6.0206)), "
+                        "line(0, -1, middle, 0, natural_length, 1))"
+                    )
+                },
+            )
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    np.testing.assert_allclose(
+        result.audio,
+        np.array([1.0, 1.25, 1.5, 1.75], dtype=np.float32),
+        atol=1e-4,
+    )
+
+
+def test_equalizer_with_unity_band_gains_reconstructs_input():
+    audio = np.random.default_rng(20260816).standard_normal((4096, 2), dtype=np.float32)
+    expected = audio.copy()
+
+    equalizer(200, 0, 3000, 0, 0).apply(audio, sample_rate=16_000)
+
+    np.testing.assert_allclose(audio, expected, atol=2e-6)
+
+
+def test_equalizer_can_isolate_a_frequency_band():
+    sample_rate = 16_000
+    time = np.arange(sample_rate, dtype=np.float32) / sample_rate
+    low = np.sin(2 * np.pi * 80 * time)
+    middle = np.sin(2 * np.pi * 1000 * time)
+    high = np.sin(2 * np.pi * 5000 * time)
+    audio = (low + middle + high).astype(np.float32)
+
+    equalizer(200, -99, 3000, 0, -99, order=4).apply(
+        audio,
+        sample_rate=sample_rate,
+    )
+
+    assert np.sqrt(np.mean(np.square(audio - middle))) < 0.03
 
 
 def test_compress_audio_reduces_loud_audio_and_applies_makeup_gain():

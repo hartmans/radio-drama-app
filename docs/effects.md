@@ -202,6 +202,83 @@ and its noise floor, so leave headroom for later mixing and mastering.
 
 ---
 
+## dry
+
+Returns the input unchanged. `dry()` is primarily useful as the unprocessed
+branch of `crossfade()`; including it in an ordinary sequential pipeline has no
+effect.
+
+```python
+crossfade(dreams, dry(), line(0, -1, 4 * s, 1))
+```
+
+---
+
+## crossfade
+
+Processes two branches from the same original input and combines their results
+with a frame-varying linear crossfade:
+
+```python
+crossfade(
+    constrained_dream,
+    dry(),
+    line(0, -1, 4 * s, 1),
+    a_mix=0.8,
+    b_mix=1.0,
+)
+```
+
+| Parameter | Meaning |
+|-----------|---------|
+| `stage_a` | Effect stage or preset selected at position `-1` |
+| `stage_b` | Effect stage or preset selected at position `1` |
+| `position` | Number or array expression; values are clipped to `[-1, 1]` |
+| `a_mix` | Optional linear-amplitude control for branch A; defaults to 1 |
+| `b_mix` | Optional linear-amplitude control for branch B; defaults to 1 |
+
+At position `0`, each branch has a weight of `0.5` before its mix control is
+applied. The crossfade is linear rather than equal-power, so two identical
+branches reconstruct the original level throughout the transition. Both
+branches always receive the same unmodified input, regardless of their order.
+`position`, `a_mix`, and `b_mix` may all be constants or array expressions.
+
+---
+
+## equalizer
+
+Splits audio into complementary frequency bands at ordered crossover
+frequencies, applies a decibel control to each band, and recombines them. Its
+arguments alternate between a cutoff frequency and the gain for the band below
+that cutoff, followed by one final gain for the highest band.
+
+```python
+# Suppress content below 180 Hz and above 3200 Hz.
+equalizer(180, -99, 3200, 0, -99)
+```
+
+The example has three bands: below 180 Hz at -99 dB, 180–3200 Hz at 0 dB,
+and above 3200 Hz at -99 dB. Cutoffs must be positive, strictly increasing,
+and below the output sample rate's Nyquist frequency. The optional `order`
+keyword controls the Butterworth crossover order and defaults to 2.
+
+Band gains accept constants or array expressions. This permits a fixed
+crossover layout to open or close over time without changing filter
+coefficients:
+
+```python
+equalizer(
+    180, line(0, -30, 4 * s, 0),
+    2800, 0,
+    line(0, -30, 4 * s, 0),
+)
+```
+
+With every band at 0 dB, the complementary bands reconstruct the original
+signal. Very low gains such as -99 dB are effectively silent but remain finite.
+
+---
+
 ## Other Effects
 
 TBD: Document additional effect functions as they are developed.

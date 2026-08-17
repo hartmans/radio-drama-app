@@ -5,6 +5,7 @@ import math
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 from typing import Callable, Mapping, Protocol, Sequence, TypeVar, runtime_checkable
 
@@ -15,7 +16,7 @@ from carthage.dependency_injection import AsyncInjectable, inject, inject_autokw
 from scipy.signal import butter, sosfiltfilt
 
 from .audio import normalize_audio_array, resample_audio
-from .expressions import ArrayExpression, eval_expression
+from .expressions import ArrayExpression, coerce_array_exp, eval_expression
 from .planning import PlanningNode
 
 
@@ -38,6 +39,54 @@ class _ComposableEffectStage:
 
     def __or__(self, other: EffectStage) -> EffectStage:
         return _compose_effect_stages(self, other)
+
+
+@dataclass(frozen=True, slots=True)
+class DryEffectStage(_ComposableEffectStage):
+    """Identity stage used as an unprocessed crossfade branch."""
+
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        del audio, sample_rate
+
+
+@dataclass(frozen=True, slots=True)
+class CrossfadeEffectStage(_ComposableEffectStage):
+    """Parallel stages mixed with frame-varying linear-amplitude controls."""
+
+    stage_a: EffectStage
+    stage_b: EffectStage
+    position: ArrayExpression
+    a_mix: ArrayExpression
+    b_mix: ArrayExpression
+
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        if audio.shape[0] == 0:
+            return
+        source = normalize_audio_array(audio)
+        branch_a = self._render_branch(self.stage_a, source, sample_rate)
+        branch_b = self._render_branch(self.stage_b, source, sample_rate)
+        position = np.clip(control_array(self.position, source.shape[0]), -1.0, 1.0)
+        a_weight = (np.float32(1.0) - position) * np.float32(0.5)
+        b_weight = (np.float32(1.0) + position) * np.float32(0.5)
+        a_weight *= control_array(self.a_mix, source.shape[0])
+        b_weight *= control_array(self.b_mix, source.shape[0])
+        source[...] = (
+            branch_a * _channel_control(a_weight, source)
+            + branch_b * _channel_control(b_weight, source)
+        )
+        _copy_back(audio, source)
+
+    @staticmethod
+    def _render_branch(
+        stage: EffectStage,
+        source: np.ndarray,
+        sample_rate: int,
+    ) -> np.ndarray:
+        if isinstance(stage, DryEffectStage):
+            return source
+        branch = np.array(source, copy=True)
+        stage.apply(branch, sample_rate=sample_rate)
+        return branch
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +231,27 @@ def ffmpeg_filter_stage(
     return FFmpegFilterEffectStage(filter_graph_factory)
 
 
+def control_array(value: ArrayExpression | Real, frame_count: int) -> np.ndarray:
+    """Expand one scalar or array expression to a float32 frame control."""
+
+    control = np.asarray(
+        coerce_array_exp(value).to_size(frame_count),
+        dtype=np.float32,
+    )
+    if control.shape != (frame_count,):
+        raise ValueError(
+            f"Control expression produced shape {control.shape!r}; "
+            f"expected {(frame_count,)!r}"
+        )
+    return control
+
+
+def _channel_control(control: np.ndarray, audio: np.ndarray) -> np.ndarray:
+    if audio.ndim == 1:
+        return control
+    return control[:, np.newaxis]
+
+
 def normalize_effect_chain_name(name: str) -> str:
     normalized_name = name.strip().lower()
     return _PRESET_ALIASES.get(normalized_name, normalized_name)
@@ -281,6 +351,109 @@ def _filtered_audio(
     normalized_cutoff = min(max(cutoff_hz / nyquist, 1e-5), 0.999)
     sos = butter(order, normalized_cutoff, btype=btype, output="sos")
     return normalize_audio_array(sosfiltfilt(sos, audio, axis=0))
+
+
+_DRY_STAGE = DryEffectStage()
+
+
+@effect_chain_function
+@register_effect_stage
+def dry() -> EffectStage:
+    """Return an identity stage for use as an unprocessed parallel branch."""
+
+    return _DRY_STAGE
+
+
+@effect_chain_function
+@register_effect_stage
+def crossfade(
+    stage_a: EffectStage,
+    stage_b: EffectStage,
+    position: ArrayExpression | Real,
+    *,
+    a_mix: ArrayExpression | Real = 1.0,
+    b_mix: ArrayExpression | Real = 1.0,
+) -> EffectStage:
+    """Linearly crossfade two stages that receive the same original input."""
+
+    return CrossfadeEffectStage(
+        stage_a=effect_chain(stage_a),
+        stage_b=effect_chain(stage_b),
+        position=coerce_array_exp(position),
+        a_mix=coerce_array_exp(a_mix),
+        b_mix=coerce_array_exp(b_mix),
+    )
+
+
+@effect_chain_function
+@register_effect_stage
+def equalizer(
+    *frequency_gain_values: object,
+    order: int = 2,
+) -> EffectStage:
+    """Split audio at ordered crossover frequencies and control each band in dB."""
+
+    if len(frequency_gain_values) < 3 or len(frequency_gain_values) % 2 == 0:
+        raise ValueError(
+            "equalizer requires cutoff/gain pairs followed by one high-band gain"
+        )
+    cutoff_values = frequency_gain_values[:-1:2]
+    if not all(isinstance(value, Real) for value in cutoff_values):
+        raise TypeError("equalizer cutoff frequencies must be numbers")
+    cutoffs_hz = tuple(float(value) for value in cutoff_values)
+    if any(cutoff <= 0.0 for cutoff in cutoffs_hz):
+        raise ValueError("equalizer cutoff frequencies must be positive")
+    if any(right <= left for left, right in zip(cutoffs_hz, cutoffs_hz[1:])):
+        raise ValueError("equalizer cutoff frequencies must be strictly increasing")
+    if order < 1:
+        raise ValueError("equalizer order must be positive")
+    gain_values = (*frequency_gain_values[1:-1:2], frequency_gain_values[-1])
+    gain_expressions = tuple(coerce_array_exp(value) for value in gain_values)
+
+    @scipy_signal_stage
+    def stage(audio: np.ndarray, sample_rate: int) -> None:
+        nyquist = sample_rate / 2.0
+        if cutoffs_hz[-1] >= nyquist:
+            raise ValueError(
+                f"equalizer cutoff {cutoffs_hz[-1]:g} Hz must be below "
+                f"the {nyquist:g} Hz Nyquist frequency"
+            )
+        band_gains = [
+            np.power(
+                np.float32(10.0),
+                control_array(expression, audio.shape[0]) / np.float32(20.0),
+            )
+            for expression in gain_expressions
+        ]
+        previous_low = _filtered_audio(
+            audio,
+            sample_rate,
+            btype="lowpass",
+            cutoff_hz=cutoffs_hz[0],
+            order=order,
+        )
+        rendered = previous_low * _channel_control(band_gains[0], audio)
+        for cutoff_hz, band_gain in zip(
+            cutoffs_hz[1:],
+            band_gains[1:-1],
+            strict=True,
+        ):
+            current_low = _filtered_audio(
+                audio,
+                sample_rate,
+                btype="lowpass",
+                cutoff_hz=cutoff_hz,
+                order=order,
+            )
+            rendered += (current_low - previous_low) * _channel_control(
+                band_gain,
+                audio,
+            )
+            previous_low = current_low
+        rendered += (audio - previous_low) * _channel_control(band_gains[-1], audio)
+        audio[...] = normalize_audio_array(rendered)
+
+    return stage
 
 
 @effect_chain_function

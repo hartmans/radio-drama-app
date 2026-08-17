@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 from collections import Counter
 from collections.abc import Iterable
 from math import gcd
@@ -207,7 +206,10 @@ class AudioPlan(PlanningNode):
             effect_chains = self.ainjector.injector.get_instance(EffectChainRegistry)
             effect_stage = eval_expression(
                 self.effect_expression,
-                effect_chain_variables(effect_chains.stages()),
+                {
+                    **effect_chain_variables(effect_chains.stages()),
+                    **variables,
+                },
                 effect_chain,
             )
             post_stage = effect_stage if post_stage is None else post_stage | effect_stage

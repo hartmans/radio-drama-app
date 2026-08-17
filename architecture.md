@@ -305,8 +305,10 @@ Current effects contract:
 * the fixed `master_loudnorm()` factory exposes the built-in mastering stage without accepting an authored FFmpeg graph; voice preprocessing remains internal
 * the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, and `|`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
+* `control_array(value, frame_count)` is the shared implementation utility for frame-varying effect controls; it coerces numbers and `ArrayExpression` objects to a one-dimensional `float32` array with exactly one value per frame, and is deliberately not registered as a document-visible effect-chain function
+* `dry()` is the identity stage used when a parallel processor needs the unmodified input, while `crossfade()` is the explicit parallel-processing primitive: both branches receive the same original input before their results are mixed
 * effect parameters ending in `_mix` are independent linear amplitude coefficients; decibel-valued level automation is expressed through `gain(...)`
-* render-time automation evaluates `gain` and `pan` attributes to array expressions before constructing ordinary effect stages in `radio_drama.effects`; those same stages may be used inside an effect-chain expression as `gain(line(...))` or `pan(line(...))`
+* render-time automation evaluates `gain` and `pan` attributes to array expressions before constructing ordinary effect stages in `radio_drama.effects`; node `effect` expressions receive the same render-time `natural_length`, `s`, `seconds`, and visible-mark variables, so those stages and other control-array parameters may use expressions such as `gain(line(...))`, `pan(line(...))`, and `crossfade(..., line(...))`
 * preset names are validated against the production's injected registry while processing audio attrs and are consumed later by an injectable `EffectMixer` using that same registry
 * the production master is also resolved through the production registry, so `<preset-map>` may replace `master`
 * unknown preset names are document errors attached to the originating audio node
