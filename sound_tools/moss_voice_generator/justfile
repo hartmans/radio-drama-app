@@ -1,0 +1,13 @@
+image := "localhost/moss-voice-generator:latest"
+audio_dir := justfile_directory()
+runtime_dir := env_var_or_default("XDG_RUNTIME_DIR", "/run/user/1000")
+
+build:
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ..
+
+# Download the MOSS model into the persistent cache. Run this once while online.
+download:
+    TMPDIR=/tmp podman run --rm --entrypoint /opt/omni/bin/python --device nvidia.com/gpu=all --network slirp4netns -e PYTHONPATH=/opt -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}} -c 'from moss_voice_generator import _ensure_backend; _ensure_backend()'
+
+run:
+    TMPDIR=/tmp podman run --rm -it --device nvidia.com/gpu=all --network none -e HF_HUB_OFFLINE=1 -e PULSE_SERVER=unix:{{runtime_dir}}/pulse/native -v {{runtime_dir}}/pulse/native:{{runtime_dir}}/pulse/native:Z -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}}

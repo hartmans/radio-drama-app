@@ -3,11 +3,11 @@ audio_dir := justfile_directory()
 runtime_dir := env_var_or_default("XDG_RUNTIME_DIR", "/run/user/1000")
 
 build:
-    podman build -f sound_tools/moss_soundeffect_v2/Containerfile -t {{image}} .
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ..
 
 # Download model weights into the persistent cache. Run this once while online.
 download:
-    podman run --rm --device nvidia.com/gpu=all --network slirp4netns -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}} -c 'from moss_soundeffect_v2 import _ensure_pipeline; _ensure_pipeline()'
+    TMPDIR=/tmp podman run --rm --entrypoint python3 --device nvidia.com/gpu=all --network slirp4netns -e PYTHONPATH=/opt -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}} -c 'from moss import _ensure_pipeline; _ensure_pipeline()'
 
 run:
-    podman run --rm -it --device nvidia.com/gpu=all --network none -e PULSE_SERVER=unix:{{runtime_dir}}/pulse/native -v {{runtime_dir}}/pulse/native:{{runtime_dir}}/pulse/native:Z -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}}
+    TMPDIR=/tmp podman run --rm -it --device nvidia.com/gpu=all --network none -e PULSE_SERVER=unix:{{runtime_dir}}/pulse/native -v {{runtime_dir}}/pulse/native:{{runtime_dir}}/pulse/native:Z -v /srv/ai/huggingface-cache:/models/huggingface:Z -v {{audio_dir}}:/audio:Z {{image}}

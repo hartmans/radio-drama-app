@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import sounddevice as sd
+import soundfile as sf
 import torch
 from moss_soundeffect_v2 import MossSoundEffectPipeline
 
@@ -50,7 +51,12 @@ def generate(prompt, output="moss_soundeffect.wav", *, seconds=10, num_inference
     if not output_path.is_absolute():
         output_path = OUTPUT_DIR / output_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pipeline.save_audio(audio, str(output_path))
+    # Upstream ``save_audio`` delegates to TorchCodec through torchaudio.  Some
+    # CUDA/FFmpeg combinations load the model but cannot load TorchCodec's
+    # native encoder; soundfile writes this already-decoded WAV without that
+    # optional encoder boundary.
+    waveform = audio[0].transpose(0, 1).float().cpu().numpy()
+    sf.write(output_path, waveform, pipeline.sample_rate)
     if play:
-        _play(audio[0].transpose(0, 1).float().cpu().numpy(), pipeline.sample_rate)
+        _play(waveform, pipeline.sample_rate)
     return output_path

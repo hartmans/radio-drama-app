@@ -3,11 +3,11 @@ audio_dir := justfile_directory()
 runtime_dir := env_var_or_default("XDG_RUNTIME_DIR", "/run/user/1000")
 
 build:
-    podman build -f sound_tools/genau/Containerfile -t {{image}} .
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ..
 
 # Download the GenAU project-scoped weights into /srv/ai/models/genau once while online.
 download:
-    podman run --rm --device nvidia.com/gpu=all --network slirp4netns -v /srv/ai/models:/models:Z -v {{audio_dir}}:/audio:Z {{image}} -c 'from genau import _ensure_model; _ensure_model("genau-l-full-hq-data")'
+    TMPDIR=/tmp podman run --rm --entrypoint python --device nvidia.com/gpu=all --network slirp4netns -e PYTHONPATH=/opt:/opt/GenAU/GenAU -v /srv/ai/models:/models:Z -v {{audio_dir}}:/audio:Z {{image}} -c 'from genau import _ensure_model; _ensure_model("genau-l-full-hq-data")'
 
 run:
-    podman run --rm -it --device nvidia.com/gpu=all --network none -e PULSE_SERVER=unix:{{runtime_dir}}/pulse/native -v {{runtime_dir}}/pulse/native:{{runtime_dir}}/pulse/native:Z -v /srv/ai/models:/models:Z -v {{audio_dir}}:/audio:Z {{image}}
+    TMPDIR=/tmp podman run --rm -it --device nvidia.com/gpu=all --network none -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -e PULSE_SERVER=unix:{{runtime_dir}}/pulse/native -v {{runtime_dir}}/pulse/native:{{runtime_dir}}/pulse/native:Z -v /srv/ai/models:/models:Z -v {{audio_dir}}:/audio:Z {{image}}

@@ -1,0 +1,52 @@
+diff --git a/GenAU/src/modules/fit/layers/rin_layers.py b/GenAU/src/modules/fit/layers/rin_layers.py
+index 3fc9ec0..9e263e5 100644
+--- a/GenAU/src/modules/fit/layers/rin_layers.py
++++ b/GenAU/src/modules/fit/layers/rin_layers.py
+@@ -9,9 +9,22 @@ from einops.layers.torch import Rearrange
+ import xformers
+ import xformers.ops
+ from xformers.ops import memory_efficient_attention
+-import xformers.components
+-import xformers.components.feedforward
+-from xformers.components.attention import ScaledDotProduct
+-from xformers.components.activations import Activation
++
++
++class ScaledDotProduct:
++    """Compatibility callable for the removed xFormers component API."""
++
++    def __call__(self, query, key, value):
++        return F.scaled_dot_product_attention(query, key, value)
++
++
++class XFormersMLP(nn.Sequential):
++    """Equivalent inference-only replacement for xformers.components MLP."""
++
++    def __init__(self, dim, dropout, mult, use_bias):
++        super().__init__(
++            nn.Linear(dim, int(dim * mult), bias=use_bias), nn.GELU(),
++            nn.Dropout(dropout), nn.Linear(int(dim * mult), dim, bias=use_bias),
++        )
+ 
+ from ...initializers.initializers import Initializer
+@@ -569,6 +582,6 @@ class XFormersFeedForward(nn.Module):
+         if exists(conditioning_channels):
+             raise Exception("Conditioning is not supported by XFormersFeedForward")
+ 
+-        self.net = xformers.components.feedforward.MLP(dim, drop_units, Activation.GeLU, mult, use_bias)
++        self.net = XFormersMLP(dim, drop_units, mult, use_bias)
+ 
+     def forward(self, x, conditioning_embeddings = None):
+diff --git a/GenAU/src/modules/clap/open_clip/factory.py b/GenAU/src/modules/clap/open_clip/factory.py
+index f6d329b..f8bcbf6 100755
+--- a/GenAU/src/modules/clap/open_clip/factory.py
++++ b/GenAU/src/modules/clap/open_clip/factory.py
+@@ -54,7 +54,7 @@ _rescan_model_configs()  # initial populate of model config registry
+ 
+ 
+ def load_state_dict(checkpoint_path: str, map_location="cpu", skip_params=True):
+-    checkpoint = torch.load(checkpoint_path, map_location=map_location)
++    checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+         state_dict = checkpoint["state_dict"]
+     else:

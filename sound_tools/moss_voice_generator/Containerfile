@@ -1,0 +1,20 @@
+FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libportaudio2 libsndfile1 pulseaudio-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv pip install --python /opt/omni/bin/python --no-cache sounddevice==0.5.5 transformers==5.14.1
+
+# PortAudio uses this ALSA plugin to reach the mounted PulseAudio socket.
+RUN apt-get update && apt-get install -y --no-install-recommends libasound2-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY moss_voice_generator/moss_voice_generator.py /opt/moss_voice_generator.py
+
+ENV HF_HOME=/models/huggingface \
+    PYTHONUNBUFFERED=1 \
+    MOSS_VOICE_GENERATOR_MODEL=OpenMOSS-Team/MOSS-VoiceGenerator
+
+VOLUME ["/models", "/audio"]
+WORKDIR /audio
+ENTRYPOINT ["/opt/omni/bin/python", "-i", "/opt/moss_voice_generator.py"]

@@ -12,12 +12,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m pip install --break-system-packages --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
         torch==2.9.0+cu128 torchaudio==2.9.0+cu128 torchvision==0.24.0+cu128 \
-        sounddevice==0.5.5
+        torchcodec==0.8.0 sounddevice==0.5.5
 
 RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS.git /opt/MOSS-TTS \
     && python3 -m pip install --break-system-packages --no-cache-dir /opt/MOSS-TTS/moss_soundeffect_v2
 
-COPY sound_tools/moss_soundeffect_v2/moss.py /opt/moss.py
+# TorchCodec delegates WAV encoding to a supported FFmpeg runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# PortAudio reaches the mounted PulseAudio socket through ALSA's pulse plugin.
+RUN apt-get update && apt-get install -y --no-install-recommends libasound2-plugins \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY moss_soundeffect_v2/moss.py /opt/moss.py
 
 VOLUME ["/models", "/audio"]
 WORKDIR /audio
