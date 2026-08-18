@@ -1,0 +1,24 @@
+FROM docker.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/models/huggingface \
+    PYTHONUNBUFFERED=1 \
+    TORCHDYNAMO_DISABLE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git python3 python3-pip python3-venv libsndfile1 libportaudio2 \
+        pulseaudio-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.9.0+cu128 torchaudio==2.9.0+cu128 torchvision==0.24.0+cu128 \
+        sounddevice==0.5.5
+
+RUN git clone --depth 1 https://github.com/OpenMOSS/MOSS-TTS.git /opt/MOSS-TTS \
+    && python3 -m pip install --break-system-packages --no-cache-dir /opt/MOSS-TTS/moss_soundeffect_v2
+
+COPY sound_tools/moss_soundeffect_v2/moss.py /opt/moss.py
+
+VOLUME ["/models", "/audio"]
+WORKDIR /audio
+ENTRYPOINT ["python3", "-i", "/opt/moss.py"]

@@ -210,6 +210,23 @@ Current resource contract:
 
 The important boundary is that plans create semantic requests and resources fulfill them. Higher-level planning code should not embed model-specific batching or loading mechanics.
 
+## Interactive sound tools
+
+`sound_tools/moss_soundeffect_v2` and `sound_tools/genau` are standalone,
+containerized text-to-audio tools for authoring sound effects and ambient
+soundscapes.  Each image provides an interactive Python helper whose
+`generate()` function accepts a prompt and model-native generation options,
+writes a WAV below the `/audio` bind mount, then makes a best-effort attempt
+to play it.  Playback failure does not affect generation or the saved file.
+
+The images keep their incompatible model stacks isolated from the radio-drama
+application and from each other.  Model state is persistent only through the
+`/models` bind mount: MOSS uses `/models/huggingface`, while GenAU uses the
+project-scoped `/models/genau` directory (and `/models/huggingface` for its
+Hugging Face dependencies).  Their normal interactive run targets use
+`--network=none`; explicit `download` targets are the opt-in networked step
+that populates those caches before offline use.
+
 ## Rendering layer
 
 `RenderResult` is the common audio result type for renderable plans.
