@@ -13,6 +13,10 @@ model and Vocos vocoder have been downloaded. Cross-fading defaults to zero at
 this layer because each call produces exactly one authored line and the host
 owns later composition.
 
+F5-TTS limits reference audio to 12 seconds. For longer voices, the adapter
+uses F5's processed reference and trims the supplied transcript by the same
+word-duration proportion so the conditioning audio and text remain aligned.
+
 Build and download from the repository root:
 
 ```console

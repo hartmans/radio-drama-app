@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -19,6 +20,17 @@ REPOSITORY = "SWivid/F5-TTS"
 CHECKPOINT_FILE = "F5TTS_v1_Base/model_1250000.safetensors"
 VOCAB_FILE = "F5TTS_v1_Base/vocab.txt"
 VOCODER_REPOSITORY = "charactr/vocos-mel-24khz"
+
+
+def _trim_transcript(transcript: str, retained_fraction: float) -> str:
+    """Keep the word prefix corresponding to F5's retained reference audio."""
+    if retained_fraction >= 0.995:
+        return transcript
+    words = re.findall(r"\S+", transcript)
+    retained_words = max(1, round(len(words) * retained_fraction))
+    prefix = " ".join(words[:retained_words])
+    sentence_end = max(prefix.rfind(mark) for mark in ".!?")
+    return prefix[: sentence_end + 1] if sentence_end >= 0 else prefix
 
 
 def _environment_flag(name: str, default: bool) -> bool:
@@ -81,9 +93,12 @@ class F5TtsEngine:
 
     def synthesize_line(self, line: Mapping[str, Any]):
         speaker = line["speaker"]
+        ref_file, ref_text = self.prepare_reference(
+            str(speaker["voice_path"]), str(speaker["transcript"])
+        )
         waveform, sample_rate, _spectrogram = self.load_model().infer(
-            ref_file=str(speaker["voice_path"]),
-            ref_text=str(speaker["transcript"]),
+            ref_file=ref_file,
+            ref_text=ref_text,
             gen_text=str(line["spoken_text"]),
             target_rms=float(os.environ.get("F5_TTS_TARGET_RMS", "0.1")),
             cross_fade_duration=float(
@@ -97,6 +112,26 @@ class F5TtsEngine:
             speed=float(os.environ.get("F5_TTS_SPEED", "1.0")),
         )
         return waveform, sample_rate
+
+    @staticmethod
+    def prepare_reference(ref_file: str, transcript: str) -> tuple[str, str]:
+        """Apply F5's reference clipping and keep its transcript aligned.
+
+        Upstream clips audio longer than twelve seconds but otherwise retains
+        the complete caller-supplied transcript. That mismatched conditioning
+        can collapse generated duration, so trim the transcript in proportion
+        to the audio that upstream retained.
+        """
+        import soundfile
+        from f5_tts.infer.utils_infer import preprocess_ref_audio_text
+
+        original_duration = soundfile.info(ref_file).duration
+        processed_file, _ = preprocess_ref_audio_text(
+            ref_file, transcript, show_info=lambda _message: None
+        )
+        processed_duration = soundfile.info(processed_file).duration
+        retained_fraction = min(1.0, processed_duration / original_duration)
+        return processed_file, _trim_transcript(transcript, retained_fraction)
 
     @staticmethod
     def write_audio(path, waveform, sample_rate: int) -> None:

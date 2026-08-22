@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from radio_drama.proxy import load_proxy_tts_configs
-from tts_engines.f5_tts.engine import F5TtsEngine, MODEL
+from tts_engines.f5_tts.engine import F5TtsEngine, MODEL, _trim_transcript
 
 
 def _request() -> dict:
@@ -57,6 +57,7 @@ def test_f5_passes_reference_transcript_and_generation_controls(monkeypatch):
 
     engine = F5TtsEngine()
     engine.model = FakeModel()
+    monkeypatch.setattr(engine, "prepare_reference", lambda path, text: (path, text))
     waveform, sample_rate = engine.synthesize_line(_request()["dialogue_contents"][0])
 
     assert waveform.shape == (24_000,)
@@ -65,6 +66,20 @@ def test_f5_passes_reference_transcript_and_generation_controls(monkeypatch):
     assert seen["ref_text"] == "Reference words."
     assert seen["gen_text"] == "Hello there."
     assert seen["cross_fade_duration"] == 0.0
+
+
+def test_trim_transcript_leaves_unclipped_reference_unchanged():
+    transcript = "One two three four."
+    assert _trim_transcript(transcript, 1.0) == transcript
+
+
+def test_trim_transcript_keeps_matching_word_prefix():
+    assert _trim_transcript("one two three four five", 0.4) == "one two"
+
+
+def test_trim_transcript_prefers_complete_sentence():
+    transcript = "One two. Three four five six. Seven eight."
+    assert _trim_transcript(transcript, 0.6) == "One two."
 
 
 def test_f5_render_batch_uses_shared_line_assembly(tmp_path, monkeypatch):
