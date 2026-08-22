@@ -152,7 +152,7 @@ class HiggsTtsEngine:
         try:
             if work:
                 self.load_model()
-            batch_size = int(os.environ.get("HIGGS_BATCH_SIZE", "16"))
+            batch_size = int(os.environ.get("HIGGS_BATCH_SIZE", "1"))
             if batch_size < 1:
                 raise ValueError("HIGGS_BATCH_SIZE must be at least 1")
             for start in range(0, len(work), batch_size):

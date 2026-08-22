@@ -13,7 +13,7 @@ and that transcript to Higgs voice cloning.
 Dialogue lines remain independent synthesis items. The Transformers port's
 autoregressive decoder currently accepts one item at a time, so a bounded
 protocol batch is generated serially on one resident model. `HIGGS_BATCH_SIZE`
-(default `16`) controls how much pending line work the adapter stages at once;
+(default `1`) controls how much pending line work the adapter stages at once;
 it is a forward-compatible boundary rather than GPU-continuous batching.
 
 The language model runs in bfloat16 on CUDA. The separate Higgs audio tokenizer
