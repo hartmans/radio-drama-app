@@ -1,0 +1,9 @@
+image := "localhost/radio-drama-f5-tts:latest"
+cache := env_var_or_default("F5_TTS_HF_CACHE", "/srv/ai/huggingface-cache")
+
+build:
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ../..
+
+# Download the F5TTS v1 Base checkpoint, vocabulary, and Vocos vocoder.
+download:
+    TMPDIR=/tmp podman run --rm --entrypoint python3 --network slirp4netns -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -e PYTHONPATH=/opt -v {{cache}}:/models/huggingface:Z {{image}} -c 'from f5_tts_engine import download_models; download_models()'

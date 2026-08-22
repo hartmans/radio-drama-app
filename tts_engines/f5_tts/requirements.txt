@@ -1,0 +1,4 @@
+# Python runtime pins and direct inference dependencies mirrored by Containerfile.
+f5-tts @ git+https://github.com/SWivid/F5-TTS.git@9c614e9657089213efc6a7421b30630be138a3f5
+torch==2.9.0
+torchaudio==2.9.0

@@ -1,0 +1,36 @@
+FROM docker.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG F5_TTS_COMMIT=9c614e9657089213efc6a7421b30630be138a3f5
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg git libsndfile1 python3 python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone https://github.com/SWivid/F5-TTS.git /opt/F5-TTS \
+ && git -C /opt/F5-TTS checkout "$F5_TTS_COMMIT" \
+ && python3 -m pip install --break-system-packages --no-cache-dir \
+      --extra-index-url https://download.pytorch.org/whl/cu128 \
+      torch==2.9.0+cu128 torchaudio==2.9.0+cu128 \
+ && python3 -m pip install --break-system-packages --no-cache-dir --no-deps /opt/F5-TTS \
+ && python3 -m pip install --break-system-packages --no-cache-dir \
+      accelerate cached_path ema_pytorch hydra-core librosa matplotlib pydub \
+      pypinyin rjieba safetensors soundfile tomli torchdiffeq tqdm \
+      transformers transformers_stream_generator unidecode vocos \
+      'x_transformers>=1.31.14'
+
+# The package imports its trainer and dataset modules from f5_tts.model even
+# for inference, so their import-time dependencies remain required.
+RUN python3 -m pip install --break-system-packages --no-cache-dir datasets wandb
+
+COPY radio_drama_tts_container /opt/radio_drama_tts_container
+COPY tts_engines/f5_tts/engine.py /opt/f5_tts_engine.py
+
+ENV PYTHONPATH=/opt \
+    HF_HOME=/models/huggingface \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    F5_TTS_DEVICE=cuda \
+    F5_TTS_LOCAL_FILES_ONLY=true
+
+VOLUME ["/models/huggingface"]
+ENTRYPOINT ["python3", "/opt/f5_tts_engine.py"]

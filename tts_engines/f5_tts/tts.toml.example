@@ -1,0 +1,14 @@
+# Build and populate the shared cache from the repository root:
+# just -f tts_engines/f5_tts/justfile build
+# just -f tts_engines/f5_tts/justfile download
+
+[tts.f5]
+image = "localhost/radio-drama-f5-tts:latest"
+network = "none"
+devices = ["nvidia.com/gpu=all"]
+ipc = "host"
+
+[[tts.f5.mounts]]
+source = "/srv/ai/huggingface-cache"
+target = "/models/huggingface"
+mode = "rw"
