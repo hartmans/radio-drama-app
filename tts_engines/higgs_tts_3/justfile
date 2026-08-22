@@ -1,0 +1,9 @@
+image := "localhost/radio-drama-higgs-tts-3:latest"
+cache := env_var_or_default("HIGGS_HF_CACHE", "/srv/ai/huggingface-cache")
+
+build:
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ../..
+
+# Download both the language-model and fp32 audio-tokenizer checkpoints.
+download:
+    TMPDIR=/tmp podman run --rm --entrypoint python3 --network slirp4netns -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -e PYTHONPATH=/opt -v {{cache}}:/models/huggingface:Z {{image}} -c 'from higgs_tts_3_engine import download_models; download_models()'

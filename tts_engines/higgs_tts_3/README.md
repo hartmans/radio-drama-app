@@ -1,39 +1,25 @@
 # Higgs TTS 3 proxy engine
 
-This engine maps radio-drama proxy requests to the OpenAI-compatible speech
-API provided by SGLang-Omni for `bosonai/higgs-tts-3-4b`. Each dialogue line is
-synthesized with its resolved speaker reference and the returned WAV segments
-are concatenated into one script artifact in `/cache`.
+This engine runs `multimodalart/higgs-audio-v3-tts-4b-transformers` directly
+through Transformers. Each dialogue line is synthesized with its resolved
+speaker reference and the returned WAV segments are concatenated into one
+script artifact in `/cache`. There is no auxiliary inference server.
 
 The engine advertises the proxy `needs_transcript` capability. The host then
 uses its shared, cached reference ASR resource to enrich each speaker reference
 before rendering. The adapter supplies both the mounted reference audio path
 and that transcript to Higgs voice cloning.
 
-Dialogue lines remain independent synthesis items. For each bounded group, the
-adapter submits concurrent requests to SGLang-Omni's standard
-`/v1/audio/speech` endpoint, allowing its continuous scheduler to batch model
-execution through the officially supported API. Set `HIGGS_BATCH_SIZE` to
-control the maximum concurrency; the default is `16`.
+Dialogue lines remain independent synthesis items. The Transformers port's
+autoregressive decoder currently accepts one item at a time, so a bounded
+protocol batch is generated serially on one resident model. `HIGGS_BATCH_SIZE`
+(default `16`) controls how much pending line work the adapter stages at once;
+it is a forward-compatible boundary rather than GPU-continuous batching.
 
-Higgs can occasionally return an utterance with a pathological high-amplitude
-onset. The adapter detects an initial 100 ms whose RMS is both at least `0.25`
-of full scale and at least three times the following 400 ms. It retries only
-the affected lines, concurrently within each retry round, up to two times. The
-first clean result is used; if all attempts are affected, the least severe
-result is retained. `HIGGS_ONSET_RETRIES` changes the retry count (use `0` to
-disable retries), while `HIGGS_ONSET_RMS_THRESHOLD` and
-`HIGGS_ONSET_RATIO_THRESHOLD` tune the two detection gates. Rejected attempts
-are reported on standard error so the behavior can be monitored.
-
-Set `HIGGS_INITIAL_CODEC_CHUNK_FRAMES` to pass SGLang-Omni's
-`initial_codec_chunk_frames` option to Higgs. When it is unset, the adapter
-leaves the option out and SGLang-Omni applies its current default. This is an
-engine tuning and diagnostic option: changing the first codec decode chunk can
-affect time to first audio and the quality of the beginning of an utterance.
-With the current Higgs pipeline, unset or `0` uses the full first codec chunk;
-positive values below the steady chunk size request an earlier, smaller first
-decode. Values at or above the steady size are clamped to the steady size.
+The language model runs in bfloat16 on CUDA. The separate Higgs audio tokenizer
+used for reference encoding and waveform decoding is eagerly loaded and forced
+to float32; startup fails if any of its parameters use another dtype. This is
+intentional because the codec's decode is unstable in bfloat16.
 
 For boundary debugging, set `HIGGS_KEEP_LINE_WAVS=1`. The adapter will retain
 the exact WAV returned for every line alongside the concatenated cache artifact
@@ -41,28 +27,23 @@ as `<artifact>.line-0.wav`, `<artifact>.line-1.wav`, and so on. These files are
 normally removed after concatenation. Batch operation does not alter their
 meaning: each retained file is still one batch item's unmodified response.
 
-The image is self-contained except for the model checkpoint. It is a thin
-derivative of a digest-pinned official `lmsysorg/sglang-omni` image and uses
-that image's preinstalled `/opt/omni` runtime without resolving or replacing
-any Python, CUDA, or kernel packages. At container startup, the engine
-entrypoint launches `sgl-omni serve` inside the same
-container on the first render request and waits for that local server to become
-ready. The server permits local media reads only under `/voices`, where the
-host mounts its read-only prepared speaker references. The radio-drama
-JSON-lines handshake happens first, allowing the host to
-finish advertised setup such as reference ASR before model loading begins. The
-engine does not require or connect to an externally managed inference server.
+The image is built directly on NVIDIA's CUDA 12.8 base and installs pinned
+PyTorch, Torchaudio, SoundFile, and Transformers releases. SoundFile handles
+WAV I/O without making it depend on Torchaudio's optional TorchCodec backend.
+The image contains no SGLang runtime.
+The radio-drama JSON-lines handshake happens before lazy model loading,
+allowing the host to finish advertised setup such as reference ASR before GPU
+allocation begins.
 
-The checkpoint is downloaded by the in-container Hugging Face client on first
-use and stored under `/models/huggingface`, which is declared as a Containerfile
-volume. The sample configuration bind-mounts a persistent host directory at
-that location so subsequent containers reuse the downloaded checkpoint.
+Both checkpoints live under `/models/huggingface`, which is declared as a
+Containerfile volume. Runtime is offline by default. The sample configuration
+bind-mounts a persistent host directory at that location.
 
-Build from the repository root:
+Build and populate the cache from the repository root:
 
 ```console
-TMPDIR=/tmp podman build -f tts_engines/higgs_tts_3/Containerfile \
-  -t localhost/radio-drama-higgs-tts-3 .
+just -f tts_engines/higgs_tts_3/justfile build
+just -f tts_engines/higgs_tts_3/justfile download
 ```
 
 The base image and resolved CUDA dependencies are large. Set `TMPDIR` to a
@@ -72,12 +53,11 @@ enough room for the unpacked layers.
 
 Copy `tts.toml.example` to `$XDG_CONFIG_HOME/radio-drama/tts.toml`, then select
 the engine with `<script tts="higgs">`. The sample uses Podman's NVIDIA CDI
-device name, host IPC, host networking for the initial checkpoint download,
-and a host Hugging Face cache bind mount. Create that host cache directory
-before the first run.
+device name, host IPC, no runtime network, and a host Hugging Face cache bind
+mount. Create that host cache directory before the first download.
 Adjust the device name if the host's Podman/NVIDIA setup exposes a different
-CDI device. Once the checkpoint is populated, the network policy can be made
-more restrictive if the local runtime does not need network access.
+CDI device. The actual application launches the image from `tts.toml`; it does
+not invoke the justfile.
 
 ## Speech controls
 

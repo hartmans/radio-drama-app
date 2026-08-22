@@ -1,12 +1,26 @@
-FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+FROM docker.io/nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libsndfile1 python3 python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m pip install --break-system-packages --no-cache-dir \
+      --extra-index-url https://download.pytorch.org/whl/cu128 \
+      torch==2.9.0+cu128 torchaudio==2.9.0+cu128 transformers==5.14.1 \
+      soundfile==0.13.1
 
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
 COPY tts_engines/higgs_tts_3/engine.py /opt/higgs_tts_3_engine.py
 
-ENV PATH=/opt/omni/bin:$PATH \
-    PYTHONPATH=/opt \
+ENV PYTHONPATH=/opt \
     HF_HOME=/models/huggingface \
-    HIGGS_MODEL=bosonai/higgs-tts-3-4b
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HIGGS_MODEL=multimodalart/higgs-audio-v3-tts-4b-transformers \
+    HIGGS_AUDIO_TOKENIZER=bosonai/higgs-audio-v2-tokenizer \
+    HIGGS_DEVICE=cuda \
+    HIGGS_LOCAL_FILES_ONLY=true
 
 VOLUME ["/models/huggingface"]
-ENTRYPOINT ["/opt/omni/bin/python", "/opt/higgs_tts_3_engine.py"]
+ENTRYPOINT ["python3", "/opt/higgs_tts_3_engine.py"]

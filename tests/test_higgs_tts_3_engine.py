@@ -1,286 +1,169 @@
 from __future__ import annotations
 
-import json
-import io
-import threading
+import types
 import wave
 from pathlib import Path
+
+import numpy as np
 
 from radio_drama.proxy import load_proxy_tts_configs
 from tts_engines.higgs_tts_3.engine import (
     CONTROL_TAGS,
     HiggsTtsEngine,
     expand_control_expressions,
-    onset_failure_score,
 )
 
 
-def _write_wav(path: Path, frames: bytes) -> None:
-    with wave.open(str(path), "wb") as output:
+def _write_wav(path: str, samples, sample_rate: int) -> None:
+    values = np.asarray(samples).reshape(-1)
+    with wave.open(path, "wb") as output:
         output.setnchannels(1)
         output.setsampwidth(2)
-        output.setframerate(24_000)
-        output.writeframes(frames)
+        output.setframerate(sample_rate)
+        output.writeframes((values * 32767).astype("<i2").tobytes())
 
 
-def _wav_bytes(frames: bytes) -> bytes:
-    stream = io.BytesIO()
-    with wave.open(stream, "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(24_000)
-        output.writeframes(frames)
-    return stream.getvalue()
-
-
-def _constant_wav(*sections: tuple[int, int]) -> bytes:
-    frames = b"".join(
-        int(amplitude).to_bytes(2, "little", signed=True) * frame_count
-        for amplitude, frame_count in sections
-    )
-    return _wav_bytes(frames)
+def _request(words: tuple[str, ...]) -> dict:
+    speaker = {
+        "authored_name": "Alice",
+        "voice_path": "/voices/0.wav",
+        "transcript": "Reference.",
+    }
+    return {
+        "first_words": " ".join(words),
+        "dialogue_contents": [
+            {"type": "line", "speaker": speaker, "spoken_text": word}
+            for word in words
+        ],
+    }
 
 
 def test_higgs_sample_proxy_config_enables_checkpoint_cache_and_gpu():
-    sample = (
-        Path(__file__).resolve().parents[1]
-        / "tts_engines"
-        / "higgs_tts_3"
-        / "tts.toml.example"
-    )
-
+    sample = Path(__file__).resolve().parents[1] / "tts_engines/higgs_tts_3/tts.toml.example"
     config = load_proxy_tts_configs(sample)["higgs"]
 
     assert config.devices == ("nvidia.com/gpu=all",)
-    assert config.ipc == "host"
-    assert config.shm_size is None
+    assert config.network == "none"
     assert config.mounts[0].target == "/models/huggingface"
     assert not config.mounts[0].read_only
 
 
-def test_higgs_containerfile_installs_and_launches_local_sglang():
+def test_higgs_containerfile_uses_transformers_and_offline_cache():
     containerfile = (
-        Path(__file__).resolve().parents[1]
-        / "tts_engines"
-        / "higgs_tts_3"
-        / "Containerfile"
+        Path(__file__).resolve().parents[1] / "tts_engines/higgs_tts_3/Containerfile"
     ).read_text(encoding="utf-8")
 
-    assert "FROM docker.io/lmsysorg/sglang-omni@sha256:" in containerfile
-    assert "uv pip install" not in containerfile
-    assert "PATH=/opt/omni/bin:$PATH" in containerfile
-    assert 'VOLUME ["/models/huggingface"]' in containerfile
-    assert 'ENTRYPOINT ["/opt/omni/bin/python", "/opt/higgs_tts_3_engine.py"]' in containerfile
-
-
-def test_higgs_server_limits_local_media_to_prepared_voice_mounts():
-    engine_source = (
-        Path(__file__).resolve().parents[1]
-        / "tts_engines"
-        / "higgs_tts_3"
-        / "engine.py"
-    ).read_text(encoding="utf-8")
-
-    assert '"--allowed_local_media_path",\n        "/voices",' in engine_source
+    assert "transformers==5.14.1" in containerfile
+    assert "lmsysorg/sglang" not in containerfile
+    assert "HF_HUB_OFFLINE=1" in containerfile
+    assert "multimodalart/higgs-audio-v3-tts-4b-transformers" in containerfile
 
 
 def test_higgs_control_expression_catalog_and_unknown_brackets():
     assert sum(map(len, CONTROL_TAGS.values())) == 43
     assert expand_control_expressions(
         "[style:whispering][sfx:sigh]Ahh. [unknown:thing] [aside]"
-    ) == (
-        "<|style:whispering|><|sfx:sigh|>Ahh. [unknown:thing] [aside]"
-    )
+    ) == "<|style:whispering|><|sfx:sigh|>Ahh. [unknown:thing] [aside]"
 
 
-def test_higgs_render_batch_batches_lines_and_can_retain_raw_wavs(
-    tmp_path: Path, monkeypatch
+def test_higgs_synthesize_line_passes_cloning_and_sampling_arguments(monkeypatch):
+    seen = {}
+
+    class FakeModel:
+        def generate_speech(self, text, tokenizer, **kwargs):
+            seen.update(text=text, tokenizer=tokenizer, **kwargs)
+            return np.zeros(12)
+
+    engine = HiggsTtsEngine()
+    engine.model = FakeModel()
+    engine.tokenizer = "tokenizer"
+    engine._reference_audio["/voices/0.wav"] = ("waveform", 48_000)
+
+    result = engine.synthesize_line(_request(("[style:whispering]Hello.",))["dialogue_contents"][0])
+
+    assert result.shape == (12,)
+    assert seen["text"] == "<|style:whispering|>Hello."
+    assert seen["reference_audio"] == "waveform"
+    assert seen["reference_sample_rate"] == 48_000
+    assert seen["reference_text"] == "Reference."
+    assert seen["temperature"] == 0.8
+    assert seen["top_p"] == 1.0
+    assert seen["top_k"] == 50
+
+
+def test_higgs_render_batch_bounds_work_and_uses_shared_line_assembly(
+    tmp_path, monkeypatch
 ):
-    speaker = {
-        "authored_name": "Alice",
-        "voice_path": "/voices/0.wav",
-        "transcript": "Reference.",
-    }
-    requests = [
-        {
-            "first_words": word,
-            "dialogue_contents": [
-                {"type": "line", "speaker": speaker, "spoken_text": f"{word}."}
-            ],
-        }
-        for word in ("One", "Two")
-    ]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HIGGS_BATCH_SIZE", "2")
     seen = []
 
     class FakeEngine(HiggsTtsEngine):
-        def ensure_server(self):
-            pass
+        def load_model(self):
+            return object(), object()
 
         def synthesize_batch(self, lines):
             seen.append([line["spoken_text"] for line in lines])
-            return [_wav_bytes(b"\x01\x00") for _ in lines]
+            return [np.zeros(2_400, dtype=np.float32) for _ in lines]
 
+        @staticmethod
+        def write_audio(path, audio):
+            _write_wav(str(path), audio, 24_000)
+
+    results = FakeEngine().render_batch([_request(("One", "Two", "Three"))])
+
+    assert seen == [["One", "Two"], ["Three"]]
+    assert results[0]["dialogue_line_start_positions"] == [0.0, 0.1, 0.2]
+    assert not list(tmp_path.glob("*.line-*.wav"))
+
+
+def test_higgs_can_retain_line_wavs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("HIGGS_KEEP_LINE_WAVS", "true")
 
-    results = FakeEngine().render_batch(requests)
-
-    assert seen == [["One.", "Two."]]
-    assert len(results) == 2
-    assert sorted(path.name for path in tmp_path.glob("*.line-0.wav")) == [
-        result["wav"].removesuffix(".wav") + ".line-0.wav" for result in results
-    ]
-
-
-def test_higgs_render_batch_honors_batch_size_and_removes_line_wavs(
-    tmp_path: Path, monkeypatch
-):
-    request = {
-        "first_words": "One two three",
-        "dialogue_contents": [
-            {
-                "type": "line",
-                "speaker": {
-                    "voice_path": "/voices/0.wav",
-                    "transcript": "Reference.",
-                },
-                "spoken_text": word,
-            }
-            for word in ("One", "Two", "Three")
-        ],
-    }
-    batch_lengths = []
-
     class FakeEngine(HiggsTtsEngine):
-        def ensure_server(self):
-            pass
+        def load_model(self):
+            return object(), object()
 
         def synthesize_batch(self, lines):
-            batch_lengths.append(len(lines))
-            return [_wav_bytes(b"\x01\x00") for _ in lines]
+            return [np.zeros(10, dtype=np.float32) for _ in lines]
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("HIGGS_BATCH_SIZE", "2")
+        @staticmethod
+        def write_audio(path, audio):
+            _write_wav(str(path), audio, 24_000)
 
-    FakeEngine().render_batch([request])
+    FakeEngine().render_batch([_request(("One",))])
 
-    assert batch_lengths == [2, 1]
-    assert list(tmp_path.glob("*.line-*.wav")) == []
+    assert len(list(tmp_path.glob("*.line-0.wav"))) == 1
 
 
-def test_higgs_synthesis_batch_uses_concurrent_standard_requests(monkeypatch):
-    captured = []
-    barrier = threading.Barrier(2)
+def test_higgs_load_model_forces_audio_codec_float32(monkeypatch):
+    import torch
 
-    class Response:
-        def __init__(self, wav):
-            self.wav = wav
+    codec = torch.nn.Linear(2, 2).to(dtype=torch.bfloat16)
 
-        def __enter__(self):
+    class FakeModel:
+        config = types.SimpleNamespace(audio_tokenizer_id=None)
+
+        def to(self, *_args, **_kwargs):
             return self
 
-        def __exit__(self, *args):
-            return False
-
-        def read(self):
-            return self.wav
-
-    def fake_urlopen(request):
-        payload = json.loads(request.data)
-        captured.append((request.full_url, payload))
-        barrier.wait(timeout=1)
-        return Response(_wav_bytes(payload["input"].encode("ascii")))
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    lines = [
-        {
-            "spoken_text": text,
-            "speaker": {
-                "voice_path": "/voices/0.wav",
-                "transcript": "Reference.",
-            },
-        }
-        for text in ("A.", "B.")
-    ]
-
-    result = HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch(lines)
-
-    assert {url for url, _ in captured} == {"http://higgs.test/v1/audio/speech"}
-    assert {payload["input"] for _, payload in captured} == {"A.", "B."}
-    assert result == [_wav_bytes(b"A."), _wav_bytes(b"B.")]
-
-
-def test_higgs_synthesis_batch_can_set_initial_codec_chunk_frames(monkeypatch):
-    captured = {}
-    wav = _wav_bytes(b"\x01\x00")
-
-    class Response:
-        def __enter__(self):
+        def eval(self):
             return self
 
-        def __exit__(self, *args):
-            return False
+        def get_audio_codec(self):
+            return codec
 
-        def read(self):
-            return wav
+    fake_transformers = types.SimpleNamespace(
+        AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *_a, **_k: object()),
+        AutoModelForCausalLM=types.SimpleNamespace(
+            from_pretrained=lambda *_a, **_k: FakeModel()
+        ),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "transformers", fake_transformers)
+    monkeypatch.setenv("HIGGS_DEVICE", "cpu")
 
-    def fake_urlopen(request):
-        captured["payload"] = json.loads(request.data)
-        return Response()
+    engine = HiggsTtsEngine()
+    engine.load_model()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setenv("HIGGS_INITIAL_CODEC_CHUNK_FRAMES", "8")
-    line = {
-        "spoken_text": "Hello.",
-        "speaker": {
-            "voice_path": "/voices/0.wav",
-            "transcript": "Reference.",
-        },
-    }
-
-    HiggsTtsEngine(base_url="http://higgs.test").synthesize_batch([line])
-
-    assert captured["payload"]["initial_codec_chunk_frames"] == 8
-
-
-def test_higgs_onset_check_distinguishes_burst_from_loud_delivery():
-    pathological = _constant_wav((16_000, 2_400), (1_000, 9_600))
-    consistently_loud = _constant_wav((16_000, 2_400), (12_000, 9_600))
-    quiet_start = _constant_wav((2_000, 2_400), (1_000, 9_600))
-
-    assert onset_failure_score(pathological) > 0
-    assert onset_failure_score(consistently_loud) == 0
-    assert onset_failure_score(quiet_start) == 0
-
-
-def test_higgs_retries_only_bad_onsets_and_preserves_batch_order():
-    bad = _constant_wav((16_000, 2_400), (1_000, 9_600))
-    good_a = _constant_wav((1_000, 2_400), (2_000, 9_600))
-    good_b = _constant_wav((2_000, 2_400), (2_000, 9_600))
-    calls = []
-
-    class FakeEngine(HiggsTtsEngine):
-        def _request_batch(self, lines):
-            calls.append([line["spoken_text"] for line in lines])
-            if len(calls) == 1:
-                return [bad, good_b]
-            return [good_a]
-
-    lines = [{"spoken_text": "Bad"}, {"spoken_text": "Good"}]
-
-    assert FakeEngine().synthesize_batch(lines) == [good_a, good_b]
-    assert calls == [["Bad", "Good"], ["Bad"]]
-
-
-def test_higgs_returns_least_bad_generation_after_retry_limit(monkeypatch):
-    worst = _constant_wav((24_000, 2_400), (1_000, 9_600))
-    better = _constant_wav((12_000, 2_400), (1_000, 9_600))
-    calls = iter(([worst], [better], [worst]))
-
-    class FakeEngine(HiggsTtsEngine):
-        def _request_batch(self, lines):
-            return next(calls)
-
-    monkeypatch.setenv("HIGGS_ONSET_RETRIES", "2")
-
-    assert FakeEngine().synthesize_batch([{"spoken_text": "Still bad"}]) == [better]
+    assert {parameter.dtype for parameter in codec.parameters()} == {torch.float32}

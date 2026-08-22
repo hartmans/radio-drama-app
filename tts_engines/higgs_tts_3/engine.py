@@ -1,31 +1,26 @@
-"""Radio-drama proxy adapter for the Higgs TTS 3 SGLang-Omni API."""
+"""Radio-drama proxy adapter for Higgs TTS 3 through Transformers."""
 
 from __future__ import annotations
 
-import array
-import concurrent.futures
-import io
-import json
-import math
 import os
 import re
-import subprocess
-import sys
-import time
-import urllib.error
-import urllib.request
-import wave
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
-from radio_drama_tts_container import artifact_name, run_server
+from radio_drama_tts_container import (
+    finish_line_work,
+    prepare_line_work,
+    remove_line_work,
+    run_server,
+)
 
 
-MODEL = os.environ.get("HIGGS_MODEL", "bosonai/higgs-tts-3-4b")
-HOST = os.environ.get("HIGGS_HOST", "127.0.0.1")
-PORT = int(os.environ.get("HIGGS_PORT", "8000"))
-STARTUP_TIMEOUT = float(os.environ.get("HIGGS_STARTUP_TIMEOUT", "900"))
+MODEL = os.environ.get(
+    "HIGGS_MODEL", "multimodalart/higgs-audio-v3-tts-4b-transformers"
+)
+AUDIO_TOKENIZER = os.environ.get(
+    "HIGGS_AUDIO_TOKENIZER", "bosonai/higgs-audio-v2-tokenizer"
+)
 SAMPLE_RATE = 24_000
 
 CONTROL_TAGS = {
@@ -56,6 +51,10 @@ CONTROL_TAGS = {
 CONTROL_EXPRESSION = re.compile(r"\[([a-z]+):([a-z_]+)\]")
 
 
+def _environment_flag(name: str, default: bool) -> bool:
+    return os.environ.get(name, str(default)).lower() in {"1", "true", "yes", "on"}
+
+
 def expand_control_expressions(text: str) -> str:
     """Translate recognized radio-drama brackets to Higgs control tokens."""
 
@@ -69,315 +68,114 @@ def expand_control_expressions(text: str) -> str:
 
 
 class HiggsTtsEngine:
-    """Map proxy dialogue requests onto Higgs voice-cloning HTTP requests."""
+    """Keep one Transformers Higgs model resident for line-oriented cloning.
 
-    def __init__(self, *, base_url: str | None = None) -> None:
-        self.base_url = base_url or f"http://{HOST}:{PORT}"
-        self._manage_server = base_url is None
-        self._server: subprocess.Popen | None = None
+    The upstream Transformers port exposes single-item autoregressive
+    generation. ``render_batch`` still drains all pending scripts in bounded
+    groups, but generation within a group is serial so one model and its KV
+    cache do not contend for GPU memory.
+    """
 
-    def ensure_server(self) -> None:
-        """Start the in-container model server lazily after protocol handshake."""
+    def __init__(self) -> None:
+        self.model = None
+        self.tokenizer = None
+        self._reference_audio: dict[str, tuple[Any, int]] = {}
 
-        if self._manage_server and self._server is None:
-            self._server = start_sglang_server()
+    def load_model(self):
+        if self.model is None:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    def close(self) -> None:
-        if self._server is None:
-            return
-        self._server.terminate()
+            device = os.environ.get("HIGGS_DEVICE", "cuda")
+            dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+            local_files_only = _environment_flag("HIGGS_LOCAL_FILES_ONLY", True)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                MODEL, trust_remote_code=True, local_files_only=local_files_only
+            )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                MODEL,
+                trust_remote_code=True,
+                dtype=dtype,
+                local_files_only=local_files_only,
+            ).to(device).eval()
+            self.model.config.audio_tokenizer_id = AUDIO_TOKENIZER
+            torch.set_grad_enabled(False)
+
+            # The Higgs waveform encoder/decoder is numerically unstable in
+            # bf16. Load it eagerly and enforce fp32 even if remote-code
+            # defaults or the surrounding model dtype change later.
+            codec = self.model.get_audio_codec().to(device=device, dtype=torch.float32)
+            codec.eval()
+            if any(parameter.dtype != torch.float32 for parameter in codec.parameters()):
+                raise RuntimeError("Higgs audio tokenizer did not remain in float32")
+        return self.model, self.tokenizer
+
+    def reference_audio(self, path: str):
+        """Load and cache a mounted speaker reference at its native rate."""
+        if path not in self._reference_audio:
+            import soundfile
+            import torch
+
+            samples, sample_rate = soundfile.read(path, dtype="float32", always_2d=True)
+            waveform = torch.from_numpy(samples.mean(axis=1)).unsqueeze(0)
+            self._reference_audio[path] = (waveform, sample_rate)
+        return self._reference_audio[path]
+
+    def synthesize_line(self, line: Mapping[str, Any]):
+        model, tokenizer = self.load_model()
+        speaker = line["speaker"]
+        reference, reference_rate = self.reference_audio(str(speaker["voice_path"]))
+        return model.generate_speech(
+            expand_control_expressions(str(line["spoken_text"])),
+            tokenizer,
+            reference_audio=reference,
+            reference_sample_rate=reference_rate,
+            reference_text=str(speaker["transcript"]),
+            max_new_tokens=int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
+            temperature=float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
+            top_p=float(os.environ.get("HIGGS_TOP_P", "1.0")),
+            top_k=int(os.environ.get("HIGGS_TOP_K", "50")),
+        )
+
+    def synthesize_batch(self, lines: Sequence[Mapping[str, Any]]) -> list[Any]:
+        """Synthesize a protocol batch using the port's single-item decoder."""
+        return [self.synthesize_line(line) for line in lines]
+
+    @staticmethod
+    def write_audio(path, audio) -> None:
+        import soundfile
+
+        soundfile.write(str(path), audio.numpy(), SAMPLE_RATE, subtype="PCM_16")
+
+    def render_batch(self, requests: Sequence[Mapping[str, Any]]):
+        outputs, work = prepare_line_work(requests)
         try:
-            self._server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self._server.kill()
-        self._server = None
-
-    def render_batch(
-        self, requests: Sequence[Mapping[str, Any]]
-    ) -> list[Mapping[str, Any]]:
-        prepared = [self._prepare_request(request) for request in requests]
-        lines = [line for item in prepared for line in item["lines"]]
-        try:
-            if lines:
-                self.ensure_server()
+            if work:
+                self.load_model()
             batch_size = int(os.environ.get("HIGGS_BATCH_SIZE", "16"))
             if batch_size < 1:
                 raise ValueError("HIGGS_BATCH_SIZE must be at least 1")
-            for start in range(0, len(lines), batch_size):
-                chunk = lines[start : start + batch_size]
-                audio_results = self.synthesize_batch([item["line"] for item in chunk])
-                for item, audio in zip(chunk, audio_results, strict=True):
-                    item["path"].write_bytes(audio)
-            return [self._finish_request(item) for item in prepared]
+            for start in range(0, len(work), batch_size):
+                chunk = work[start : start + batch_size]
+                audio = self.synthesize_batch([item.line for item in chunk])
+                for item, waveform in zip(chunk, audio, strict=True):
+                    self.write_audio(item.path, waveform)
+            return finish_line_work(outputs, work, sample_rate=SAMPLE_RATE)
         finally:
-            if not keep_line_wavs():
-                for item in lines:
-                    item["path"].unlink(missing_ok=True)
-
-    def _prepare_request(self, request: Mapping[str, Any]) -> dict[str, Any]:
-        output_path = Path(artifact_name(request))
-        return {
-            "output_path": output_path,
-            "lines": [
-                {
-                    "line": line,
-                    "path": output_path.with_suffix(f".line-{index}.wav"),
-                }
-                for index, line in enumerate(self.synthesized_lines(request))
-            ],
-        }
-
-    def _finish_request(self, prepared: Mapping[str, Any]) -> Mapping[str, Any]:
-        output_path = prepared["output_path"]
-        segment_paths = [item["path"] for item in prepared["lines"]]
-        line_starts: list[float] = []
-        frame_count = 0
-        for segment_path in segment_paths:
-            segment_frames, sample_rate = wav_frame_count(segment_path)
-            if sample_rate != SAMPLE_RATE:
-                raise RuntimeError(
-                    f"Higgs returned {sample_rate} Hz audio; expected {SAMPLE_RATE} Hz"
-                )
-            line_starts.append(frame_count / SAMPLE_RATE)
-            frame_count += segment_frames
-        concatenate_wavs(segment_paths, output_path, sample_rate=SAMPLE_RATE)
-        return {
-            "wav": output_path.name,
-            "dialogue_line_start_positions": line_starts,
-        }
-
-    @staticmethod
-    def synthesized_lines(request: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-        """Return non-empty dialogue lines in their authored order.
-
-        This mirrors the existing speech-resource contract: source selection
-        and slicing happen in host planning, while the base speech render keeps
-        one timing entry parallel to each non-empty dialogue line. Gap events
-        remain host-side alignment information.
-        """
-
-        return [
-            content
-            for content in request["dialogue_contents"]
-            if content.get("type") == "line"
-            and str(content.get("spoken_text", "")).strip()
-        ]
-
-    def synthesize_batch(
-        self, lines: Sequence[Mapping[str, Any]]
-    ) -> list[bytes]:
-        if not lines:
-            return []
-        results = self._request_batch(lines)
-        scores = [onset_failure_score(audio) for audio in results]
-        retries = int(os.environ.get("HIGGS_ONSET_RETRIES", "2"))
-        if retries < 0:
-            raise ValueError("HIGGS_ONSET_RETRIES must not be negative")
-
-        # Higgs occasionally emits a very loud, unnatural burst at the beginning
-        # of an otherwise usable utterance. SGLang does not currently expose a
-        # way to prevent that model failure, so retain the best generation and
-        # resubmit only affected lines. Each round is still submitted concurrently
-        # so healthy items never forfeit the normal continuous-batching path.
-        pending = [index for index, score in enumerate(scores) if score > 0]
-        for attempt in range(1, retries + 1):
-            if not pending:
-                break
-            print(
-                f"Higgs onset check rejected {len(pending)} utterance(s); "
-                f"retry {attempt}/{retries}",
-                file=sys.stderr,
-            )
-            replacements = self._request_batch([lines[index] for index in pending])
-            for index, replacement in zip(pending, replacements, strict=True):
-                replacement_score = onset_failure_score(replacement)
-                if replacement_score < scores[index]:
-                    results[index] = replacement
-                    scores[index] = replacement_score
-            pending = [index for index in pending if scores[index] > 0]
-        return results
-
-    def _request_batch(self, lines: Sequence[Mapping[str, Any]]) -> list[bytes]:
-        """Submit one concurrent generation attempt for each supplied line."""
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(lines)) as executor:
-            return list(executor.map(self._synthesize_line, lines))
-
-    def _synthesize_line(self, line: Mapping[str, Any]) -> bytes:
-        payload = self._line_payload(line)
-        self._add_initial_codec_chunk_frames(payload)
-        request = urllib.request.Request(
-            f"{self.base_url}/v1/audio/speech",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request) as response:
-                return response.read()
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Higgs synthesis failed ({exc.code}): {detail}") from exc
-
-    @staticmethod
-    def _add_initial_codec_chunk_frames(payload: dict[str, Any]) -> None:
-        initial_codec_chunk_frames = os.environ.get(
-            "HIGGS_INITIAL_CODEC_CHUNK_FRAMES"
-        )
-        if initial_codec_chunk_frames is not None:
-            payload["initial_codec_chunk_frames"] = int(initial_codec_chunk_frames)
-
-    @staticmethod
-    def _line_payload(
-        line: Mapping[str, Any], *, include_defaults: bool = True
-    ) -> dict[str, Any]:
-        speaker = line["speaker"]
-        payload: dict[str, Any] = {
-            "input": expand_control_expressions(line["spoken_text"]),
-            "references": [
-                {
-                    "audio_path": speaker["voice_path"],
-                    "text": speaker["transcript"],
-                }
-            ],
-        }
-        if include_defaults:
-            payload.update(
-                model=MODEL,
-                temperature=float(os.environ.get("HIGGS_TEMPERATURE", "0.8")),
-                top_k=int(os.environ.get("HIGGS_TOP_K", "50")),
-                max_new_tokens=int(os.environ.get("HIGGS_MAX_NEW_TOKENS", "2048")),
-            )
-        return payload
+            if not _environment_flag("HIGGS_KEEP_LINE_WAVS", False):
+                remove_line_work(work)
 
 
-def keep_line_wavs() -> bool:
-    return os.environ.get("HIGGS_KEEP_LINE_WAVS", "").lower() in {
-        "1", "true", "yes", "on"
-    }
+def download_models() -> None:
+    """Populate the persistent Hugging Face cache without loading the model."""
+    from huggingface_hub import snapshot_download
 
-
-def onset_failure_score(audio: bytes) -> float:
-    """Score a pathological loud onset, returning zero for acceptable audio.
-
-    The absolute RMS gate identifies genuinely high-amplitude audio, while the
-    ratio to the following speech distinguishes the Higgs failure from a loud
-    but consistently delivered utterance. A positive result is also suitable
-    for choosing the least objectionable result when every retry fails.
-    """
-
-    with wave.open(io.BytesIO(audio), "rb") as source:
-        if source.getcomptype() != "NONE" or source.getsampwidth() != 2:
-            raise RuntimeError("Higgs returned unsupported audio for onset analysis")
-        sample_rate = source.getframerate()
-        channels = source.getnchannels()
-        samples = array.array("h", source.readframes(source.getnframes()))
-    if sys.byteorder != "little":
-        samples.byteswap()
-
-    onset_frames = max(1, round(sample_rate * 0.1))
-    reference_frames = max(1, round(sample_rate * 0.4))
-    onset_end = min(len(samples), onset_frames * channels)
-    reference_end = min(len(samples), (onset_frames + reference_frames) * channels)
-    if onset_end == 0 or reference_end <= onset_end:
-        return 0.0
-
-    onset_rms = _normalized_rms(samples[:onset_end])
-    reference_rms = _normalized_rms(samples[onset_end:reference_end])
-    rms_threshold = float(os.environ.get("HIGGS_ONSET_RMS_THRESHOLD", "0.25"))
-    ratio_threshold = float(os.environ.get("HIGGS_ONSET_RATIO_THRESHOLD", "3.0"))
-    ratio = onset_rms / max(reference_rms, 1 / 32768)
-    if onset_rms < rms_threshold or ratio < ratio_threshold:
-        return 0.0
-    return ratio * onset_rms
-
-
-def _normalized_rms(samples: Sequence[int]) -> float:
-    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
-
-
-def wav_frame_count(path: Path) -> tuple[int, int]:
-    with wave.open(str(path), "rb") as source:
-        return source.getnframes(), source.getframerate()
-
-
-def concatenate_wavs(
-    inputs: Sequence[Path], output: Path, *, sample_rate: int
-) -> None:
-    """Concatenate like-formatted Higgs WAV responses without extra packages."""
-
-    expected_params: tuple[int, int, int, str] | None = None
-    chunks: list[bytes] = []
-    for path in inputs:
-        with wave.open(str(path), "rb") as source:
-            params = (
-                source.getnchannels(),
-                source.getsampwidth(),
-                source.getframerate(),
-                source.getcomptype(),
-            )
-            if expected_params is None:
-                expected_params = params
-            elif params != expected_params:
-                raise RuntimeError("Higgs returned incompatible WAV segment formats")
-            chunks.append(source.readframes(source.getnframes()))
-    channels, sample_width, actual_rate, compression = expected_params or (
-        1,
-        2,
-        sample_rate,
-        "NONE",
-    )
-    if actual_rate != sample_rate or compression != "NONE":
-        raise RuntimeError("Higgs returned an unsupported WAV format")
-    with wave.open(str(output), "wb") as destination:
-        destination.setnchannels(channels)
-        destination.setsampwidth(sample_width)
-        destination.setframerate(actual_rate)
-        destination.writeframes(b"".join(chunks))
-
-
-def start_sglang_server() -> subprocess.Popen:
-    command = [
-        "sgl-omni",
-        "serve",
-        "--model-path",
-        MODEL,
-        "--host",
-        HOST,
-        "--port",
-        str(PORT),
-        "--allowed_local_media_path",
-        "/voices",
-    ]
-    process = subprocess.Popen(command, stdout=sys.stderr, stderr=sys.stderr)
-    deadline = time.monotonic() + STARTUP_TIMEOUT
-    health_url = f"http://{HOST}:{PORT}/health"
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"SGLang-Omni exited during startup ({process.returncode})")
-        try:
-            with urllib.request.urlopen(health_url, timeout=2) as response:
-                if response.status < 500:
-                    return process
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
-                return process
-            time.sleep(1)
-        except (OSError, urllib.error.URLError):
-            time.sleep(1)
-    process.terminate()
-    raise TimeoutError(f"SGLang-Omni did not become ready within {STARTUP_TIMEOUT:g}s")
+    snapshot_download(MODEL)
+    snapshot_download(AUDIO_TOKENIZER)
 
 
 def main() -> None:
-    engine = HiggsTtsEngine()
-    try:
-        run_server(
-            engine.render_batch,
-            capabilities={"needs_transcript"},
-        )
-    finally:
-        engine.close()
+    run_server(HiggsTtsEngine().render_batch, capabilities={"needs_transcript"})
 
 
 if __name__ == "__main__":

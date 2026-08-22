@@ -1,1 +1,5 @@
-# SGLang-Omni and the Higgs runtime are installed by the base image/Containerfile.
+# Python runtime pins mirrored by the Containerfile.
+transformers==5.14.1
+torch==2.9.0
+torchaudio==2.9.0
+soundfile==0.13.1
