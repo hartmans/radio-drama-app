@@ -9,18 +9,7 @@ network = "none"
 devices = ["nvidia.com/gpu=all"]
 ipc = "host"
 
-[tts.higgs.environment]
-HF_HOME = "/models/huggingface"
-HIGGS_MODEL = "multimodalart/higgs-audio-v3-tts-4b-transformers"
-HIGGS_AUDIO_TOKENIZER = "bosonai/higgs-audio-v2-tokenizer"
-HIGGS_LOCAL_FILES_ONLY = "true"
-HIGGS_TEMPERATURE = "0.8"
-HIGGS_TOP_P = "1.0"
-HIGGS_TOP_K = "50"
-HIGGS_MAX_NEW_TOKENS = "2048"
-HIGGS_BATCH_SIZE = "16"
-
 [[tts.higgs.mounts]]
-source = "~/.cache/radio-drama/higgs-huggingface"
+source = "/srv/ai/huggingface-cache"
 target = "/models/huggingface"
 mode = "rw"
