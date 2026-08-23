@@ -88,7 +88,12 @@ def convert_audio_format(
 
 
 class AudioPlan(PlanningNode):
-    """Planning node whose render path produces audio."""
+    """Planning node whose render path produces audio.
+
+    ``render_node()`` must return audio owned by this plan's rendered occurrence.
+    ``post_render()`` may mutate that buffer in place while applying geometry,
+    gain, authored effects, and pan.
+    """
 
     def __init__(
         self,

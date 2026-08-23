@@ -77,6 +77,7 @@ Current planning contract:
 * `radio_drama.production` now holds the top-level production compose plan
 * `AudioPlan` is the central base type for plans whose `render()` returns `RenderResult`
 * `AudioPlan` also owns layout state and exposes a memoized `layout()` pass before render-time mixing or DSP
+* each `AudioPlan.render_node()` result must own the mutable audio buffer passed to `post_render()`; gain, authored effects, pan, and render geometry may mutate that buffer in place without changing a shared source or another rendered occurrence
 * document-authored audio attributes are currently `start`, `end`, `pre_gap`, `post_gap`, `length`, `gain`, `effect`, `pan`, `preset`, `first_mark`, `last_mark`, `loop_beg`, `loop_end`, `loop_loops`, `loop_until`, `loop_silence`, `loop_outro`, and `loop_whole`
 * any element that plans into an `AudioPlan` may author those audio attributes
 * `AudioPlan.attrs_from_node(node)` is a class method that parses one node's audio attributes into typed values, stores them in `self.attrs`, and `process_attrs()` then applies those typed attrs to the instance
@@ -206,7 +207,7 @@ Current resource contract:
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
 * `WhisperXResource` also exposes direct single-sample ASR so other resources can derive metadata such as Qwen voice-clone prompt transcripts from reference voice files
 * WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
-* `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path; `SoundPlan.render_node()` copies its selected source slice into an occurrence-owned buffer before in-place gain, effects, pan, or enclosing render stages can modify it
+* `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 * `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation
 

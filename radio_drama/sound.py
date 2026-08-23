@@ -116,7 +116,12 @@ class SoundNode(AttributeOrTextValueNode):
 
 @inject(config=ProductionConfig, sound_cache=NormalizedSoundCache)
 class SoundPlan(AudioPlan):
-    """Plan that resolves, normalizes, and renders one sound asset."""
+    """Plan that resolves, normalizes, and renders one sound asset.
+
+    Normalized source audio is shared through ``NormalizedSoundCache``.
+    ``render_node()`` copies the selected source slice so the returned occurrence
+    satisfies ``AudioPlan``'s mutable post-render ownership requirement.
+    """
 
     @classmethod
     def attrs_from_node(cls, node) -> dict[str, float | str | bool]:
@@ -172,10 +177,6 @@ class SoundPlan(AudioPlan):
     async def render_node(self) -> RenderResult:
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
-        # The normalized cache is shared by every occurrence of this asset, while
-        # AudioPlan post-render stages mutate their result in place.  Each sound
-        # occurrence therefore needs its own buffer before gain, effects, or pan
-        # are applied.
         return RenderResult(audio=self._trimmed_audio(audio).copy())
 
     async def _ensure_normalized_audio_task(self) -> asyncio.Task:
