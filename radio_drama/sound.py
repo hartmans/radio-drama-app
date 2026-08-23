@@ -172,7 +172,11 @@ class SoundPlan(AudioPlan):
     async def render_node(self) -> RenderResult:
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
-        return RenderResult(audio=self._trimmed_audio(audio))
+        # The normalized cache is shared by every occurrence of this asset, while
+        # AudioPlan post-render stages mutate their result in place.  Each sound
+        # occurrence therefore needs its own buffer before gain, effects, or pan
+        # are applied.
+        return RenderResult(audio=self._trimmed_audio(audio).copy())
 
     async def _ensure_normalized_audio_task(self) -> asyncio.Task:
         if self._normalized_audio_task is None:

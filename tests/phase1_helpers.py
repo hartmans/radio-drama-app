@@ -38,7 +38,13 @@ async def make_async_injector(
         document_path=document_path,
         output_path=output_path,
     )
-    injector.add_provider(EffectChainRegistry() if effect_chains is None else effect_chains)
+    if effect_chains is None:
+        effect_chains = EffectChainRegistry()
+        # Most unit tests exercise planning and composition rather than the
+        # external ffmpeg mastering integration.  Keep that boundary explicit
+        # and deterministic; mastering tests construct the built-in registry.
+        effect_chains.add_from_expression("master", "dry()")
+    injector.add_provider(effect_chains)
     injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, injector)
     return injector, injector(AsyncInjector)
 

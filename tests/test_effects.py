@@ -221,6 +221,64 @@ def test_sound_plan_applies_gain_from_node(tmp_path: Path):
     np.testing.assert_allclose(result.audio, np.array([1.0, -1.0], dtype=np.float32), atol=1e-4)
 
 
+def test_reused_sound_effects_do_not_mutate_other_occurrences(tmp_path: Path):
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=2)
+    cached_audio = np.array([[0.25, 0.5], [0.5, 0.25]], dtype=np.float32)
+
+    class SharedSoundCache:
+        def __init__(self) -> None:
+            self.task = None
+
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            if self.task is None:
+                self.task = asyncio.create_task(asyncio.sleep(0, result=cached_audio))
+            return self.task
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(
+            InjectionKey(NormalizedSoundCache), SharedSoundCache(), close=False
+        )
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <sound ref="door" gain="6.0206" effect="gain(line(6.0206))" pan="1" />
+                  <sound ref="door" />
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            plans = [
+                await sound_node.plan(ainjector)
+                for sound_node in root.child_elements_named("sound")
+            ]
+            return await asyncio.gather(*(plan.render() for plan in plans))
+        finally:
+            injector.close()
+
+    effected, dry_result = asyncio.run(runner())
+
+    np.testing.assert_allclose(
+        effected.audio,
+        np.array([[0.0, 2.0 * np.sqrt(2.0)], [0.0, np.sqrt(2.0)]], dtype=np.float32),
+        atol=1e-4,
+    )
+    np.testing.assert_array_equal(dry_result.audio, cached_audio)
+    np.testing.assert_array_equal(
+        cached_audio,
+        np.array([[0.25, 0.5], [0.5, 0.25]], dtype=np.float32),
+    )
+    assert not np.shares_memory(effected.audio, cached_audio)
+    assert not np.shares_memory(dry_result.audio, cached_audio)
+
+
 def test_sound_plan_wraps_preset_from_node(tmp_path: Path):
     xml_path = tmp_path / "production.xml"
     xml_path.write_text("<production />", encoding="utf-8")
@@ -288,11 +346,17 @@ def test_audio_plan_pan_expression_uses_render_time_marks(tmp_path: Path):
             injector.close()
 
     result = asyncio.run(runner())
-    np.testing.assert_allclose(result.audio[:, 0], np.array([1.0, 1.0, 1.0, 0.0], dtype=np.float32))
-    np.testing.assert_allclose(result.audio[:, 1], np.array([1.0, 0.0, 1.0, 1.0], dtype=np.float32))
+    np.testing.assert_allclose(
+        result.audio[:, 0],
+        np.array([1.0, np.sqrt(2.0), 1.0, 0.0], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        result.audio[:, 1],
+        np.array([1.0, 0.0, 1.0, np.sqrt(2.0)], dtype=np.float32),
+    )
 
 
-def test_audio_plan_pan_expression_uses_linear_balance(tmp_path: Path):
+def test_audio_plan_pan_expression_preserves_stereo_power(tmp_path: Path):
     config = ProductionConfig(output_sample_rate=4, output_channels=2)
 
     @inject(config=ProductionConfig)
@@ -323,10 +387,12 @@ def test_audio_plan_pan_expression_uses_linear_balance(tmp_path: Path):
     right_heavy = asyncio.run(render_with_pan("0.5"))
     left_heavy = asyncio.run(render_with_pan("-0.5"))
 
-    np.testing.assert_allclose(right_heavy.audio[:, 0], np.full(2, 0.5, dtype=np.float32))
-    np.testing.assert_allclose(right_heavy.audio[:, 1], np.ones(2, dtype=np.float32))
-    np.testing.assert_allclose(left_heavy.audio[:, 0], np.ones(2, dtype=np.float32))
-    np.testing.assert_allclose(left_heavy.audio[:, 1], np.full(2, 0.5, dtype=np.float32))
+    far_gain = np.float32(0.5 * np.sqrt(2.0 / 1.25))
+    near_gain = np.float32(np.sqrt(2.0 / 1.25))
+    np.testing.assert_allclose(right_heavy.audio[:, 0], np.full(2, far_gain))
+    np.testing.assert_allclose(right_heavy.audio[:, 1], np.full(2, near_gain))
+    np.testing.assert_allclose(left_heavy.audio[:, 0], np.full(2, near_gain))
+    np.testing.assert_allclose(left_heavy.audio[:, 1], np.full(2, far_gain))
 
 
 def test_audio_plan_gain_expression_uses_render_time_marks(tmp_path: Path):
@@ -416,7 +482,9 @@ def test_audio_plan_effect_runs_between_gain_and_pan_in_a_thread(tmp_path: Path,
     result = asyncio.run(runner())
     assert calls == ["thread", "effect"]
     np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
-    np.testing.assert_allclose(result.audio[:, 1], np.full(2, 3.0, dtype=np.float32), atol=1e-4)
+    np.testing.assert_allclose(
+        result.audio[:, 1], np.full(2, 3.0 * np.sqrt(2.0), dtype=np.float32), atol=1e-4
+    )
 
 
 def test_effect_expression_can_use_gain_and_pan_stages(tmp_path: Path):
@@ -449,7 +517,9 @@ def test_effect_expression_can_use_gain_and_pan_stages(tmp_path: Path):
 
     result = asyncio.run(runner())
     np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
-    np.testing.assert_allclose(result.audio[:, 1], np.full(2, 2.0, dtype=np.float32), atol=1e-4)
+    np.testing.assert_allclose(
+        result.audio[:, 1], np.full(2, 2.0 * np.sqrt(2.0), dtype=np.float32), atol=1e-4
+    )
 
 
 def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
@@ -486,7 +556,9 @@ def test_sound_plan_applies_pan_expression_from_node(tmp_path: Path):
 
     result = asyncio.run(runner())
     np.testing.assert_allclose(result.audio[:, 0], np.zeros(2, dtype=np.float32))
-    np.testing.assert_allclose(result.audio[:, 1], np.ones(2, dtype=np.float32))
+    np.testing.assert_allclose(
+        result.audio[:, 1], np.full(2, np.sqrt(2.0), dtype=np.float32)
+    )
 
 
 def test_preset_bus_preserves_script_timeline_length(tmp_path: Path):

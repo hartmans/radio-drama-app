@@ -206,7 +206,7 @@ Current resource contract:
 * heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
 * `WhisperXResource` also exposes direct single-sample ASR so other resources can derive metadata such as Qwen voice-clone prompt transcripts from reference voice files
 * WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
-* `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
+* `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path; `SoundPlan.render_node()` copies its selected source slice into an occurrence-owned buffer before in-place gain, effects, pan, or enclosing render stages can modify it
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 * `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation
 
