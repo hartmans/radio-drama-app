@@ -5,11 +5,15 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+from collections import Counter
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, TypeVar
 
+from carthage.dependency_injection import inject
+
 from ..audio import AudioPlan
+from ..config import ProductionConfig
 from ..effects import EffectStage, dry
 from ..rendering import RenderResult
 
@@ -37,24 +41,55 @@ class AudioPlanWrapper:
     submit: Submit = field(repr=False, compare=False)
     effect_chain: EffectStage = field(default_factory=dry)
     _layout_root: AudioPlan | None = field(default=None, repr=False, compare=False)
+    _children: tuple["AudioPlanWrapper", ...] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __or__(self, other: object):
         if isinstance(other, EffectStage):
             return replace(self, effect_chain=self.effect_chain | other)
         return NotImplemented
 
-    def __getitem__(self, index: int) -> "AudioPlanWrapper":
-        """Return a dry wrapper around one direct child of the wrapped plan."""
+    def __add__(self, other: object):
+        if not isinstance(other, AudioPlanWrapper):
+            return NotImplemented
+        return _compose_wrappers((self, other), overlap=False, template=self)
 
-        child = tuple(self.plan.child_plans())[index]
-        if not isinstance(child, AudioPlan):
-            raise TypeError(f"Child {index} is not an AudioPlan")
-        return replace(
-            self,
-            plan=child,
-            effect_chain=dry(),
-            _layout_root=self._layout_target,
-        )
+    def __getitem__(self, index: int | slice) -> "AudioPlanWrapper":
+        """Select one child or crop the timeline spanning a child slice."""
+
+        children = self._child_wrappers()
+        if isinstance(index, slice):
+            if index.step not in (None, 1):
+                raise ValueError("AudioPlanWrapper slices do not support a step")
+            selected_indexes = tuple(range(len(children))[index])
+            return _crop_wrapper(
+                self,
+                selected_indexes=selected_indexes,
+                children=tuple(children[child_index] for child_index in selected_indexes),
+            )
+        return children[index]
+
+    def _child_wrappers(self) -> tuple["AudioPlanWrapper", ...]:
+        if self._children is not None:
+            return self._children
+
+        wrappers = []
+        for index, child in enumerate(self.plan.child_plans()):
+            if not isinstance(child, AudioPlan):
+                raise TypeError(f"Child {index} is not an AudioPlan")
+            wrappers.append(
+                replace(
+                    self,
+                    plan=child,
+                    effect_chain=dry(),
+                    _layout_root=self._layout_target,
+                    _children=None,
+                )
+            )
+        return tuple(wrappers)
 
     @property
     def _layout_target(self) -> AudioPlan:
@@ -86,7 +121,218 @@ class AudioPlanWrapper:
         return result
 
 
+@inject(config=ProductionConfig)
+class ReplComposeAudioPlan(AudioPlan):
+    """REPL-local composition of independently reusable wrapped plans."""
+
+    def __init__(
+        self,
+        *,
+        wrappers: tuple[AudioPlanWrapper, ...],
+        overlap: bool,
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("node", None)
+        kwargs.setdefault("attrs", {})
+        super().__init__(**kwargs)
+        self.wrappers = wrappers
+        self.overlap = overlap
+        self._wrapper_bounds: tuple[tuple[float, float], ...] = ()
+
+    async def layout_node(self) -> None:
+        await asyncio.gather(
+            *(wrapper._layout_target.layout() for wrapper in self.wrappers)
+        )
+        lengths = [wrapper.plan.natural_length for wrapper in self.wrappers]
+        self._wrapper_bounds = self._calculate_wrapper_bounds(lengths)
+        self.inner_last = max(lengths, default=0.0) if self.overlap else sum(lengths)
+        self.advance = self.inner_last
+        self.mark_positions = self._wrapper_mark_positions(lengths)
+
+    async def render_node(self) -> RenderResult:
+        results = await asyncio.gather(*(wrapper.render() for wrapper in self.wrappers))
+        if not results:
+            return RenderResult.empty(channels=self.config.resolved_output_channels)
+        if not self.overlap:
+            return RenderResult.concatenate(results)
+        frame_count = max(result.frame_count for result in results)
+        audio = self._empty_audio(frame_count)
+        for result in results:
+            audio[: result.frame_count] += result.audio
+        return RenderResult(audio=audio)
+
+    def child_plans(self):
+        return tuple(wrapper.plan for wrapper in self.wrappers)
+
+    def wrapper_bounds(self, index: int) -> tuple[float, float]:
+        return self._wrapper_bounds[index]
+
+    def _calculate_wrapper_bounds(
+        self,
+        lengths: list[float],
+    ) -> tuple[tuple[float, float], ...]:
+        offset = 0.0
+        bounds = []
+        for length in lengths:
+            first = 0.0 if self.overlap else offset
+            bounds.append((first, first + length))
+            if not self.overlap:
+                offset += length
+        return tuple(bounds)
+
+    def _wrapper_mark_positions(self, lengths: list[float]) -> dict[str, float]:
+        occurrences: list[tuple[str, float]] = []
+        offset = 0.0
+        for wrapper, length in zip(self.wrappers, lengths, strict=True):
+            occurrences.extend(
+                (name, position + (0.0 if self.overlap else offset))
+                for name, position in wrapper.plan.mark_positions.items()
+            )
+            if not self.overlap:
+                offset += length
+        counts = Counter(name for name, _ in occurrences)
+        return {name: position for name, position in occurrences if counts[name] == 1}
+
+
+@inject(config=ProductionConfig)
+class ReplCropAudioPlan(AudioPlan):
+    """Lazy timeline crop of a fully processed source wrapper."""
+
+    def __init__(
+        self,
+        *,
+        source: AudioPlanWrapper,
+        selected_indexes: tuple[int, ...],
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("node", None)
+        kwargs.setdefault("attrs", {})
+        super().__init__(**kwargs)
+        self.source = source
+        self.selected_indexes = selected_indexes
+        self.crop_first = 0.0
+        self.crop_last = 0.0
+        self._selected_bounds: tuple[tuple[float, float], ...] = ()
+
+    async def layout_node(self) -> None:
+        await self.source._layout_target.layout()
+        bounds = tuple(
+            self._source_child_bounds(index) for index in self.selected_indexes
+        )
+        self._selected_bounds = bounds
+        if bounds:
+            self.crop_first = min(first for first, _ in bounds)
+            self.crop_last = max(last for _, last in bounds)
+        self.inner_last = max(0.0, self.crop_last - self.crop_first)
+        self.advance = self.inner_last
+        self.mark_positions = (
+            {
+                name: position - self.crop_first
+                for name, position in self.source.plan.mark_positions.items()
+                if self.crop_first <= position <= self.crop_last
+            }
+            if bounds
+            else {}
+        )
+
+    async def render_node(self) -> RenderResult:
+        if not self.selected_indexes:
+            return RenderResult.empty(channels=self.config.resolved_output_channels)
+        source_result = await self.source.render()
+        start_frame = self._seconds_to_frames(
+            self.crop_first - self.source.plan.inner_first
+        )
+        end_frame = self._seconds_to_frames(
+            self.crop_last - self.source.plan.inner_first
+        )
+        return source_result.slice_frames(start_frame, end_frame)
+
+    def child_plans(self):
+        children = tuple(self.source._child_wrappers())
+        return tuple(children[index].plan for index in self.selected_indexes)
+
+    def wrapper_bounds(self, index: int) -> tuple[float, float]:
+        first, last = self._selected_bounds[index]
+        return first - self.crop_first, last - self.crop_first
+
+    def _source_child_bounds(self, index: int) -> tuple[float, float]:
+        source_plan = self.source.plan
+        if isinstance(source_plan, (ReplComposeAudioPlan, ReplCropAudioPlan)):
+            return source_plan.wrapper_bounds(index)
+        child = tuple(source_plan.child_plans())[index]
+        return child.start + child.inner_first, child.start + child.inner_last
+
+
+def concatenate(*wrappers: AudioPlanWrapper) -> AudioPlanWrapper:
+    """Return a lazy REPL plan that renders wrappers consecutively."""
+
+    if not wrappers:
+        raise TypeError("concatenate requires at least one AudioPlanWrapper")
+    return _compose_wrappers(wrappers, overlap=False, template=wrappers[0])
+
+
+def mix(*wrappers: AudioPlanWrapper) -> AudioPlanWrapper:
+    """Return a lazy REPL plan that overlaps wrappers at time zero."""
+
+    if not wrappers:
+        raise TypeError("mix requires at least one AudioPlanWrapper")
+    return _compose_wrappers(wrappers, overlap=True, template=wrappers[0])
+
+
+def _compose_wrappers(
+    wrappers: tuple[AudioPlanWrapper, ...],
+    *,
+    overlap: bool,
+    template: AudioPlanWrapper,
+) -> AudioPlanWrapper:
+    for wrapper in wrappers:
+        if wrapper.sample_rate != template.sample_rate:
+            raise ValueError("Cannot compose wrappers with different sample rates")
+        if wrapper.submit != template.submit:
+            raise ValueError("Cannot compose wrappers from different REPL runtimes")
+
+    async def build_plan() -> ReplComposeAudioPlan:
+        return await template.plan.ainjector(
+            ReplComposeAudioPlan,
+            wrappers=wrappers,
+            overlap=overlap,
+        )
+
+    plan = template.submit(build_plan()).result()
+    return replace(
+        template,
+        plan=plan,
+        effect_chain=dry(),
+        _layout_root=None,
+        _children=wrappers,
+    )
+
+
+def _crop_wrapper(
+    source: AudioPlanWrapper,
+    *,
+    selected_indexes: tuple[int, ...],
+    children: tuple[AudioPlanWrapper, ...],
+) -> AudioPlanWrapper:
+    async def build_plan() -> ReplCropAudioPlan:
+        return await source.plan.ainjector(
+            ReplCropAudioPlan,
+            source=source,
+            selected_indexes=selected_indexes,
+        )
+
+    plan = source.submit(build_plan()).result()
+    return replace(
+        source,
+        plan=plan,
+        effect_chain=dry(),
+        _layout_root=None,
+        _children=children,
+    )
+
+
 SubmitCoroutine = Submit
+
 
 class AudioOutput(Protocol):
     """Single-winner output controlled by an opaque playback token."""
@@ -173,4 +419,12 @@ class AudioPlayer:
                 self._future = None
 
 
-__all__ = ["AudioPlanWrapper", "AudioPlayer", "MarkNamespace"]
+__all__ = [
+    "AudioPlanWrapper",
+    "AudioPlayer",
+    "MarkNamespace",
+    "ReplComposeAudioPlan",
+    "ReplCropAudioPlan",
+    "concatenate",
+    "mix",
+]

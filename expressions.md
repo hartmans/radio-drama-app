@@ -20,6 +20,8 @@ Expressions are written as a single Python expression. They support:
 * unary `+` and `-`
 * binary `+`, `-`, `*`, `/`, `**`, and `%`
 * function calls: `line(...)`, `min(...)`, and `max(...)`
+* effect-stage pipelines with `|`, parallel scaling with `*`, and parallel
+  summing with `+` in effect expressions
 
 Expressions do not support:
 
@@ -47,6 +49,10 @@ Common forms:
   Like the previous form, but the final value is held to the end of the span.
 
 Use it when you want audio to change gradually instead of jumping.
+
+Numbers and `line(...)` values can both serve as frame-varying controls for
+effect-stage multiplication. Effect addition and multiplication operate on
+copied parallel branches; see `docs/effects.md` for their audio semantics.
 
 Examples:
 

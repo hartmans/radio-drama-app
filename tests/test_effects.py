@@ -26,15 +26,16 @@ from radio_drama.effects import (
     effect_chain,
     effect_chain_function,
     effect_chain_variables,
+    gain,
     load_preprocessed_voice_reference,
     modulated_delay,
     numpy_stage,
+    pan,
 )
 from radio_drama.errors import DocumentError
 from radio_drama.expressions import line
 from radio_drama.rendering import RenderResult
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
-from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector, normalized_script_from_request
 
@@ -97,6 +98,73 @@ def test_crossfade_supports_array_mix_controls():
         audio,
         np.array([0.0, 0.25, 0.5], dtype=np.float32),
     )
+
+
+def test_effect_addition_gives_each_branch_a_copy_of_the_input():
+    inputs = []
+
+    @numpy_stage
+    def add_one(audio: np.ndarray, sample_rate: int) -> None:
+        del sample_rate
+        inputs.append(audio.copy())
+        audio += 1
+
+    @numpy_stage
+    def multiply_three(audio: np.ndarray, sample_rate: int) -> None:
+        del sample_rate
+        inputs.append(audio.copy())
+        audio *= 3
+
+    audio = np.ones(3, dtype=np.float32)
+    (add_one + multiply_three).apply(audio, sample_rate=48_000)
+
+    np.testing.assert_array_equal(inputs, np.ones((2, 3), dtype=np.float32))
+    np.testing.assert_array_equal(audio, np.full(3, 5, dtype=np.float32))
+
+
+def test_effect_multiplication_scales_in_place():
+    received = None
+
+    @numpy_stage
+    def add_one(audio: np.ndarray, sample_rate: int) -> None:
+        nonlocal received
+        del sample_rate
+        received = audio
+        audio += 1
+
+    audio = np.ones(3, dtype=np.float32)
+    (add_one * line(0, 0, 2, 1)).apply(audio, sample_rate=48_000)
+
+    assert received is audio
+    np.testing.assert_allclose(audio, np.array([0, 1, 2], dtype=np.float32))
+
+    (0.5 * dry()).apply(audio, sample_rate=48_000)
+    np.testing.assert_allclose(audio, np.array([0, 0.5, 1], dtype=np.float32))
+
+
+def test_gain_and_pan_coerce_numeric_controls():
+    mono = np.full(2, 0.5, dtype=np.float32)
+    stereo = np.ones((2, 2), dtype=np.float32)
+
+    gain(6.0206).apply(mono, sample_rate=48_000)
+    pan(1).apply(stereo, sample_rate=48_000)
+
+    np.testing.assert_allclose(mono, 1, atol=1e-4)
+    np.testing.assert_allclose(stereo[:, 0], 0, atol=1e-6)
+    np.testing.assert_allclose(stereo[:, 1], np.sqrt(2), atol=1e-6)
+
+
+def test_effect_registry_expressions_support_parallel_algebra():
+    registry = EffectChainRegistry()
+    stage = registry.add_from_expression(
+        "parallel",
+        "dry() * 0.25 + gain(0) * line(0, 0, 2, 1)",
+    )
+    audio = np.ones(3, dtype=np.float32)
+
+    stage.apply(audio, sample_rate=48_000)
+
+    np.testing.assert_allclose(audio, np.array([0.25, 0.75, 1.25], dtype=np.float32))
 
 
 def test_audio_plan_crossfade_effect_uses_render_time_variables():

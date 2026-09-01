@@ -7,12 +7,18 @@ from dataclasses import dataclass
 import numpy as np
 from carthage.dependency_injection import AsyncInjector
 
-from radio_drama.audio import AudioPlan
+from radio_drama.audio import AudioPlan, SlicePlan
 from radio_drama.cache import CacheManager
 from radio_drama.effects import gain
 from radio_drama.expressions import line
 from radio_drama.rendering import RenderResult
-from radio_drama.repl.audio_wrapper import AudioPlanWrapper, AudioPlayer
+from radio_drama.repl.audio_wrapper import (
+    AudioPlanWrapper,
+    AudioPlayer,
+    ReplComposeAudioPlan,
+    ReplCropAudioPlan,
+    mix,
+)
 from radio_drama.repl.console import ReplSession
 
 
@@ -175,3 +181,99 @@ def _current_cache_root(session: ReplSession):
         return manager.root_directory
 
     return session.event_loop.submit(get_root()).result()
+
+
+def test_wrapper_slice_addition_and_mix_are_repl_local_plans(tmp_path) -> None:
+    production_path = tmp_path / "production.xml"
+    production_path.write_text(
+        """
+        <production>
+          <mark id="one" />
+          <mark id="two" />
+          <mark id="three" />
+        </production>
+        """,
+        encoding="utf-8",
+    )
+    session = ReplSession()
+    try:
+        production = session.load(production_path)
+        sliced = production[0:2]
+        concatenated = production[0] + production[2]
+        mixed = mix(production[0], production[1], production[2])
+
+        assert isinstance(sliced.plan, ReplCropAudioPlan)
+        assert [child.plan for child in sliced._children] == list(
+            production.plan.audio_plans[0:2]
+        )
+        assert isinstance(concatenated.plan, ReplComposeAudioPlan)
+        assert concatenated.plan.overlap is False
+        assert isinstance(mixed.plan, ReplComposeAudioPlan)
+        assert mixed.plan.overlap is True
+        assert session.event_loop.submit(sliced.render()).result().frame_count == 0
+        assert session.event_loop.submit(mixed.render()).result().frame_count == 0
+    finally:
+        session.stop()
+        session.event_loop.close()
+
+
+def test_repl_namespace_includes_expression_and_plan_helpers() -> None:
+    session = ReplSession()
+    try:
+        assert session.locals["line"] is line
+        assert session.locals["mix"] is mix
+        assert session.locals["min"] is min
+        assert session.locals["max"] is max
+    finally:
+        session.stop()
+        session.event_loop.close()
+
+
+def test_repl_concat_and_mix_render_independent_wrapper_audio() -> None:
+    session = ReplSession()
+    try:
+        first = _slice_wrapper(session, [1, 2])
+        second = _slice_wrapper(session, [3])
+
+        concatenated = session.event_loop.submit((first + second).render()).result()
+        mixed = session.event_loop.submit(mix(first, second).render()).result()
+        effected_crop = session.event_loop.submit(
+            (((first + second) | gain(6.0206))[0:1]).render()
+        ).result()
+        intersecting_crop = session.event_loop.submit(
+            mix(first, second)[0:1].render()
+        ).result()
+
+        np.testing.assert_array_equal(concatenated.audio[:, 0], [1, 2, 3])
+        np.testing.assert_array_equal(mixed.audio[:, 0], [4, 2])
+        np.testing.assert_allclose(effected_crop.audio[:, 0], [2, 4], atol=1e-4)
+        np.testing.assert_array_equal(intersecting_crop.audio[:, 0], [4, 2])
+    finally:
+        session.stop()
+        session.event_loop.close()
+
+
+def _slice_wrapper(session: ReplSession, values) -> AudioPlanWrapper:
+    sample_rate = session.event_loop.config.resolved_output_sample_rate
+
+    async def build():
+        result = RenderResult(
+            audio=np.repeat(
+                np.asarray(values, dtype=np.float32)[:, np.newaxis],
+                2,
+                axis=1,
+            )
+        )
+        plan = await session.event_loop.injector(AsyncInjector)(
+            SlicePlan,
+            result=result,
+            start_time=0,
+            end_time=len(values) / sample_rate,
+        )
+        return AudioPlanWrapper(
+            plan=plan,
+            sample_rate=sample_rate,
+            submit=session.event_loop.submit,
+        )
+
+    return session.event_loop.submit(build()).result()

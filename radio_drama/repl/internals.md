@@ -1,5 +1,7 @@
 # REPL design and implementation notes
 
+User-facing syntax and behavior are documented in `docs/repl.md`.
+
 The radio-drama REPL is a full Python REPL. It is intentionally a consumer of
 the normal document, planning, rendering, effect, and dependency-injection
 interfaces rather than an alternative effect evaluator or planning path.
@@ -50,6 +52,17 @@ and returns the wrapper. Wrapper rendering always ensures layout first.
 that child. The child wrapper retains the original layout root, because parent
 layout establishes placement and incoming mark scope needed by descendants.
 
+`wrapper[start:stop]` constructs a lazy crop of the fully rendered source
+timeline spanning the selected child bounds. Rendering the source preserves its
+preset buses and outer processing and intentionally includes other siblings
+that intersect the crop interval.
+
+`wrapper_a + wrapper_b` constructs a REPL-local concatenation plan, while
+`mix(wrapper_a, wrapper_b, ...)` overlaps all wrappers at time zero. These plans
+render their input wrappers independently rather than passing shared underlying
+plans through core `ComposeAudioPlan` layout again. This keeps REPL composition
+from mutating placement on reusable production plans.
+
 `wrapper.marks[name]` and `wrapper.marks.name` expose the wrapped plan's local
 `mark_positions`. The first lookup ensures layout is complete. Missing item
 lookups raise `KeyError`; missing attribute lookups raise `AttributeError`.
@@ -67,7 +80,8 @@ terminates active output.
 ## Interactive namespace
 
 The namespace contains ordinary Python locals plus all functions and presets
-valid in effect expressions. `load`, `sound`, `play`, and `stop` are normal
-Python callables. Completion combines Python name and attribute completion with
-generic filesystem completion rooted at the working directory and the loaded
-document's adjacent `sounds/` directory.
+valid in effect expressions, including `line`, `min`, and `max`. `load`,
+`sound`, `mix`, `play`, and `stop` are normal Python callables. Completion
+combines Python name and attribute completion with generic filesystem
+completion rooted at the working directory and the loaded document's adjacent
+`sounds/` directory.

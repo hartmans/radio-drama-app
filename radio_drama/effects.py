@@ -40,6 +40,17 @@ class _ComposableEffectStage:
     def __or__(self, other: EffectStage) -> EffectStage:
         return _compose_effect_stages(self, other)
 
+    def __mul__(self, control: ArrayExpression | Real) -> EffectStage:
+        return ScaledEffectStage(self, coerce_array_exp(control))
+
+    def __rmul__(self, control: ArrayExpression | Real) -> EffectStage:
+        return self * control
+
+    def __add__(self, other: EffectStage) -> EffectStage:
+        if not isinstance(other, EffectStage):
+            return NotImplemented
+        return _add_effect_stages(self, other)
+
 
 @dataclass(frozen=True, slots=True)
 class DryEffectStage(_ComposableEffectStage):
@@ -87,6 +98,43 @@ class CrossfadeEffectStage(_ComposableEffectStage):
         branch = np.array(source, copy=True)
         stage.apply(branch, sample_rate=sample_rate)
         return branch
+
+
+@dataclass(frozen=True, slots=True)
+class ScaledEffectStage(_ComposableEffectStage):
+    """One effect stage followed by a frame-varying amplitude control."""
+
+    stage: EffectStage
+    control: ArrayExpression
+
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        if audio.shape[0] == 0:
+            return
+        working = normalize_audio_array(audio)
+        self.stage.apply(working, sample_rate=sample_rate)
+        working *= _channel_control(
+            control_array(self.control, working.shape[0]),
+            working,
+        )
+        _copy_back(audio, working)
+
+
+@dataclass(frozen=True, slots=True)
+class AddedEffectStage(_ComposableEffectStage):
+    """Parallel copied effect branches summed with linear amplitude."""
+
+    stages: tuple[EffectStage, ...]
+
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        if audio.shape[0] == 0:
+            return
+        source = normalize_audio_array(audio)
+        mixed = np.zeros_like(source)
+        for stage in self.stages:
+            branch = np.array(source, copy=True)
+            stage.apply(branch, sample_rate=sample_rate)
+            mixed += branch
+        _copy_back(audio, mixed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +381,16 @@ def _compose_effect_stages(*stages: EffectStage) -> EffectStage:
     if len(flattened) == 1:
         return flattened[0]
     return EffectPipeline(tuple(flattened))
+
+
+def _add_effect_stages(*stages: EffectStage) -> EffectStage:
+    flattened: list[EffectStage] = []
+    for stage in stages:
+        if isinstance(stage, AddedEffectStage):
+            flattened.extend(stage.stages)
+        else:
+            flattened.append(stage)
+    return AddedEffectStage(tuple(flattened))
 
 
 def _db_to_gain(decibels: float) -> float:
@@ -684,7 +742,9 @@ def mix_white_noise(
 
 @effect_chain_function
 @register_effect_stage
-def gain(gain_expression: ArrayExpression) -> EffectStage:
+def gain(gain_expression: ArrayExpression | Real) -> EffectStage:
+    gain_expression = coerce_array_exp(gain_expression)
+
     @numpy_stage
     def stage(audio: np.ndarray, sample_rate: int) -> None:
         del sample_rate
@@ -702,7 +762,9 @@ def gain(gain_expression: ArrayExpression) -> EffectStage:
 
 @effect_chain_function
 @register_effect_stage
-def pan(pan_expression: ArrayExpression) -> EffectStage:
+def pan(pan_expression: ArrayExpression | Real) -> EffectStage:
+    pan_expression = coerce_array_exp(pan_expression)
+
     @numpy_stage
     def stage(audio: np.ndarray, sample_rate: int) -> None:
         del sample_rate

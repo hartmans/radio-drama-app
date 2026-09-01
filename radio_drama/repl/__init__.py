@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .audio_wrapper import AudioPlanWrapper, AudioPlayer, MarkNamespace
+from .audio_wrapper import (
+    AudioPlanWrapper,
+    AudioPlayer,
+    MarkNamespace,
+    ReplComposeAudioPlan,
+    ReplCropAudioPlan,
+    concatenate,
+    mix,
+)
 from .console import LoadedDocument, ReplEventLoop, ReplSession, repl
 
 
@@ -42,7 +50,11 @@ __all__ = [
     "LoadedDocument",
     "MarkNamespace",
     "ReplEventLoop",
+    "ReplComposeAudioPlan",
+    "ReplCropAudioPlan",
     "ReplSession",
+    "concatenate",
+    "mix",
     "play",
     "repl",
     "sound",

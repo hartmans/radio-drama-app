@@ -2,13 +2,30 @@
 
 This document describes the effect chain functions available in the radio-drama-app backend. Each effect can be composed into chains using the pipeline operator (`|`).
 
+Effect stages also support parallel algebra. `stage * control` and
+`control * stage` process the current buffer and scale the result by a
+linear-amplitude number or array expression. `stage_a + stage_b` gives each
+stage its own copy of the same original input and sums their results. Thus:
+
+```python
+# Equal dry/effected parallel branches.
+dry() * 0.5 + indoor1 * 0.5
+
+# Fade a processed branch in over two seconds.
+dry() + indoor1 * line(0, 0, 2 * s, 1)
+```
+
+Addition is not sequential processing; use `|` when the output of one stage
+should feed the next. Parallel addition is linear and is not automatically
+normalized, so leave headroom when branch controls sum above 1.
+
 Audio-producing XML elements may also set `effect="..."` to apply a restricted
 effect-chain expression to that element's rendered audio. The node applies its
 `gain` automation first, then `effect`, then `pan`; this processing is separate
 from any compose-local `preset` bus. The expression may use the production's
 built-in and document-defined preset names plus documented effect functions.
-`gain(line(...))` and `pan(line(...))` are available within these expressions;
-both take an array expression, so automation stays explicit and composable.
+`gain(...)` and `pan(...)` accept either numbers or array expressions, so both
+`gain(3)` and automated forms such as `gain(line(...))` are legal.
 
 ---
 
@@ -141,7 +158,7 @@ initial delayed samples therefore contain only the scaled dry signal.
 ## pan
 
 Applies an automated stereo balance to rendered stereo audio. `pan` takes an
-array expression whose values range from `-1` (hard left), through `0`
+number or array expression whose values range from `-1` (hard left), through `0`
 (center), to `1` (hard right). Values outside that range are clamped.
 
 The favored channel remains present while the opposite channel is attenuated.
@@ -166,6 +183,18 @@ Move from left to right over one second:
 
 ```python
 pan(line(0 * s, -1, 1 * s, 1))
+```
+
+---
+
+## gain
+
+Applies decibel gain controlled by a number or array expression. Positive
+values boost and negative values attenuate.
+
+```python
+gain(3)
+gain(line(0, -12, 2 * s, 0))
 ```
 
 ---

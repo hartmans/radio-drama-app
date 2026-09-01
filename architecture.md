@@ -23,6 +23,7 @@ Effect chain functions are documented in `docs/effects.md`. When modifying any e
 `radio_drama.repl` is a consumer of the library's public document, planning,
 rendering, effects, and injection interfaces; REPL needs should not introduce
 special behavior into those interfaces. See
+[`docs/repl.md`](docs/repl.md) for the user-facing expression interface and
 [`radio_drama/repl/internals.md`](radio_drama/repl/internals.md) for REPL design
 and implementation notes.
 
@@ -312,10 +313,14 @@ Current effects contract:
 
 * `EffectStage` is the stable DSP interface; it mutates one production-format numpy buffer in place when given the output sample rate
 * stage composition uses `|`, and the result is itself an `EffectStage`
+* stage algebra uses `stage * control` to scale a processed stage in place and
+  `stage_a + stage_b` to sum parallel branches; addition gives every branch its
+  own copy of the original input, preserving order independence and preventing
+  one branch from mutating another branch's source
 * effect-chain expressions return the `effect_chain` expression type, which accepts any `EffectStage`; presets remain named `EffectStage` instances rather than requiring a separate runtime wrapper
 * only factories explicitly decorated with `@effect_chain_function` enter `effect_chain_variables`; generic FFmpeg, numpy, scipy, and Pedalboard stage constructors are not document-visible
 * the fixed `master_loudnorm()` factory exposes the built-in mastering stage without accepting an authored FFmpeg graph; voice preprocessing remains internal
-* the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, and `|`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
+* the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, `|`, and effect-stage `*` / `+`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
 * `control_array(value, frame_count)` is the shared implementation utility for frame-varying effect controls; it coerces numbers and `ArrayExpression` objects to a one-dimensional `float32` array with exactly one value per frame, and is deliberately not registered as a document-visible effect-chain function
 * `dry()` is the identity stage used when a parallel processor needs the unmodified input, while `crossfade()` is the explicit parallel-processing primitive: both branches receive the same original input before their results are mixed

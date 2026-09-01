@@ -26,9 +26,10 @@ from carthage.dependency_injection import AsyncInjector
 from ..config import ProductionConfig
 from ..document import ProductionNode, parse_production_file, parse_production_string
 from ..effects import EffectStage, effect_chain_variables
+from ..expressions import line
 from ..init import radio_drama_injector
 from ..sound import ProductionDocumentPath
-from .audio_wrapper import AudioPlanWrapper, AudioPlayer
+from .audio_wrapper import AudioPlanWrapper, AudioPlayer, mix
 from .pulse_player import PulseAudioPlayer
 
 
@@ -221,6 +222,10 @@ class ReplSession:
         self.locals.update(
             {
                 "load": self.load,
+                "line": line,
+                "max": max,
+                "min": min,
+                "mix": mix,
                 "play": self.play,
                 "sound": self.sound,
                 "stop": self.stop,
