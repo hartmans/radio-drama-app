@@ -18,6 +18,14 @@ Effect chain functions are documented in `docs/effects.md`. When modifying any e
 
 # Current architecture
 
+## Interactive REPL
+
+`radio_drama.repl` is a consumer of the library's public document, planning,
+rendering, effects, and injection interfaces; REPL needs should not introduce
+special behavior into those interfaces. See
+[`radio_drama/repl/internals.md`](radio_drama/repl/internals.md) for REPL design
+and implementation notes.
+
 ## Document layer
 
 The XML document is parsed into a semantic tree of `DocumentNode` objects. These nodes are plain objects, not injectables.

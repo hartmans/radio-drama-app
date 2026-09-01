@@ -8,25 +8,28 @@ pipeline for auditioning those effects.
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import code
 import concurrent.futures
 import readline
 import rlcompleter
 import threading
+from xml.sax.saxutils import quoteattr
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import Any, Coroutine, TypeVar
 
-import numpy as np
-import soundfile as sf
 import yaml
+from carthage.dependency_injection import AsyncInjector
 
-from .document import ProductionNode, parse_production_file
-from .effects import EffectChainRegistry, EffectStage, effect_chain_variables
-from .init import radio_drama_injector
+from ..config import ProductionConfig
+from ..document import ProductionNode, parse_production_file, parse_production_string
+from ..effects import EffectStage, effect_chain_variables
+from ..init import radio_drama_injector
+from ..sound import ProductionDocumentPath
+from .audio_wrapper import AudioPlanWrapper, AudioPlayer
+from .pulse_player import PulseAudioPlayer
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,31 +40,7 @@ class LoadedDocument:
     document: ProductionNode
     speakers: Mapping[str, object]
     effects: Mapping[str, EffectStage]
-
-
-@dataclass(frozen=True, slots=True)
-class ReplSound:
-    """A lazily loaded sound and the effect stages to apply before playback."""
-
-    path: Path
-    stages: tuple[EffectStage, ...] = ()
-
-    def __or__(self, other: object):
-        if isinstance(other, EffectStage):
-            return ReplSound(self.path, (*self.stages, other))
-        return NotImplemented
-
-
-class _Play:
-    """Terminal pipeline object returned by :func:`play`."""
-
-    def __init__(self, runner: "ReplEventLoop") -> None:
-        self.runner = runner
-
-    def __ror__(self, source: object):
-        if not isinstance(source, ReplSound):
-            return NotImplemented
-        return self.runner.submit(_play(source))
+    production: AudioPlanWrapper
 
 
 class ReplEventLoop:
@@ -70,6 +49,8 @@ class ReplEventLoop:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.injector = None
+        self._retired_injectors = []
+        self.config = ProductionConfig()
         self.started = threading.Event()
         self.thread = threading.Thread(
             target=self._run,
@@ -83,7 +64,10 @@ class ReplEventLoop:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self.loop = loop
-        self.injector = radio_drama_injector(event_loop=loop)
+        self.injector = radio_drama_injector(
+            config=self.config,
+            event_loop=loop,
+        )
         self.started.set()
         try:
             loop.run_forever()
@@ -92,9 +76,7 @@ class ReplEventLoop:
             loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
-    def submit(
-        self, coroutine: Coroutine[Any, Any, None]
-    ) -> concurrent.futures.Future[None]:
+    def submit(self, coroutine: Coroutine[Any, Any, _T]) -> concurrent.futures.Future[_T]:
         """Schedule a coroutine without blocking the interactive console."""
 
         loop = self.loop
@@ -108,13 +90,49 @@ class ReplEventLoop:
         self.submit(self._set_document_path(document_path)).result()
 
     async def _set_document_path(self, document_path: Path) -> None:
-        old_injector = self.injector
+        self._retired_injectors.append(self.injector)
         self.injector = radio_drama_injector(
+            config=self.config,
             event_loop=asyncio.get_running_loop(),
             document_path=document_path,
         )
-        if old_injector is not None:
-            old_injector.close()
+
+    def sound_plan(self, reference: str) -> AudioPlanWrapper:
+        """Construct a sound plan on the injector's event loop without rendering it."""
+
+        return self.submit(self._sound_plan(reference)).result()
+
+    async def _sound_plan(self, reference: str) -> AudioPlanWrapper:
+        source_name = None
+        provider = self.injector.injector_containing(ProductionDocumentPath)
+        if provider is not None:
+            source_name = str(provider.get_instance(ProductionDocumentPath).path)
+        document = parse_production_string(
+            f"<production><sound ref={quoteattr(reference)} /></production>",
+            source_name=source_name,
+        )
+        sound_node = document.element_children[0]
+        plan = await sound_node.plan(self.injector(AsyncInjector))
+        config = self.injector.get_instance(ProductionConfig)
+        return AudioPlanWrapper(
+            plan=plan,
+            sample_rate=config.resolved_output_sample_rate,
+            submit=self.submit,
+        )
+
+    def production_plan(self, document: ProductionNode) -> AudioPlanWrapper:
+        """Plan a production without laying it out or rendering it."""
+
+        return self.submit(self._production_plan(document)).result()
+
+    async def _production_plan(self, document: ProductionNode) -> AudioPlanWrapper:
+        plan = await document.plan(self.injector(AsyncInjector))
+        config = self.injector.get_instance(ProductionConfig)
+        return AudioPlanWrapper(
+            plan=plan,
+            sample_rate=config.resolved_output_sample_rate,
+            submit=self.submit,
+        )
 
     def close(self) -> None:
         """Stop the companion loop and wait briefly for its thread to exit."""
@@ -128,50 +146,14 @@ class ReplEventLoop:
         if self.injector is not None:
             self.injector.close()
             self.injector = None
+        for injector in reversed(self._retired_injectors):
+            injector.close()
+        self._retired_injectors.clear()
         if self.loop is not None:
             self.loop.stop()
 
 
-def sound(path: str | Path) -> ReplSound:
-    """Start a lazy audition pipeline for an audio file."""
-
-    return ReplSound(Path(path).expanduser())
-
-
-def play() -> _Play:
-    """Return the terminal stage which renders and plays a sound pipeline."""
-
-    return _Play(_default_event_loop())
-
-
-async def _play(source: ReplSound) -> None:
-    audio, sample_rate = await asyncio.to_thread(_read_sound, source.path)
-    for stage in source.stages:
-        await asyncio.to_thread(stage.apply, audio, sample_rate=sample_rate)
-    await asyncio.to_thread(_play_sound, audio, sample_rate)
-
-
-def _read_sound(path: Path) -> tuple[np.ndarray, int]:
-    audio, sample_rate = sf.read(path, dtype="float32", always_2d=False)
-    return np.ascontiguousarray(audio, dtype=np.float32), sample_rate
-
-
-def _play_sound(audio: np.ndarray, sample_rate: int) -> None:
-    try:
-        import sounddevice
-    except ImportError as exc:  # pragma: no cover - an optional runtime facility
-        raise RuntimeError("sounddevice is required for REPL playback") from exc
-    sounddevice.play(audio, sample_rate, blocking=True)
-
-
-_DEFAULT_EVENT_LOOP: ReplEventLoop | None = None
-
-
-def _default_event_loop() -> ReplEventLoop:
-    global _DEFAULT_EVENT_LOOP
-    if _DEFAULT_EVENT_LOOP is None:
-        _DEFAULT_EVENT_LOOP = ReplEventLoop()
-    return _DEFAULT_EVENT_LOOP
+_T = TypeVar("_T")
 
 
 class _ReplCompleter:
@@ -227,6 +209,11 @@ class ReplSession:
 
     def __init__(self) -> None:
         self.event_loop = ReplEventLoop()
+        self.pulse_player = PulseAudioPlayer()
+        self.player = AudioPlayer(
+            self.event_loop.submit,
+            self.pulse_player,
+        )
         self.sound_roots = [Path.cwd()]
         effect_variables = effect_chain_variables()
         self._effect_variable_names = set(effect_variables)
@@ -236,43 +223,52 @@ class ReplSession:
                 "load": self.load,
                 "play": self.play,
                 "sound": self.sound,
+                "stop": self.stop,
                 "speaker_presets": {},
             }
         )
         self.loaded_document: LoadedDocument | None = None
 
-    def sound(self, path: str | Path) -> ReplSound:
-        """Start a pipeline, resolving a bare sound name under known sound roots."""
+    def sound(self, path: str | Path) -> AudioPlanWrapper:
+        """Wrap a lazily rendered ``SoundPlan`` resolved by the app injector."""
 
         requested = Path(path).expanduser()
-        if not requested.is_absolute() and not requested.is_file():
+        if requested.is_file():
+            requested = requested.resolve()
+        elif not requested.is_absolute():
             for root in self.sound_roots:
                 candidate = root / requested
                 if candidate.is_file():
                     requested = candidate
                     break
-        return ReplSound(requested)
+        return self.event_loop.sound_plan(str(requested))
 
-    def play(self) -> _Play:
-        """Return a terminal stage backed by this session's companion loop."""
+    def play(self, wrapper: AudioPlanWrapper | None = None):
+        """Play a wrapper directly, or return the playback pipe terminal."""
 
-        return _Play(self.event_loop)
+        return self.player(wrapper)
 
-    def load(self, path: str | Path) -> LoadedDocument:
-        """Load speaker definitions and effect presets from a production XML file."""
+    def stop(self) -> None:
+        """Stop pending rendering and any active PulseAudio playback."""
+
+        self.player.stop()
+
+    def load(self, path: str | Path) -> AudioPlanWrapper:
+        """Plan and wrap a production without laying it out or rendering it."""
 
         document_path = Path(path).expanduser()
         document = parse_production_file(document_path)
         speakers = _load_speakers(document)
-        registry = _load_effects(document)
-        effects = registry.stages()
         self.event_loop.set_document_path(document_path)
+        production = self.event_loop.production_plan(document)
+        effects = production.plan.effect_chains.stages()
 
         loaded = LoadedDocument(
             path=document_path,
             document=document,
             speakers=speakers,
             effects=effects,
+            production=production,
         )
         self.loaded_document = loaded
         sounds_root = document_path.parent / "sounds"
@@ -286,7 +282,8 @@ class ReplSession:
         self.locals.update(effect_variables)
         self.locals["speaker_presets"] = speakers
         self.locals["document"] = loaded
-        return loaded
+        self.locals["production"] = production
+        return production
 
     def interact(self, banner: str | None = None) -> None:
         """Run a standard Python interactive console over this session's locals."""
@@ -301,6 +298,7 @@ class ReplSession:
         try:
             code.interact(banner=banner, local=self.locals)
         finally:
+            self.stop()
             self.event_loop.close()
 
     def _install_completion(self) -> None:
@@ -309,29 +307,6 @@ class ReplSession:
         delimiters = readline.get_completer_delims().replace("/", "").replace("-", "")
         readline.set_completer_delims(delimiters)
         readline.parse_and_bind("tab: complete")
-
-
-def _load_effects(document: ProductionNode) -> EffectChainRegistry:
-    registry = EffectChainRegistry()
-    preset_maps = document.child_elements_named("preset-map")
-    if not preset_maps:
-        return registry
-    node = preset_maps[0]
-    loaded = yaml.safe_load(node.normalized_text_content)
-    if not isinstance(loaded, dict):
-        raise node.error("The <preset-map> YAML must be a mapping of preset names to expressions")
-    for preset_name, expression in loaded.items():
-        if not isinstance(preset_name, str) or not preset_name.strip().isidentifier():
-            raise node.error("Preset names in <preset-map> must be valid expression identifiers")
-        if not isinstance(expression, str) or not expression.strip():
-            raise node.error(
-                f"Expression for preset {preset_name!r} must be a non-empty string"
-            )
-        try:
-            registry.add_from_expression(preset_name.strip(), expression.strip())
-        except Exception as exc:
-            raise node.error(f"Invalid expression for preset {preset_name!r}: {exc}") from exc
-    return registry
 
 
 def _load_speakers(document: ProductionNode) -> dict[str, object]:
@@ -345,18 +320,6 @@ def _load_speakers(document: ProductionNode) -> dict[str, object]:
     return dict(loaded)
 
 
-def main(argv: list[str] | None = None) -> None:
-    """Run the radio-drama interactive console."""
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("document", nargs="?", help="production XML to load before starting")
-    args = parser.parse_args(argv)
-    session = ReplSession()
-    if args.document:
-        session.load(args.document)
-    session.interact()
-
-
 def repl(document: str | Path | None = None) -> None:
     """Start an interactive session, optionally with one document preloaded."""
 
@@ -364,7 +327,3 @@ def repl(document: str | Path | None = None) -> None:
     if document is not None:
         session.load(document)
     session.interact()
-
-
-if __name__ == "__main__":
-    main()
