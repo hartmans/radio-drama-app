@@ -139,3 +139,37 @@ def test_coerce_array_exp_wraps_numbers() -> None:
         coerced.to_size(3),
         np.full(3, 3.0, dtype=np.float32),
     )
+
+
+def test_array_expression_addition_and_subtraction_are_lazy_and_symmetric() -> None:
+    ramp = line(0, 0, 2, 1)
+
+    np.testing.assert_allclose(
+        (ramp + 0.25).to_size(3),
+        np.array([0.25, 0.75, 1.25], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        (1 - ramp).to_size(3),
+        np.array([1.0, 0.5, 0.0], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        (line(0.5) - ramp).to_size(3),
+        np.array([0.5, 0.0, -0.5], dtype=np.float32),
+    )
+
+
+def test_assignment_expression_is_local_to_one_evaluation() -> None:
+    variables = {"offset": 0.25}
+    result = eval_expression(
+        "(ramp := line(0, 0, 2, 1)) + offset - ramp",
+        variables,
+        lambda value: value,
+    )
+
+    np.testing.assert_allclose(result.to_size(3), 0.25)
+    assert variables == {"offset": 0.25}
+
+
+def test_assignment_expression_rejects_private_names() -> None:
+    with pytest.raises(ValueError, match="cannot start"):
+        validate_expression("(_temporary := 1)")

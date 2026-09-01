@@ -94,6 +94,18 @@ parallel_room = dry() * 0.4 + indoor1 * line(0, 0, 2 * s, 0.6)
 processed = cue | parallel_room
 ```
 
+Array controls support lazy addition and subtraction with numbers and other
+array controls. A parenthesized `:=` binding can name an intermediate value for
+the duration of one expression:
+
+```python
+wet_dry = phone * (ramp := line(0, 0, 96_000, 1)) + dry() * (1 - ramp)
+```
+
+The binding does not persist as a REPL local when it is evaluated inside a
+document effect expression. In the full Python REPL, ordinary Python assignment
+is also available.
+
 Effect multiplication uses linear amplitude. `gain(...)` remains decibel gain;
 both constants such as `gain(3)` and automation such as `gain(line(...))` are
 accepted.

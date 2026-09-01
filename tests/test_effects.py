@@ -167,6 +167,19 @@ def test_effect_registry_expressions_support_parallel_algebra():
     np.testing.assert_allclose(audio, np.array([0.25, 0.75, 1.25], dtype=np.float32))
 
 
+def test_effect_registry_expression_can_name_and_complement_a_ramp():
+    registry = EffectChainRegistry()
+    stage = registry.add_from_expression(
+        "ramped",
+        "gain(6.0206) * (ramp := line(0, 0, 2, 1)) + dry() * (1 - ramp)",
+    )
+    audio = np.ones(3, dtype=np.float32)
+
+    stage.apply(audio, sample_rate=48_000)
+
+    np.testing.assert_allclose(audio, np.array([1.0, 1.5, 2.0]), atol=1e-4)
+
+
 def test_audio_plan_crossfade_effect_uses_render_time_variables():
     config = ProductionConfig(output_sample_rate=4, output_channels=1)
 

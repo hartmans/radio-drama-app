@@ -9,7 +9,7 @@ from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.audio import AudioPlan, SlicePlan
 from radio_drama.cache import CacheManager
-from radio_drama.effects import gain
+from radio_drama.effects import dry, gain
 from radio_drama.expressions import line
 from radio_drama.rendering import RenderResult
 from radio_drama.repl.audio_wrapper import (
@@ -221,6 +221,7 @@ def test_repl_namespace_includes_expression_and_plan_helpers() -> None:
     session = ReplSession()
     try:
         assert session.locals["line"] is line
+        assert session.locals["dry"] is dry
         assert session.locals["mix"] is mix
         assert session.locals["min"] is min
         assert session.locals["max"] is max

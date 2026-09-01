@@ -13,6 +13,9 @@ dry() * 0.5 + indoor1 * 0.5
 
 # Fade a processed branch in over two seconds.
 dry() + indoor1 * line(0, 0, 2 * s, 1)
+
+# Complementary wet and dry ramps using one expression-local binding.
+phone * (ramp := line(0, 0, 2 * s, 1)) + dry() * (1 - ramp)
 ```
 
 Addition is not sequential processing; use `|` when the output of one stage

@@ -30,6 +30,36 @@ class ArrayExpression(ABC):
     def to_size(self, frame_count: int) -> np.ndarray:
         raise NotImplementedError
 
+    def __add__(self, other: ArrayExpression | Real) -> ArrayExpression:
+        return BinaryArrayExpression("add", self, coerce_array_exp(other))
+
+    def __radd__(self, other: ArrayExpression | Real) -> ArrayExpression:
+        return BinaryArrayExpression("add", coerce_array_exp(other), self)
+
+    def __sub__(self, other: ArrayExpression | Real) -> ArrayExpression:
+        return BinaryArrayExpression("subtract", self, coerce_array_exp(other))
+
+    def __rsub__(self, other: ArrayExpression | Real) -> ArrayExpression:
+        return BinaryArrayExpression("subtract", coerce_array_exp(other), self)
+
+
+@dataclass(frozen=True, slots=True)
+class BinaryArrayExpression(ArrayExpression):
+    """Lazy arithmetic that leaves both operand results unchanged."""
+
+    operator: str
+    left: ArrayExpression
+    right: ArrayExpression
+
+    def to_size(self, frame_count: int) -> np.ndarray:
+        left = self.left.to_size(frame_count)
+        right = self.right.to_size(frame_count)
+        if self.operator == "add":
+            return np.add(left, right)
+        if self.operator == "subtract":
+            return np.subtract(left, right)
+        raise ValueError(f"Unsupported array operator: {self.operator}")
+
 
 @dataclass(frozen=True, slots=True)
 class LineExpression(ArrayExpression):
@@ -164,6 +194,13 @@ def _validate_node(node: ast.AST) -> None:
             _validate_node(element)
         return
     if isinstance(node, ast.Name):
+        return
+    if isinstance(node, ast.NamedExpr):
+        if not isinstance(node.target, ast.Name):
+            raise ValueError("Assignment expression targets must be names")
+        if node.target.id.startswith("_"):
+            raise ValueError("Assignment expression names cannot start with '_'")
+        _validate_node(node.value)
         return
     if isinstance(node, ast.BinOp):
         if not isinstance(node.op, _ALLOWED_BINARY_OPERATORS):

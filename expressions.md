@@ -20,6 +20,8 @@ Expressions are written as a single Python expression. They support:
 * unary `+` and `-`
 * binary `+`, `-`, `*`, `/`, `**`, and `%`
 * function calls: `line(...)`, `min(...)`, and `max(...)`
+* a parenthesized local binding such as `(ramp := line(...))`; the target must
+  be a non-private name and exists only while that one expression is evaluated
 * effect-stage pipelines with `|`, parallel scaling with `*`, and parallel
   summing with `+` in effect expressions
 
@@ -51,8 +53,11 @@ Common forms:
 Use it when you want audio to change gradually instead of jumping.
 
 Numbers and `line(...)` values can both serve as frame-varying controls for
-effect-stage multiplication. Effect addition and multiplication operate on
-copied parallel branches; see `docs/effects.md` for their audio semantics.
+effect-stage multiplication. Array expressions support `+` and `-` with
+numbers or other array expressions in either operand order. Arithmetic is lazy:
+both inputs remain reusable and a new result array is produced when the control
+is expanded to a particular frame count. Effect addition gives its parallel
+branches independent copies; see `docs/effects.md` for the audio semantics.
 
 Examples:
 
@@ -60,6 +65,15 @@ Examples:
 line(0)
 line(0, -12, natural_length, -3)
 line(0, -1, door_open, 0)
+1 - line(0, 0, door_open, 1)
+```
+
+A binding is useful when the same control appears more than once. It does not
+create a document preset or modify the variables available to later
+expressions:
+
+```python
+phone * (ramp := line(0, 0, door_open, 1)) + dry() * (1 - ramp)
 ```
 
 The frame positions are sample-frame positions in the current expression
