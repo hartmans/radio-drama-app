@@ -1,6 +1,6 @@
 # Radio Drama App
 
-This app renders a production XML document into a radio drama WAV file. It can also launch a FastAPI backend plus a small React preview frontend for comparing render-time presets.
+This app renders a production XML document into a WAV, FLAC, MP3, or Ogg radio drama. It can also launch a FastAPI backend plus a small React preview frontend for comparing render-time presets.
 
 ## Quick Start
 
@@ -69,13 +69,18 @@ Useful options:
 
 * `--voice-dir PATH`: directory containing reference voice files
 * `--sounds-dir PATH`: directory searched recursively for relative `<sound>` references
-* `--output PATH`: output WAV path; defaults to `INPUT.wav`
+* `--output PATH`: output path ending in `.wav`, `.flac`, `.mp3`, or `.ogg`; defaults to `INPUT.wav`
+* `--output-type TYPE`: use the input filename stem with output type `wav`, `flac`, `mp3`, or `ogg`; mutually exclusive with `--output`
 * `--output-sample-rate N`: override the production sample rate
 * `--output-channels N`: override the output channel count
 * `--model-file PATH`: override the VibeVoice model path
 * `--batch-size N`, `--device NAME`, `--cfg-scale X`, `--disable-prefill`, `--ddpm-inference-steps N`: VibeVoice overrides
 
 If `--sounds-dir` is not supplied, relative sound references are resolved under a `sounds/` directory next to the XML file.
+
+The production speech cache always uses the encoding-independent name
+`INPUT.wav.cache`. Thus rendering `INPUT.mp3`, `INPUT.flac`, and `INPUT.ogg`
+reuses the same cache. Ogg output currently uses Vorbis quality 8.5.
 
 ## Current XML Schema
 
@@ -88,6 +93,7 @@ The current schema is intentionally small.
 Current children:
 
 * zero or one `<speaker-map>`
+* zero or one `<frontmatter>`
 * any number of audio-producing child elements or `<mark>` elements
 * today, those audio-producing elements are `<script>` and `<sound>`
 
@@ -108,6 +114,43 @@ Example:
   <sound ref="gavel" />
 </production>
 ```
+
+### `<frontmatter>`
+
+`<frontmatter>` contains optional YAML metadata for the rendered episode. All
+fields are optional. `credits` is a list of display strings whose spelling and
+capitalization are preserved. For FLAC, MP3, and Ogg output, authored credits
+and automatically discovered Freesound attribution are embedded in the audio
+comment as minimal, plain-text-readable Markdown. WAV output does not embed
+front matter.
+
+```xml
+<frontmatter>
+  series: Nothing but the Succubus
+  episode: 3
+  title: Mysterious Mister X
+  artist: BlindDancer AI
+  credits:
+    - Qwen TTS Voice Design
+    - MOSS Voice Design
+  description: The third episode of Nothing but the Succubus.
+  season: 1
+</frontmatter>
+```
+
+The supported fields are `series`, `episode`, `title`, `artist`, `credits`,
+`description`, and `season`. Series and episode metadata use the conventional
+album and track fields in each output format; season uses the disc field.
+
+Freesound credits can also be printed without rendering audio:
+
+```bash
+python -m radio_drama.freesound INPUT.xml --voice-dir voices
+python -m radio_drama.freesound INPUT.xml --voice-dir voices --minimal
+```
+
+The default form uses Markdown links. `--minimal` produces the same
+plain-text-friendly form used in embedded comments.
 
 ### `<speaker-map>`
 

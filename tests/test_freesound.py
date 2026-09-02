@@ -1,7 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from radio_drama.freesound import likely_freesound_ids, load_api_key
+from radio_drama.freesound import (
+    FreesoundCredit,
+    likely_freesound_ids,
+    load_api_key,
+    markdown_credits,
+)
 from radio_drama.sound import SoundPlan, sound_plans_in
 
 
@@ -57,3 +62,12 @@ def test_load_api_key_reads_secret_from_yaml(tmp_path, monkeypatch):
     monkeypatch.delenv("FREESOUND_API_KEY", raising=False)
 
     assert load_api_key(credentials) == "token-value"
+
+
+def test_minimal_markdown_is_plain_text_readable():
+    credit = FreesoundCredit(123, "A Bell", "Sound Author")
+
+    assert markdown_credits((credit,), minimal=True) == (
+        "## Sound credits\n\n"
+        "- “A Bell” by Sound Author — https://freesound.org/s/123/\n"
+    )

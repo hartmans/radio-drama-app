@@ -4,23 +4,29 @@ from __future__ import annotations
 import asyncio
 import gc
 import sys
-from pathlib import Path
-
-import soundfile as sf
 from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.cli import build_injector_from_namespace, initialize_arg_parser
 from radio_drama.debug import reset_debug_outputs
 from radio_drama.document import parse_production_file
 from radio_drama.errors import DocumentError
+from radio_drama.production import write_production
 
 
 def main() -> None:
     parser = initialize_arg_parser(
         "Render a Phase 1 radio-drama XML document to WAV.",
     )
-    parser.add_argument("--cut-before", default=None, help="Drop all production audio before the named <mark>.")
-    parser.add_argument("--cut-after", default=None, help="Drop all production audio after the named <mark>.")
+    parser.add_argument(
+        "--cut-before",
+        default=None,
+        help="Drop all production audio before the named <mark>.",
+    )
+    parser.add_argument(
+        "--cut-after",
+        default=None,
+        help="Drop all production audio after the named <mark>.",
+    )
     args = parser.parse_args()
 
     async def runner() -> None:
@@ -43,9 +49,7 @@ def main() -> None:
         finally:
             injector.close()
 
-        output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(output, production_result.audio, config.resolved_output_sample_rate)
+        await write_production(production_plan, production_result, output_path)
 
     try:
         asyncio.run(runner())

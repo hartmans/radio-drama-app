@@ -37,7 +37,7 @@ Current document contract:
 * document nodes retain XML attributes in `DocumentNode.attributes`
 * concrete element classes declare a class-level `tag_name`
 * child placement is driven by class-level contexts rather than by per-instance child-tag dictionaries
-* `<production>` may contain zero or one `<speaker-map>`, zero or one `<preset-map>`, plus any element permitted in the audio-plan context
+* `<production>` may contain zero or one `<speaker-map>`, zero or one `<preset-map>`, zero or one YAML `<frontmatter>`, plus any element permitted in the audio-plan context
 * `<speaker-map>` content is YAML mapping speaker names to voice references
 * `<preset-map>` content is an ordered YAML mapping from preset identifiers to restricted effect-chain expressions
 * `<script>` content is speaker-authored dialogue text
@@ -168,6 +168,14 @@ Planning rule for presets:
 
 `radio_drama_injector()` is the standard one-time application initialization for radio-drama planning and rendering. It installs shared resources while preserving caller overrides from a parent injector and sizes the supplied event loop's default executor to the logical CPUs available to the process. When callers supply an `output_path`, it also installs the `CacheManager`, which derives the shared speech-cache root from that output path unless the caller overrides `InjectionKey("cache_dir")` directly. Planning a production creates a plain child injector for its production-scoped planning state and effect registry; it inherits application resources rather than repeating application initialization.
 
+Output responsibilities are split deliberately. `radio_drama.frontmatter` owns
+the format-neutral metadata value, YAML validation, metadata-to-container
+mapping, credits-comment construction, and WAV/FLAC/MP3/Ogg file encoding.
+`radio_drama.freesound` recognizes and resolves external Freesound attribution.
+`radio_drama.production.write_production()` coordinates a completed production
+plan and render result with those services; CLI and REPL production output use
+that same entry point.
+
 ## Resource layer
 
 Resources own model lifecycle, batching, and other shared external state.
@@ -206,6 +214,7 @@ Current resource contract:
 * the F5-TTS proxy keeps the official v1 Base model and Vocos vocoder resident, uses the host-supplied reference transcript, and serializes its single-item high-level inference API; radio-drama remains responsible for multi-speaker ordering rather than using F5-TTS's concatenation-oriented multi-speaker syntax
 * `CacheManager` is the production-scoped mapping from cache type names such as `vibevoice` and `qwentts` to `CacheCollection` objects
 * `CacheManager` derives the shared cache root from the production `output_path`, while still allowing a direct `InjectionKey("cache_dir")` override for callers that need to place the cache elsewhere
+* output encoding is not part of cache identity: the shared helper normalizes `.wav`, `.flac`, `.mp3`, and `.ogg` outputs to the sibling `<stem>.wav.cache`, and application, backend, and REPL injectors all reach that rule through `CacheManager`
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
 * the backend-independent TTS cache persists model-native WAV output plus a flat adjacent `.meta` JSON object containing the sample rate, frame and channel counts, alignment key, and optional dialogue-line spans
 * the alignment key combines an alignment-format version, the cached audio file's identity, and the alignment projection; a projection change reruns forced alignment and rewrites only `.meta`, while an unchanged key reuses timing across sessions

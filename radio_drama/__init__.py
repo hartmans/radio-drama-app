@@ -8,7 +8,13 @@ from .audio import (
     convert_channel_count,
     resample_audio,
 )
-from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
+from .cache import (
+    CacheCollection,
+    CacheKey,
+    CacheManager,
+    CachableResource,
+    cache_directory_for_output,
+)
 from .config import ProductionConfig
 from .dialogue import (
     BackendRegisteredTtsRequest,
@@ -39,13 +45,22 @@ from .document import (
     ScriptNode,
     RecordingNode,
     PresetMapNode,
+    FrontmatterNode,
     SpeakerMapNode,
     TextNode,
     parse_production_file,
     parse_production_string,
 )
 from .errors import DocumentError, SourceLocation
-from .expressions import ArrayExpression, LineExpression, coerce_array_exp, eval_expression, line, validate_expression
+from .frontmatter import FrontMatter, parse_frontmatter, write_audio_file
+from .expressions import (
+    ArrayExpression,
+    LineExpression,
+    coerce_array_exp,
+    eval_expression,
+    line,
+    validate_expression,
+)
 from .effects import (
     compress_audio,
     control_array,
@@ -66,7 +81,6 @@ from .effects import (
     CrossfadeEffectStage,
     FFmpegFilterEffectStage,
     PedalboardEffectStage,
-
     feedback_reverb,
     equalizer,
     ffmpeg_filter_stage,
@@ -83,14 +97,25 @@ from .effects import (
     scipy_signal_stage,
     tilt_tone,
 )
-from .forced_alignment import AlignedScriptResult, AlignedScriptSource, ScriptSlice, WhisperXResource
+from .forced_alignment import (
+    AlignedScriptResult,
+    AlignedScriptSource,
+    ScriptSlice,
+    WhisperXResource,
+)
 from .init import radio_drama_injector
 from .planning import PlanningNode
-from .production import ProductionPlan
+from .production import ProductionPlan, write_production
 from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
 from .rendering import DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
-from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan, sound_plans_in
+from .sound import (
+    NormalizedSoundCache,
+    ProductionDocumentPath,
+    SoundNode,
+    SoundPlan,
+    sound_plans_in,
+)
 from .text import normalize_text_punctuation
 from .vibevoice import VibeVoiceResource
 from .voice_reference import VoiceReferenceTranscriptionResource
@@ -99,10 +124,10 @@ __all__ = [
     "ArrayExpression",
     "AudioPlan",
     "BackendRegisteredTtsRequest",
-
     "CacheCollection",
     "CacheKey",
     "CacheManager",
+    "cache_directory_for_output",
     "CachableResource",
     "ComposeAudioPlan",
     "DialogueContent",
@@ -133,6 +158,8 @@ __all__ = [
     "EffectPipeline",
     "EffectMixer",
     "EffectStage",
+    "FrontMatter",
+    "FrontmatterNode",
     "AddedEffectStage",
     "DryEffectStage",
     "ScaledEffectStage",
@@ -165,6 +192,7 @@ __all__ = [
     "ProductionDocumentPath",
     "ProductionNode",
     "ProductionPlan",
+    "write_production",
     "ProxyMount",
     "ProxyTtsConfig",
     "ProxyTtsResource",
@@ -201,8 +229,10 @@ __all__ = [
     "normalize_text_punctuation",
     "parse_production_file",
     "parse_production_string",
+    "parse_frontmatter",
     "register_effect_stage",
     "resample_audio",
     "scipy_signal_stage",
     "tilt_tone",
+    "write_audio_file",
 ]

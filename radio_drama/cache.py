@@ -14,14 +14,18 @@ CACHE_DIRECTORY_KEY = InjectionKey("cache_dir")
 CACHE_OUTPUT_PATH_KEY = InjectionKey("cache_output_path")
 
 
+def cache_directory_for_output(output_path: str | Path) -> Path:
+    """Return the stable ``.wav.cache`` directory for any output encoding."""
+
+    return Path(f"{Path(output_path).with_suffix('.wav')}.cache")
+
+
 class CachableResource(Protocol):
     """Cache key surface shared by render-request-like cacheable values."""
 
-    def cache_first_words(self) -> str:
-        ...
+    def cache_first_words(self) -> str: ...
 
-    def cache_hash(self) -> str:
-        ...
+    def cache_hash(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,19 +175,25 @@ class CacheManager(AsyncInjectable, Mapping[str, CacheCollection]):
             return self._root_directory
 
         self._root_directory_resolved = True
-        provider_injector = self.ainjector.injector.injector_containing(CACHE_DIRECTORY_KEY)
+        provider_injector = self.ainjector.injector.injector_containing(
+            CACHE_DIRECTORY_KEY
+        )
         if provider_injector is not None:
             self._root_directory = Path(
                 provider_injector.get_instance(CACHE_DIRECTORY_KEY)
             ).expanduser()
             return self._root_directory
 
-        provider_injector = self.ainjector.injector.injector_containing(CACHE_OUTPUT_PATH_KEY)
+        provider_injector = self.ainjector.injector.injector_containing(
+            CACHE_OUTPUT_PATH_KEY
+        )
         if provider_injector is None:
             self._root_directory = None
             return None
-        output_path = Path(provider_injector.get_instance(CACHE_OUTPUT_PATH_KEY)).expanduser()
-        self._root_directory = Path(f"{output_path}.cache")
+        output_path = Path(
+            provider_injector.get_instance(CACHE_OUTPUT_PATH_KEY)
+        ).expanduser()
+        self._root_directory = cache_directory_for_output(output_path)
         return self._root_directory
 
 
@@ -195,6 +205,7 @@ def _sanitize_cache_label(text: str) -> str:
 __all__ = [
     "CACHE_DIRECTORY_KEY",
     "CACHE_OUTPUT_PATH_KEY",
+    "cache_directory_for_output",
     "CacheCollection",
     "CacheHit",
     "CacheKey",

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+import yaml
 from carthage.dependency_injection import Injector
 
 from .errors import DocumentError, SourceLocation
@@ -56,6 +57,7 @@ class DocumentNode:
 @dataclass(slots=True)
 class TextNode(DocumentNode):
     """Literal text content inside an XML element."""
+
     text: str = ""
 
     @property
@@ -113,7 +115,7 @@ class ElementNode(DocumentNode):
                 f"{self.display_name} does not allow child element <{tag_name}>",
                 node=self,
                 location=location,
-        )
+            )
         return child_type(
             location=location,
             attributes=dict(attributes or {}),
@@ -135,7 +137,9 @@ class ElementNode(DocumentNode):
     def require_children(self, tag_name: str) -> list["ElementNode"]:
         children = self.child_elements_named(tag_name)
         if not children:
-            raise self.error(f"{self.display_name} requires at least one <{tag_name}> element")
+            raise self.error(
+                f"{self.display_name} requires at least one <{tag_name}> element"
+            )
         return children
 
     @property
@@ -230,8 +234,7 @@ def _register_context_class(
 
 def _same_declared_class(left: type[ElementNode], right: type[ElementNode]) -> bool:
     return (
-        left.__module__ == right.__module__
-        and left.__qualname__ == right.__qualname__
+        left.__module__ == right.__module__ and left.__qualname__ == right.__qualname__
     )
 
 
@@ -262,6 +265,26 @@ class PresetMapNode(ElementNode):
         from .effects import PresetMapPlan
 
         return await ainjector(PresetMapPlan, node=self)
+
+
+@dataclass(slots=True)
+class FrontmatterNode(ElementNode):
+    """Document node containing optional production metadata as YAML."""
+
+    tag_name: ClassVar[str] = "frontmatter"
+    allow_text: ClassVar[bool] = True
+
+    @property
+    def frontmatter(self):
+        from .frontmatter import parse_frontmatter
+
+        try:
+            return parse_frontmatter(self.normalized_text_content)
+        except (TypeError, ValueError, yaml.YAMLError) as exc:
+            raise self.error(f"Invalid <frontmatter> YAML: {exc}") from exc
+
+    async def plan(self, ainjector):
+        return None
 
 
 @dataclass(slots=True)
@@ -301,15 +324,21 @@ class ScriptNode(ElementNode):
 
     @property
     def recording_node(self) -> "RecordingNode | None":
-        recordings = [child for child in self.element_children if isinstance(child, RecordingNode)]
+        recordings = [
+            child for child in self.element_children if isinstance(child, RecordingNode)
+        ]
         if not recordings:
             return None
         return recordings[0]
 
     def validate_document(self) -> None:
-        recordings = [child for child in self.element_children if isinstance(child, RecordingNode)]
+        recordings = [
+            child for child in self.element_children if isinstance(child, RecordingNode)
+        ]
         if len(recordings) > 1:
-            raise recordings[1].error("<script> may contain at most one <recording> element")
+            raise recordings[1].error(
+                "<script> may contain at most one <recording> element"
+            )
         if recordings and self.element_children[0] is not recordings[0]:
             raise recordings[0].error(
                 "<recording> must be the first element child of <script>"
@@ -436,6 +465,7 @@ class ProductionNode(ElementNode):
     allowed_child_tags: ClassVar[dict[str, type[ElementNode]]] = {
         "speaker-map": SpeakerMapNode,
         "preset-map": PresetMapNode,
+        "frontmatter": FrontmatterNode,
     }
     accepts_contexts: ClassVar[tuple[ElementContext, ...]] = (AudioPlanContext,)
 
@@ -453,8 +483,24 @@ class ProductionNode(ElementNode):
         self.tts
         preset_maps = self.child_elements_named("preset-map")
         if len(preset_maps) > 1:
-            raise preset_maps[1].error("A <production> may contain only one <preset-map>")
+            raise preset_maps[1].error(
+                "A <production> may contain only one <preset-map>"
+            )
+        frontmatter_nodes = self.child_elements_named("frontmatter")
+        if len(frontmatter_nodes) > 1:
+            raise frontmatter_nodes[1].error(
+                "A <production> may contain only one <frontmatter>"
+            )
+        if frontmatter_nodes:
+            frontmatter_nodes[0].frontmatter
         return ElementNode.validate_document(self)
+
+    @property
+    def frontmatter(self):
+        from .frontmatter import FrontMatter
+
+        nodes = self.child_elements_named("frontmatter")
+        return nodes[0].frontmatter if nodes else FrontMatter()
 
     @property
     def speaker_map_node(self) -> SpeakerMapNode:
@@ -463,9 +509,7 @@ class ProductionNode(ElementNode):
     @property
     def script_nodes(self) -> list[ScriptNode]:
         return [
-            child
-            for child in self.element_children
-            if isinstance(child, ScriptNode)
+            child for child in self.element_children if isinstance(child, ScriptNode)
         ]
 
     async def plan(self, ainjector):
@@ -481,9 +525,15 @@ class ProductionNode(ElementNode):
             production_injector.injector_containing(ProductionDocumentPath) is None
             and self.location.source is not None
         ):
-            production_injector.add_provider(ProductionDocumentPath(Path(self.location.source)))
-        production_injector.add_provider(PRODUCTION_PLANNING_INJECTOR_KEY, production_injector)
-        inherited_effect_chains = ainjector.injector.injector_containing(EffectChainRegistry)
+            production_injector.add_provider(
+                ProductionDocumentPath(Path(self.location.source))
+            )
+        production_injector.add_provider(
+            PRODUCTION_PLANNING_INJECTOR_KEY, production_injector
+        )
+        inherited_effect_chains = ainjector.injector.injector_containing(
+            EffectChainRegistry
+        )
         if inherited_effect_chains is None:
             production_injector.add_provider(EffectChainRegistry())
         else:
@@ -581,7 +631,9 @@ class _ProductionContentHandler(xml.sax.handler.ContentHandler):
 from . import sound as _sound  # noqa: F401
 
 
-def parse_production_string(xml_text: str, *, source_name: str | None = None) -> ProductionNode:
+def parse_production_string(
+    xml_text: str, *, source_name: str | None = None
+) -> ProductionNode:
     """Parse XML text into a validated ``ProductionNode`` tree."""
     handler = _ProductionContentHandler(source_name=source_name)
     try:

@@ -11,7 +11,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
-import soundfile as sf
 from carthage.dependency_injection import inject
 
 from ..audio import AudioPlan
@@ -70,7 +69,9 @@ class AudioPlanWrapper:
             return _crop_wrapper(
                 self,
                 selected_indexes=selected_indexes,
-                children=tuple(children[child_index] for child_index in selected_indexes),
+                children=tuple(
+                    children[child_index] for child_index in selected_indexes
+                ),
             )
         return children[index]
 
@@ -445,7 +446,14 @@ class AudioFileWriter:
 
     async def _write(self, wrapper: AudioPlanWrapper, path: Path) -> None:
         result = await render_for_output(wrapper)
-        await asyncio.to_thread(sf.write, path, result.audio, wrapper.sample_rate)
+        from ..production import ProductionPlan, write_production
+
+        if isinstance(wrapper.plan, ProductionPlan):
+            await write_production(wrapper.plan, result, path)
+            return
+        from ..frontmatter import write_audio_file
+
+        await asyncio.to_thread(write_audio_file, path, result, wrapper.sample_rate)
 
 
 @dataclass(frozen=True, slots=True)

@@ -71,8 +71,7 @@ def load_api_key(path: Path = FREESOUND_API_KEY_PATH) -> str:
             credentials = yaml.safe_load(path.expanduser().read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise RuntimeError(
-                "Freesound API key not found; set FREESOUND_API_KEY or create "
-                f"{path}"
+                f"Freesound API key not found; set FREESOUND_API_KEY or create {path}"
             ) from exc
         if not isinstance(credentials, dict) or not isinstance(
             credentials.get("secret"), str
@@ -96,7 +95,9 @@ def lookup_sound(sound_id: int, api_key: str) -> FreesoundCredit:
         with urlopen(request, timeout=30) as response:
             payload = json.load(response)
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise RuntimeError(f"Freesound lookup failed for sound {sound_id}: {exc}") from exc
+        raise RuntimeError(
+            f"Freesound lookup failed for sound {sound_id}: {exc}"
+        ) from exc
     return FreesoundCredit(
         sound_id=int(payload["id"]),
         name=str(payload["name"]),
@@ -104,12 +105,17 @@ def lookup_sound(sound_id: int, api_key: str) -> FreesoundCredit:
     )
 
 
-def markdown_credits(credits: Iterable[FreesoundCredit]) -> str:
-    """Format Freesound attribution as a Markdown section."""
+def markdown_credits(
+    credits: Iterable[FreesoundCredit], *, minimal: bool = False
+) -> str:
+    """Format credits as linked Markdown or minimal human-readable Markdown."""
 
     lines = ["## Sound credits", ""]
     for credit in credits:
         sound_url = f"https://freesound.org/s/{credit.sound_id}/"
+        if minimal:
+            lines.append(f"- “{credit.name}” by {credit.username} — {sound_url}")
+            continue
         author_url = f"https://freesound.org/people/{quote(credit.username, safe='')}/"
         lines.append(
             f"- [{credit.name}]({sound_url}) by "
@@ -118,9 +124,31 @@ def markdown_credits(credits: Iterable[FreesoundCredit]) -> str:
     return "\n".join(lines) + "\n"
 
 
+async def credits_for_plan(plan) -> tuple[FreesoundCredit, ...]:
+    """Look up all likely Freesound assets referenced by a production plan."""
+
+    sound_ids = likely_freesound_ids(plan)
+    if not sound_ids:
+        return ()
+    api_key = load_api_key()
+    return tuple(
+        await asyncio.gather(
+            *(
+                asyncio.to_thread(lookup_sound, sound_id, api_key)
+                for sound_id in sound_ids
+            )
+        )
+    )
+
+
 def parse_args(argv: Iterable[str] | None = None):
     parser = initialize_arg_parser(
         "Plan a production and print Markdown credits for its Freesound assets."
+    )
+    parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help="Use plain-text-friendly Markdown without linked labels.",
     )
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -133,18 +161,11 @@ def main(argv: Iterable[str] | None = None) -> None:
             args, event_loop=asyncio.get_running_loop()
         )
         try:
-            plan = await parse_production_file(production_path).plan(injector(AsyncInjector))
-            sound_ids = likely_freesound_ids(plan)
-            if not sound_ids:
-                return markdown_credits(())
-            api_key = load_api_key()
-            credits = await asyncio.gather(
-                *(
-                    asyncio.to_thread(lookup_sound, sound_id, api_key)
-                    for sound_id in sound_ids
-                )
+            plan = await parse_production_file(production_path).plan(
+                injector(AsyncInjector)
             )
-            return markdown_credits(credits)
+            credits = await credits_for_plan(plan)
+            return markdown_credits(credits, minimal=args.minimal)
         finally:
             injector.close()
 
