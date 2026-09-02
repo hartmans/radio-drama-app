@@ -313,6 +313,31 @@ class SoundPlan(AudioPlan):
             )
 
 
+def sound_plans_in(plan) -> tuple[SoundPlan, ...]:
+    """Return the distinct sound assets referenced by a planning tree.
+
+    Multiple occurrences of the same resolved file are represented once.  A
+    sound that has not resolved yet is instead identified by its authored
+    reference, which keeps this helper useful for partially constructed plans.
+    Order follows the first occurrence in ``plan.all_plans()``.
+    """
+
+    sounds: list[SoundPlan] = []
+    seen: set[tuple[str, object]] = set()
+    for candidate in plan.all_plans():
+        if not isinstance(candidate, SoundPlan):
+            continue
+        if candidate.resolved_path is not None:
+            identity = ("path", candidate.resolved_path.resolve())
+        else:
+            identity = ("ref", candidate.node.ref)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        sounds.append(candidate)
+    return tuple(sounds)
+
+
 def _iter_sound_files(sounds_root: Path):
     for current_root, _, filenames in os.walk(sounds_root, followlinks=True):
         current_root_path = Path(current_root)
