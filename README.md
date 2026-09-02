@@ -135,12 +135,16 @@ front matter.
     - MOSS Voice Design
   description: The third episode of Nothing but the Succubus.
   season: 1
+  artwork: artwork/nothing_but_the_succubus.jpg
 </frontmatter>
 ```
 
 The supported fields are `series`, `episode`, `title`, `artist`, `credits`,
-`description`, and `season`. Series and episode metadata use the conventional
-album and track fields in each output format; season uses the disc field.
+`description`, `season`, and `artwork`. Artwork may be a JPEG or PNG path and
+is resolved relative to the production XML file. It is embedded as front-cover
+art in FLAC, MP3, and Ogg output. Series and episode metadata use the
+conventional album and track fields in each output format; season uses the disc
+field.
 
 Freesound credits can also be printed without rendering audio:
 

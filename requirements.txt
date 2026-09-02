@@ -7,3 +7,4 @@ carthage
 qwen-tts
 pedalboard>=0.9,<1
 PyYAML>=6,<7
+Pillow>=11,<12

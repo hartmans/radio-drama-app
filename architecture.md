@@ -171,6 +171,8 @@ Planning rule for presets:
 Output responsibilities are split deliberately. `radio_drama.frontmatter` owns
 the format-neutral metadata value, YAML validation, metadata-to-container
 mapping, credits-comment construction, and WAV/FLAC/MP3/Ogg file encoding.
+Production-relative JPEG or PNG artwork is represented by `FrontMatter` and
+encoded through each container's native front-cover mechanism.
 `radio_drama.freesound` recognizes and resolves external Freesound attribution.
 `radio_drama.production.write_production()` coordinates a completed production
 plan and render result with those services; CLI and REPL production output use

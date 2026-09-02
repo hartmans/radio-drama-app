@@ -279,7 +279,13 @@ class FrontmatterNode(ElementNode):
         from .frontmatter import parse_frontmatter
 
         try:
-            return parse_frontmatter(self.normalized_text_content)
+            base_directory = None
+            if self.location.source is not None:
+                base_directory = Path(self.location.source).parent
+            return parse_frontmatter(
+                self.normalized_text_content,
+                base_directory=base_directory,
+            )
         except (TypeError, ValueError, yaml.YAMLError) as exc:
             raise self.error(f"Invalid <frontmatter> YAML: {exc}") from exc
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass, fields
@@ -9,6 +12,7 @@ from pathlib import Path
 
 import soundfile as sf
 import yaml
+from PIL import Image
 
 from .rendering import RenderResult
 
@@ -35,6 +39,7 @@ class FrontMatter:
     credits: tuple[str, ...] = ()
     description: str | None = None
     season: int | None = None
+    artwork: Path | None = None
 
     def metadata(self, *, sound_credits: str = "") -> dict[str, str]:
         """Return ffmpeg metadata names common to Vorbis comments and ID3."""
@@ -56,7 +61,9 @@ class FrontMatter:
         return metadata
 
 
-def parse_frontmatter(text: str) -> FrontMatter:
+def parse_frontmatter(
+    text: str, *, base_directory: str | Path | None = None
+) -> FrontMatter:
     """Parse and validate the YAML content of a ``<frontmatter>`` element."""
 
     loaded = yaml.safe_load(text)
@@ -81,14 +88,26 @@ def parse_frontmatter(text: str) -> FrontMatter:
         if name in loaded and loaded[name] is not None:
             if not isinstance(loaded[name], int) or isinstance(loaded[name], bool):
                 raise ValueError(f"front matter {name} must be an integer")
-    credits = loaded.get("credits", ())
+    credits = loaded.get("credits")
     if credits is None:
         credits = ()
-    if not isinstance(credits, list) or not all(
+    elif not isinstance(credits, list) or not all(
         isinstance(item, str) for item in credits
     ):
         raise ValueError("front matter credits must be a list of strings")
     loaded["credits"] = tuple(credits)
+    artwork = loaded.get("artwork")
+    if artwork is not None:
+        if not isinstance(artwork, str):
+            raise ValueError("front matter artwork must be a path string")
+        artwork_path = Path(artwork).expanduser()
+        if not artwork_path.is_absolute() and base_directory is not None:
+            artwork_path = Path(base_directory) / artwork_path
+        if artwork_path.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+            raise ValueError("front matter artwork must be a JPEG or PNG file")
+        if base_directory is not None and not artwork_path.is_file():
+            raise ValueError(f"front matter artwork was not found: {artwork_path}")
+        loaded["artwork"] = artwork_path
     return FrontMatter(**loaded)
 
 
@@ -130,7 +149,11 @@ def write_audio_file(
         sf.write(output, result.audio, sample_rate)
         return
 
-    metadata = (frontmatter or FrontMatter()).metadata(sound_credits=sound_credits)
+    frontmatter = frontmatter or FrontMatter()
+    artwork = frontmatter.artwork
+    if artwork is not None and not artwork.is_file():
+        raise ValueError(f"Artwork file was not found: {artwork}")
+    metadata = frontmatter.metadata(sound_credits=sound_credits)
     with tempfile.TemporaryDirectory(prefix="radio-drama-output-") as temp_dir:
         source = Path(temp_dir) / "production.wav"
         sf.write(source, result.audio, sample_rate, subtype="FLOAT")
@@ -144,12 +167,29 @@ def write_audio_file(
             "-i",
             str(source),
         ]
+        if artwork is not None and output_type == "ogg":
+            picture_metadata = Path(temp_dir) / "picture.ffmetadata"
+            picture_metadata.write_text(
+                ";FFMETADATA1\nMETADATA_BLOCK_PICTURE="
+                + _ogg_picture_block(artwork)
+                + "\n",
+                encoding="ascii",
+            )
+            command.extend(
+                ["-f", "ffmetadata", "-i", str(picture_metadata), "-map_metadata", "1"]
+            )
+        if artwork is not None and output_type != "ogg":
+            command.extend(["-i", str(artwork), "-map", "0:a", "-map", "1:v"])
         if output_type == "ogg":
             command.extend(["-c:a", "libvorbis", "-q:a", "8.5"])
         elif output_type == "mp3":
             command.extend(["-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "4"])
         else:
             command.extend(["-c:a", "flac"])
+        if artwork is not None and output_type != "ogg":
+            command.extend(["-c:v", "copy", "-disposition:v", "attached_pic"])
+            command.extend(["-metadata:s:v", "title=Cover (front)"])
+            command.extend(["-metadata:s:v", "comment=Cover (front)"])
         for name, value in metadata.items():
             command.extend(["-metadata", f"{name}={value}"])
         command.append(str(output))
@@ -162,3 +202,36 @@ def write_audio_file(
         except subprocess.CalledProcessError as exc:
             message = exc.stderr.strip() or exc.stdout.strip()
             raise RuntimeError(f"ffmpeg audio output failed: {message}") from exc
+
+
+def _ogg_picture_block(artwork: Path) -> str:
+    """Encode front-cover art as an Ogg Vorbis METADATA_BLOCK_PICTURE value.
+
+    Vorbis comments carry artwork as a base64-encoded FLAC picture block. The
+    block uses picture type 3 (front cover), the image MIME type and filename,
+    pixel dimensions, bit depth, indexed-color count, and the original image
+    bytes, all as network-order 32-bit length/value fields.
+    """
+
+    mime_type = mimetypes.guess_type(artwork.name)[0]
+    if mime_type not in {"image/jpeg", "image/png"}:
+        raise ValueError(f"Unsupported artwork type: {artwork}")
+    image_bytes = artwork.read_bytes()
+    with Image.open(artwork) as image:
+        width, height = image.size
+        depth = len(image.getbands()) * 8
+        colors = len(image.getcolors(maxcolors=256) or ()) if image.mode == "P" else 0
+    mime_bytes = mime_type.encode("ascii")
+    description = artwork.name.encode("utf-8")
+    block = b"".join(
+        (
+            struct.pack(">I", 3),
+            struct.pack(">I", len(mime_bytes)),
+            mime_bytes,
+            struct.pack(">I", len(description)),
+            description,
+            struct.pack(">IIIII", width, height, depth, colors, len(image_bytes)),
+            image_bytes,
+        )
+    )
+    return base64.b64encode(block).decode("ascii")
