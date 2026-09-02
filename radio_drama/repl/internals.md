@@ -77,11 +77,17 @@ any pending predecessor, terminates its output process, and prevents an older
 render from starting output later. `stop()` cancels pending rendering and
 terminates active output.
 
+`output(wrapper, path)` and `wrapper | output(path)` render through the same
+output preparation path as `play()` and write the result at the production
+sample rate. File output does not participate in playback's single-winner
+cancellation state. Playback and file output deliberately share the render
+boundary so future options such as trimming can have identical semantics.
+
 ## Interactive namespace
 
 The namespace contains ordinary Python locals plus all functions and presets
 valid in effect expressions, including `line`, `min`, and `max`. `load`,
-`sound`, `mix`, `play`, and `stop` are normal Python callables. Completion
+`sound`, `mix`, `output`, `play`, and `stop` are normal Python callables. Completion
 combines Python name and attribute completion with generic filesystem
 completion rooted at the working directory and the loaded document's adjacent
 `sounds/` directory.

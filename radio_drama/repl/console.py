@@ -29,7 +29,7 @@ from ..effects import EffectStage, effect_chain_variables
 from ..expressions import line
 from ..init import radio_drama_injector
 from ..sound import ProductionDocumentPath
-from .audio_wrapper import AudioPlanWrapper, AudioPlayer, mix
+from .audio_wrapper import AudioFileWriter, AudioPlanWrapper, AudioPlayer, mix
 from .pulse_player import PulseAudioPlayer
 
 
@@ -215,6 +215,7 @@ class ReplSession:
             self.event_loop.submit,
             self.pulse_player,
         )
+        self.file_writer = AudioFileWriter(self.event_loop.submit)
         self.sound_roots = [Path.cwd()]
         effect_variables = effect_chain_variables()
         self._effect_variable_names = set(effect_variables)
@@ -226,6 +227,7 @@ class ReplSession:
                 "max": max,
                 "min": min,
                 "mix": mix,
+                "output": self.output,
                 "play": self.play,
                 "sound": self.sound,
                 "stop": self.stop,
@@ -252,6 +254,21 @@ class ReplSession:
         """Play a wrapper directly, or return the playback pipe terminal."""
 
         return self.player(wrapper)
+
+    def output(
+        self,
+        wrapper_or_path: AudioPlanWrapper | str | Path,
+        path: str | Path | None = None,
+    ):
+        """Write ``output(plan, file)`` or return the ``output(file)`` terminal."""
+
+        if isinstance(wrapper_or_path, AudioPlanWrapper):
+            if path is None:
+                raise TypeError("output(plan, file) requires an output file")
+            return self.file_writer(wrapper_or_path, path)
+        if path is not None:
+            raise TypeError("output(file) accepts only one argument")
+        return self.file_writer.terminal(wrapper_or_path)
 
     def stop(self) -> None:
         """Stop pending rendering and any active PulseAudio playback."""

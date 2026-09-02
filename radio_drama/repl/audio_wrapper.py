@@ -8,8 +8,10 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+import soundfile as sf
 from carthage.dependency_injection import inject
 
 from ..audio import AudioPlan
@@ -395,7 +397,7 @@ class AudioPlayer:
         return self(wrapper)
 
     async def _play(self, wrapper: AudioPlanWrapper, token: object) -> None:
-        result = await wrapper.render()
+        result = await render_for_output(wrapper)
         await asyncio.to_thread(
             self.output.play,
             result.audio,
@@ -419,12 +421,55 @@ class AudioPlayer:
                 self._future = None
 
 
+async def render_for_output(wrapper: AudioPlanWrapper) -> RenderResult:
+    """Render audio shared by file and device output operations."""
+
+    return await wrapper.render()
+
+
+class AudioFileWriter:
+    """Write rendered wrappers to files through direct and pipe forms."""
+
+    def __init__(self, submit: SubmitCoroutine) -> None:
+        self.submit = submit
+
+    def __call__(
+        self,
+        wrapper: AudioPlanWrapper,
+        path: str | Path,
+    ) -> concurrent.futures.Future[None]:
+        return self.submit(self._write(wrapper, Path(path).expanduser()))
+
+    def terminal(self, path: str | Path) -> "AudioFileOutputTerminal":
+        return AudioFileOutputTerminal(writer=self, path=Path(path).expanduser())
+
+    async def _write(self, wrapper: AudioPlanWrapper, path: Path) -> None:
+        result = await render_for_output(wrapper)
+        await asyncio.to_thread(sf.write, path, result.audio, wrapper.sample_rate)
+
+
+@dataclass(frozen=True, slots=True)
+class AudioFileOutputTerminal:
+    """Pipe terminal returned by ``output(path)``."""
+
+    writer: AudioFileWriter
+    path: Path
+
+    def __ror__(self, wrapper: object):
+        if not isinstance(wrapper, AudioPlanWrapper):
+            return NotImplemented
+        return self.writer(wrapper, self.path)
+
+
 __all__ = [
     "AudioPlanWrapper",
     "AudioPlayer",
+    "AudioFileOutputTerminal",
+    "AudioFileWriter",
     "MarkNamespace",
     "ReplComposeAudioPlan",
     "ReplCropAudioPlan",
     "concatenate",
     "mix",
+    "render_for_output",
 ]

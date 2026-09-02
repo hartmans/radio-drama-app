@@ -7,6 +7,8 @@ from pathlib import Path
 from .audio_wrapper import (
     AudioPlanWrapper,
     AudioPlayer,
+    AudioFileOutputTerminal,
+    AudioFileWriter,
     MarkNamespace,
     ReplComposeAudioPlan,
     ReplCropAudioPlan,
@@ -38,6 +40,15 @@ def play(wrapper: AudioPlanWrapper | None = None):
     return _session().play(wrapper)
 
 
+def output(
+    wrapper_or_path: AudioPlanWrapper | str | Path,
+    path: str | Path | None = None,
+):
+    """Write ``output(plan, file)`` or return the ``output(file)`` terminal."""
+
+    return _session().output(wrapper_or_path, path)
+
+
 def stop() -> None:
     """Stop pending or active playback in the default programmatic session."""
 
@@ -47,6 +58,8 @@ def stop() -> None:
 __all__ = [
     "AudioPlanWrapper",
     "AudioPlayer",
+    "AudioFileOutputTerminal",
+    "AudioFileWriter",
     "LoadedDocument",
     "MarkNamespace",
     "ReplEventLoop",
@@ -55,6 +68,7 @@ __all__ = [
     "ReplSession",
     "concatenate",
     "mix",
+    "output",
     "play",
     "repl",
     "sound",

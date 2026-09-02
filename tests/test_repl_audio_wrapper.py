@@ -5,6 +5,7 @@ import concurrent.futures
 from dataclasses import dataclass
 
 import numpy as np
+import soundfile as sf
 from carthage.dependency_injection import AsyncInjector
 
 from radio_drama.audio import AudioPlan, SlicePlan
@@ -14,6 +15,7 @@ from radio_drama.expressions import line
 from radio_drama.rendering import RenderResult
 from radio_drama.repl.audio_wrapper import (
     AudioPlanWrapper,
+    AudioFileWriter,
     AudioPlayer,
     ReplComposeAudioPlan,
     ReplCropAudioPlan,
@@ -108,6 +110,26 @@ def test_player_supports_call_and_pipe_forms() -> None:
     (wrapper | player()).result(timeout=5)
 
     assert [sample_rate for _, sample_rate in played] == [24_000, 24_000]
+
+
+def test_file_output_supports_direct_and_pipe_forms(tmp_path) -> None:
+    wrapper = AudioPlanWrapper(
+        plan=FakeAudioPlan(),
+        sample_rate=24_000,
+        submit=submit,
+    )
+    writer = AudioFileWriter(submit)
+    direct_path = tmp_path / "direct.wav"
+    pipe_path = tmp_path / "pipe.wav"
+
+    writer(wrapper, direct_path).result(timeout=5)
+    (wrapper | writer.terminal(pipe_path)).result(timeout=5)
+
+    direct_audio, direct_rate = sf.read(direct_path, dtype="float32")
+    pipe_audio, pipe_rate = sf.read(pipe_path, dtype="float32")
+    assert direct_rate == pipe_rate == 24_000
+    np.testing.assert_allclose(direct_audio, 0.25, atol=4e-5)
+    np.testing.assert_array_equal(pipe_audio, direct_audio)
 
 
 def test_children_preserve_layout_root_and_marks_trigger_layout() -> None:
@@ -223,6 +245,7 @@ def test_repl_namespace_includes_expression_and_plan_helpers() -> None:
         assert session.locals["line"] is line
         assert session.locals["dry"] is dry
         assert session.locals["mix"] is mix
+        assert session.locals["output"] == session.output
         assert session.locals["min"] is min
         assert session.locals["max"] is max
     finally:
