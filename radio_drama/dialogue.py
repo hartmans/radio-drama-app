@@ -22,16 +22,12 @@ from .audio import AudioPlan, ComposeAudioPlan, SUPPORTED_AUDIO_EXTENSIONS
 from .config import ProductionConfig
 from .expressions import validate_expression
 from .planning import AudioAttrValue, PRODUCTION_PLANNING_INJECTOR_KEY, PlanningNode
-from .rendering import RenderResult
+from .rendering import BackendTtsResult, RenderResult, ScriptRenderResult, ScriptTiming
 
 
 if TYPE_CHECKING:
     from .document import (
         DocumentNode,
-        GroupNode,
-        IgnoreNode,
-        LineNode,
-        ScriptGapNode,
         ScriptNode,
         SpeakerMapNode,
         TextNode,
@@ -44,19 +40,51 @@ _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 class RegisteredTtsRequest(Protocol):
     """A registered speech request that can be rendered later."""
 
-    async def render(self) -> RenderResult:
+    async def render(self) -> ScriptRenderResult:
+        ...
+
+    async def ensure_timing(
+        self,
+        contents: Sequence[ScriptEvent],
+        result: ScriptRenderResult,
+    ) -> ScriptTiming:
+        ...
+
+
+class BackendRegisteredTtsRequest(Protocol):
+    """An uncached registration returned by a concrete TTS backend."""
+
+    async def render(self) -> BackendTtsResult:
         ...
 
 
 class TtsResource(AsyncInjectable, ABC):
     """Backend-independent interface for production speech resources."""
 
-    @abstractmethod
     async def register_request(
         self,
         request: ScriptRenderRequest | None,
     ) -> RegisteredTtsRequest:
-        """Register a semantic script request for later rendering."""
+        """Register one request through the backend-independent TTS cache."""
+
+        from .tts_cache import CachedTtsRequest
+
+        return CachedTtsRequest(
+            resource=self,
+            request=request or ScriptRenderRequest(dialogue_lines=[]),
+        )
+
+    @property
+    @abstractmethod
+    def cache_collection_name(self) -> str:
+        """Return the stable collection name used in audio cache filenames."""
+
+    @abstractmethod
+    async def register_backend_request(
+        self,
+        request: ScriptRenderRequest,
+    ) -> BackendRegisteredTtsRequest:
+        """Register an uncached request with the concrete backend."""
 
 
 @dataclass(slots=True)
@@ -112,8 +140,8 @@ class ScriptRenderRequest:
     """Semantic render request sent to a speech resource.
 
     The request is also the stable cache identity for script-level speech
-    output. It owns the semantic serialization that both speech backends use
-    when deriving cache filenames and adjacent JSON metadata.
+    output. It owns the semantic serialization used to derive stable cache
+    filenames. The JSON helpers remain for reading legacy VibeVoice entries.
     """
 
     dialogue_contents: list[DialogueContent]
@@ -158,7 +186,7 @@ class ScriptRenderRequest:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def validate_cache_hit(self, hit: Mapping[str, Path]) -> bool:
-        """Require the common render cache artifacts for one script request."""
+        """Validate the WAV/JSON pair used by the legacy VibeVoice cache."""
 
         return {"json", "wav"}.issubset(hit)
 
@@ -181,7 +209,7 @@ class ScriptRenderRequest:
         }
 
     def build_cache_payload(self, **metadata: object) -> dict[str, object]:
-        """Return the adjacent JSON payload for one cached render result."""
+        """Return the legacy VibeVoice JSON payload for a render result."""
 
         payload = self.serialize_cache_request()
         payload.update(metadata)
@@ -432,6 +460,59 @@ class ScriptPlan(AudioPlan):
             return RenderResult.empty(channels=self.config.resolved_output_channels)
         return await self._registered_request.render()
 
+    async def ensure_timing(self, contents, result):
+        if self._registered_request is None:
+            raise RuntimeError("An empty script has no timing request")
+        ensure_timing = getattr(self._registered_request, "ensure_timing", None)
+        if ensure_timing is not None:
+            return await ensure_timing(contents, result)
+        if isinstance(result, ScriptRenderResult) and result.timing is not None:
+            return result.timing
+
+        # A few external/test TTS doubles predate RegisteredTtsRequest.ensure_timing.
+        # Keep their alignment fallback outside the real backend implementations.
+        from .forced_alignment import WhisperXResource
+        from .rendering import DialogueLineTiming, ScriptTiming
+
+        resource = await self.ainjector.get_instance_async(WhisperXResource)
+        script_timing = getattr(resource, "script_timing", None)
+        if script_timing is not None:
+            return await script_timing(contents, result)
+        aligned = await resource.fill_start_positions(contents, result)
+        duration = result.frame_count / self.config.resolved_output_sample_rate
+        lines: list[DialogueLineTiming] = []
+        for event_index, event in enumerate(aligned):
+            if not isinstance(event, DialogueLine):
+                continue
+            following = aligned[event_index + 1 :]
+            boundary_index = next(
+                (
+                    index
+                    for index, later in enumerate(following)
+                    if isinstance(later, (DialogueLine, ScriptGap))
+                ),
+                None,
+            )
+            if boundary_index is None:
+                end = duration
+            else:
+                boundary = following[boundary_index]
+                inline_audio = next(
+                    (
+                        later
+                        for later in following[:boundary_index]
+                        if isinstance(later, DialogueAudio)
+                    ),
+                    None,
+                )
+                end = (
+                    2 * inline_audio.start_pos - boundary.start_pos
+                    if inline_audio is not None
+                    else boundary.start_pos
+                )
+            lines.append(DialogueLineTiming(start=event.start_pos, end=end))
+        return ScriptTiming(tuple(lines))
+
     async def render_node(self) -> RenderResult:
         return await self.render_base_audio()
 
@@ -488,7 +569,7 @@ class ScriptPlan(AudioPlan):
         *,
         attrs: Mapping[str, AudioAttrValue],
     ) -> AudioPlan:
-        from .forced_alignment import AlignedScriptSource, ScriptSlice
+        from .forced_alignment import ScriptSlice
 
         sources = await cls._aligned_sources(ainjector, node, script_plan)
         audio_plans: list[AudioPlan] = []

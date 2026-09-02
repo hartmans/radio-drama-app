@@ -236,7 +236,7 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
                 "results": [
                     {
                         "wav": "result.wav",
-                        "dialogue_line_start_positions": [0.0, 0.0001],
+                        "dialogue_line_spans": [[0.0, 0.0001], [0.0001, 0.000125]],
                     }
                 ],
             }
@@ -276,14 +276,14 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
     assert isinstance(result, RenderResult)
     assert isinstance(replay, RenderResult)
     assert np.array_equal(result.audio, replay.audio)
-    assert result.dialogue_line_start_positions == replay.dialogue_line_start_positions
+    assert result.timing == replay.timing
     assert speaker.transcript == "Reference words."
     assert seen["transcriptions"] == 1
     assert seen["exchanges"] == 1
     cache_payload = json.loads(
-        next((tmp_path / "cache").glob("fake_*.json")).read_text(encoding="utf-8")
+        next((tmp_path / "cache").glob("fake_*.meta")).read_text(encoding="utf-8")
     )
-    assert cache_payload["dialogue_line_start_positions"] == [0.0, 0.0001]
+    assert cache_payload["dialogue_line_spans"] == [[0.0, 0.0001], [0.0001, 0.000125]]
     serialized_lines = seen["message"]["requests"][0]["dialogue_contents"]
     assert serialized_lines[0]["speaker"] == {
         "authored_name": "Narrator",

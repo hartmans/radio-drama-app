@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import weakref
 from pathlib import Path
@@ -9,17 +8,15 @@ from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
-import soundfile as sf
 import torch
 from carthage.dependency_injection import inject
 
-from .audio import convert_audio_format
-from .cache import CacheCollection, CacheKey, CacheManager
+from .cache import CacheManager
 from .config import ProductionConfig
 from .effects import VOICE_PREPROCESS_VERSION, load_preprocessed_voice_reference
 from .model_loading import shared_model_load
 from .dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference, TtsResource
-from .rendering import RenderResult, ScriptRenderResult
+from .rendering import BackendTtsResult, DialogueLineTiming, ScriptTiming
 from .vibevoice import RegisteredRenderRequest
 from .voice_reference import VoiceReferenceTranscriptionResource
 
@@ -76,30 +73,28 @@ class QwenTtsResource(TtsResource):
         assert self._sample_rate is not None
         return self._sample_rate
 
-    def empty_result(self) -> RenderResult:
-        return ScriptRenderResult.empty(channels=self.config.resolved_output_channels)
+    @property
+    def cache_collection_name(self) -> str:
+        return "qwentts"
 
-    async def register_request(
+    async def register_backend_request(
         self,
-        request: ScriptRenderRequest | None,
+        request: ScriptRenderRequest,
     ) -> RegisteredRenderRequest:
         loop = asyncio.get_running_loop()
         registration = RegisteredRenderRequest(
             resource=self,
-            request=request or ScriptRenderRequest(dialogue_lines=[]),
+            request=request,
             future=loop.create_future(),
         )
         async with self._pending_lock:
-            if request is None:
-                registration.future.set_result(self.empty_result())
-            else:
-                self._pending.append(_PendingRender(registration))
+            self._pending.append(_PendingRender(registration))
         return registration
 
     async def render_registered_request(
         self,
         registration: RegisteredRenderRequest,
-    ) -> RenderResult:
+    ) -> BackendTtsResult:
         if registration.future.done():
             return await registration.future
         async with self._pending_lock:
@@ -131,80 +126,17 @@ class QwenTtsResource(TtsResource):
     def _render_batch_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[RenderResult]:
-        generated = self._render_batch_with_cache_sync(batch)
-        rendered_results: list[RenderResult] = []
-        for native_result, sample_rate in generated:
-            rendered_results.append(
-                ScriptRenderResult(
-                    audio=convert_audio_format(
-                        native_result.audio,
-                        input_sample_rate=sample_rate,
-                        output_sample_rate=self.config.resolved_output_sample_rate,
-                        output_channels=self.config.resolved_output_channels,
-                    ),
-                    dialogue_line_start_positions=native_result.dialogue_line_start_positions,
-                )
-            )
-        return rendered_results
-
-    def _render_batch_with_cache_sync(
-        self,
-        batch: Sequence[RegisteredRenderRequest],
-    ) -> list[tuple[ScriptRenderResult, int]]:
-        cache_collection = self.cache_manager["qwentts"]
-        if not cache_collection.enabled:
-            return [
-                (result, self.sample_rate)
-                for result in self._render_batch_native_sync(batch)
-            ]
-
-        cached_outputs: dict[int, tuple[ScriptRenderResult, int]] = {}
-        uncached_batch: list[tuple[int, RegisteredRenderRequest]] = []
-
-        for index, registration in enumerate(batch):
-            hit = cache_collection.find(
-                registration.request,
-                validate=lambda hit, request=registration.request: (
-                    self._validate_cached_native_result(request, hit)
-                ),
-            )
-            if hit is not None:
-                cached_outputs[index] = self._load_cached_native_result(hit)
-                continue
-            uncached_batch.append((index, registration))
-
-        if uncached_batch:
-            rendered = self._render_batch_native_sync(
-                [registration for _, registration in uncached_batch]
-            )
-            for (index, registration), result in zip(uncached_batch, rendered, strict=True):
-                hit = cache_collection.get_or_create(
-                    registration.request,
-                    lambda key, collection, request=registration.request, cached_result=result: (
-                        self._store_cached_native_result(
-                            key,
-                            collection,
-                            request,
-                            cached_result,
-                        )
-                    ),
-                    validate=lambda hit, request=registration.request: (
-                        self._validate_cached_native_result(request, hit)
-                    ),
-                )
-                cached_outputs[index] = self._load_cached_native_result(hit)
-
-        return [cached_outputs[index] for index in range(len(batch))]
+    ) -> list[BackendTtsResult]:
+        return self._render_batch_native_sync(batch)
 
     def _render_batch_native_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[ScriptRenderResult]:
+    ) -> list[BackendTtsResult]:
         parsed_scripts = [self._script_lines(registration.request) for registration in batch]
         if not any(parsed_scripts):
             return [
-                ScriptRenderResult(audio=np.zeros(0, dtype=np.float32), dialogue_line_start_positions=())
+                BackendTtsResult(audio=np.zeros(0, dtype=np.float32), sample_rate=self.sample_rate, timing=ScriptTiming(()))
                 for _ in batch
             ]
 
@@ -231,7 +163,7 @@ class QwenTtsResource(TtsResource):
 
         if not line_texts:
             return [
-                ScriptRenderResult(audio=np.zeros(0, dtype=np.float32), dialogue_line_start_positions=())
+                BackendTtsResult(audio=np.zeros(0, dtype=np.float32), sample_rate=self.sample_rate, timing=ScriptTiming(()))
                 for _ in batch
             ]
 
@@ -247,68 +179,25 @@ class QwenTtsResource(TtsResource):
             rendered_by_script[script_index].append(audio)
 
         return [
-            ScriptRenderResult(
+            BackendTtsResult(
                 audio=self._concatenate_script_audio(clips),
-                dialogue_line_start_positions=tuple(line_starts),
+                sample_rate=native_sample_rate,
+                timing=ScriptTiming(
+                    tuple(
+                        DialogueLineTiming(
+                            start=start,
+                            end=(
+                                line_starts[index + 1]
+                                if index + 1 < len(line_starts)
+                                else sum(clip.shape[0] for clip in clips) / native_sample_rate
+                            ),
+                        )
+                        for index, start in enumerate(line_starts)
+                    )
+                ),
             )
             for clips, line_starts in zip(rendered_by_script, line_starts_by_script, strict=True)
         ]
-
-    def _validate_cached_native_result(
-        self,
-        request: ScriptRenderRequest,
-        hit: dict[str, Path],
-    ) -> bool:
-        if not request.validate_cache_hit(hit):
-            return False
-        try:
-            payload = json.loads(hit["json"].read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        positions = payload.get("dialogue_line_start_positions")
-        if positions is None:
-            return False
-        return len(positions) == len(self._script_lines(request))
-
-    def _load_cached_native_result(
-        self,
-        hit: dict[str, Path],
-    ) -> tuple[ScriptRenderResult, int]:
-        payload = json.loads(hit["json"].read_text(encoding="utf-8"))
-        audio, sample_rate = sf.read(hit["wav"], dtype="float32", always_2d=False)
-        positions = tuple(float(position) for position in payload["dialogue_line_start_positions"])
-        return (
-            ScriptRenderResult(
-                audio=self._normalize_audio_array(audio),
-                dialogue_line_start_positions=positions,
-            ),
-            int(sample_rate),
-        )
-
-    def _store_cached_native_result(
-        self,
-        key: CacheKey,
-        collection: CacheCollection,
-        request: ScriptRenderRequest,
-        result: ScriptRenderResult,
-    ) -> None:
-        wav_path = collection.path_for_subtype(key, "wav")
-        json_path = collection.path_for_subtype(key, "json")
-        wav_path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(wav_path, result.audio, self.sample_rate)
-        json_path.write_text(
-            json.dumps(
-                request.build_cache_payload(
-                    frame_count=int(result.audio.shape[0]),
-                    sample_rate=self.sample_rate,
-                    dialogue_line_start_positions=tuple(result.dialogue_line_start_positions),
-                ),
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
 
     def _generate_line_batch_native_sync(
         self,

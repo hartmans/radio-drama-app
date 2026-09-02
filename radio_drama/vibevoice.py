@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import re
 import weakref
 from dataclasses import dataclass
@@ -19,14 +18,13 @@ from vibevoice.modular.modeling_vibevoice_inference import (
 )
 from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
-from .audio import convert_audio_format
-from .cache import CACHE_DIRECTORY_KEY, CacheCollection, CacheKey, CacheManager
+from .cache import CACHE_DIRECTORY_KEY, CacheManager
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .effects import load_preprocessed_voice_reference
 from .model_loading import shared_model_load
 from .dialogue import ScriptRenderRequest, TtsResource
-from .rendering import RenderResult
+from .rendering import BackendTtsResult
 
 
 @dataclass(slots=True, weakref_slot=True)
@@ -37,7 +35,7 @@ class RegisteredRenderRequest:
     request: ScriptRenderRequest
     future: asyncio.Future
 
-    async def render(self) -> RenderResult:
+    async def render(self) -> BackendTtsResult:
         return await self.resource.render_registered_request(self)
 
 
@@ -55,7 +53,7 @@ class VibeVoiceResource(TtsResource):
 
     Scripts register requests during planning. Rendering any registered request
     allows the resource to drain the current queue in batches, load the model
-    lazily, and return production-format audio to each waiting plan.
+    lazily, and return model-native audio to the shared TTS cache layer.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -77,12 +75,13 @@ class VibeVoiceResource(TtsResource):
         assert self._sample_rate is not None
         return self._sample_rate
 
-    def empty_result(self) -> RenderResult:
-        return RenderResult.empty(channels=self.config.resolved_output_channels)
+    @property
+    def cache_collection_name(self) -> str:
+        return "vibevoice"
 
-    async def register_request(
+    async def register_backend_request(
         self,
-        request: ScriptRenderRequest | None,
+        request: ScriptRenderRequest,
     ) -> RegisteredRenderRequest:
         """Register work for later batched rendering.
 
@@ -92,22 +91,19 @@ class VibeVoiceResource(TtsResource):
         loop = asyncio.get_running_loop()
         registration = RegisteredRenderRequest(
             resource=self,
-            request=request or ScriptRenderRequest(dialogue_lines=[]),
+            request=request,
             future=loop.create_future(),
         )
         async with self._pending_lock:
-            if request is None:
-                registration.future.set_result(self.empty_result())
-            else:
-                self._pending.append(
-                    _PendingRender(registration_ref=weakref.ref(registration))
-                )
+            self._pending.append(
+                _PendingRender(registration_ref=weakref.ref(registration))
+            )
         return registration
 
     async def render_registered_request(
         self,
         registration: RegisteredRenderRequest,
-    ) -> RenderResult:
+    ) -> BackendTtsResult:
         """Render one registration, potentially flushing additional queued work."""
         if registration.future.done():
             return await registration.future
@@ -126,45 +122,46 @@ class VibeVoiceResource(TtsResource):
                     return
 
             try:
-                rendered_audios = await asyncio.to_thread(self._render_batch_sync, batch)
+                rendered_results = await asyncio.to_thread(self._render_batch_sync, batch)
             except Exception as exc:
                 for registration in batch:
                     if not registration.future.done():
                         registration.future.set_exception(exc)
                 continue
 
-            for registration, audio in zip(batch, rendered_audios, strict=True):
+            for registration, result in zip(batch, rendered_results, strict=True):
                 if not registration.future.done():
-                    registration.future.set_result(RenderResult(audio=audio))
+                    registration.future.set_result(result)
 
     def _render_batch_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[np.ndarray]:
-        generated = self._render_batch_with_cache_sync(batch)
-        self._write_vibevoice_debug_outputs(batch, generated)
+    ) -> list[BackendTtsResult]:
+        generated = self._render_batch_with_legacy_cache_sync(batch)
+        debug_audio = [(audio, sample_rate) for audio, sample_rate, _ in generated]
+        self._write_vibevoice_debug_outputs(batch, debug_audio)
         return [
-            convert_audio_format(
+            BackendTtsResult(
                 audio,
-                input_sample_rate=sample_rate,
-                output_sample_rate=self.config.resolved_output_sample_rate,
-                output_channels=self.config.resolved_output_channels,
+                sample_rate=sample_rate,
+                cache_wav_path=cache_wav_path,
             )
-            for audio, sample_rate in generated
+            for audio, sample_rate, cache_wav_path in generated
         ]
 
-    def _render_batch_with_cache_sync(
+    def _render_batch_with_legacy_cache_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
-    ) -> list[tuple[np.ndarray, int]]:
+    ) -> list[tuple[np.ndarray, int, Path | None]]:
+        """Read pre-generic VibeVoice cache pairs, or generate uncached audio."""
         cache_collection = self.cache_manager["vibevoice"]
         if not cache_collection.enabled:
             return [
-                (audio, self.sample_rate)
+                (audio, self.sample_rate, None)
                 for audio in self._render_batch_native_sync(batch)
             ]
 
-        cached_outputs: dict[int, tuple[np.ndarray, int]] = {}
+        cached_outputs: dict[int, tuple[np.ndarray, int, Path | None]] = {}
         uncached_batch: list[tuple[int, RegisteredRenderRequest]] = []
 
         for index, registration in enumerate(batch):
@@ -181,20 +178,8 @@ class VibeVoiceResource(TtsResource):
             rendered = self._render_batch_native_sync(
                 [registration for _, registration in uncached_batch]
             )
-            for (index, registration), audio in zip(uncached_batch, rendered, strict=True):
-                hit = cache_collection.get_or_create(
-                    registration.request,
-                    lambda key, collection, request=registration.request, cached_audio=audio: (
-                        self._store_cached_native_audio(
-                            key,
-                            collection,
-                            request,
-                            cached_audio,
-                        )
-                    ),
-                    validate=registration.request.validate_cache_hit,
-                )
-                cached_outputs[index] = self._load_cached_native_audio(hit)
+            for (index, _), audio in zip(uncached_batch, rendered, strict=True):
+                cached_outputs[index] = (audio, self.sample_rate, None)
 
         return [cached_outputs[index] for index in range(len(batch))]
 
@@ -477,35 +462,11 @@ class VibeVoiceResource(TtsResource):
     def _load_cached_native_audio(
         self,
         hit: dict[str, Path],
-    ) -> tuple[np.ndarray, int]:
+    ) -> tuple[np.ndarray, int, Path]:
         wav_path = hit["wav"]
         audio, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
         normalized = self._normalize_audio_array(audio)
-        return normalized, int(sample_rate)
-
-    def _store_cached_native_audio(
-        self,
-        key: CacheKey,
-        collection: CacheCollection,
-        request: ScriptRenderRequest,
-        audio: np.ndarray,
-    ) -> None:
-        wav_path = collection.path_for_subtype(key, "wav")
-        json_path = collection.path_for_subtype(key, "json")
-        wav_path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(wav_path, audio, self.sample_rate)
-        json_path.write_text(
-            json.dumps(
-                request.build_cache_payload(
-                    frame_count=int(audio.shape[0]),
-                    sample_rate=self.sample_rate,
-                ),
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        return normalized, int(sample_rate), wav_path
 
     def _normalized_script_and_voice_samples(
         self,

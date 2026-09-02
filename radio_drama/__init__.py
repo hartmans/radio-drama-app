@@ -11,6 +11,7 @@ from .audio import (
 from .cache import CacheCollection, CacheKey, CacheManager, CachableResource
 from .config import ProductionConfig
 from .dialogue import (
+    BackendRegisteredTtsRequest,
     DialogueContent,
     DialogueAudio,
     DialogueLine,
@@ -88,7 +89,7 @@ from .planning import PlanningNode
 from .production import ProductionPlan
 from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
-from .rendering import ProductionResult, RenderResult
+from .rendering import DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
 from .sound import NormalizedSoundCache, ProductionDocumentPath, SoundNode, SoundPlan
 from .text import normalize_text_punctuation
 from .vibevoice import VibeVoiceResource
@@ -97,6 +98,7 @@ from .voice_reference import VoiceReferenceTranscriptionResource
 __all__ = [
     "ArrayExpression",
     "AudioPlan",
+    "BackendRegisteredTtsRequest",
 
     "CacheCollection",
     "CacheKey",
@@ -111,6 +113,7 @@ __all__ = [
     "convert_audio_format",
     "convert_channel_count",
     "DialogueLine",
+    "DialogueLineTiming",
     "RegisteredTtsRequest",
     "DocumentError",
     "DocumentNode",
@@ -175,6 +178,7 @@ __all__ = [
     "ScriptEvent",
     "ScriptGapNode",
     "ScriptGap",
+    "ScriptTiming",
     "ScriptPlan",
     "ScriptRenderRequest",
     "ScriptSlice",

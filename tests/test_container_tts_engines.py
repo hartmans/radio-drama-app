@@ -51,8 +51,8 @@ def test_shared_line_assembly_preserves_script_boundaries_and_timing(
 
     results = finish_line_work(outputs, work, sample_rate=100)
 
-    assert results[0]["dialogue_line_start_positions"] == [0.0, 0.1]
-    assert results[1]["dialogue_line_start_positions"] == [0.0]
+    assert results[0]["dialogue_line_spans"] == [[0.0, 0.1], [0.1, 0.3]]
+    assert results[1]["dialogue_line_spans"] == [[0.0, 0.3]]
     with wave.open(results[0]["wav"], "rb") as source:
         assert source.getnframes() == 30
 
@@ -80,7 +80,7 @@ def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
     )
 
     assert seen == [["one", "two"], ["three"]]
-    assert [len(result["dialogue_line_start_positions"]) for result in results] == [
+    assert [len(result["dialogue_line_spans"]) for result in results] == [
         2,
         1,
     ]
@@ -193,7 +193,12 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     assert calls[3]["reference_wav_path"] == "/voices/narrator.wav"
     assert calls[3]["prompt_wav_path"].endswith(".line-1.wav")
     assert calls[3]["prompt_text"] == "two"
-    assert results[0]["dialogue_line_start_positions"] == [0.0, 1.0, 2.0, 3.0]
+    assert results[0]["dialogue_line_spans"] == [
+        [0.0, 1.0],
+        [1.0, 2.0],
+        [2.0, 3.0],
+        [3.0, 4.0],
+    ]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
     engine.synthesize_line(

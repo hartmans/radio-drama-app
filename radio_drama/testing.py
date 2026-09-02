@@ -9,7 +9,6 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from .audio import convert_audio_format
 from .dialogue import (
     DialogueAudio,
     DialogueContent,
@@ -20,7 +19,13 @@ from .dialogue import (
 )
 from .forced_alignment import WhisperXResource, copy_dialogue_contents
 from .qwen_tts import QwenTtsResource
-from .rendering import RenderResult, ScriptRenderResult
+from .rendering import (
+    BackendTtsResult,
+    DialogueLineTiming,
+    RenderResult,
+    ScriptRenderResult,
+    ScriptTiming,
+)
 from .vibevoice import RegisteredRenderRequest, VibeVoiceResource
 
 
@@ -29,15 +34,15 @@ class CachedRenderMetadata:
     """Persisted structural metadata for one render request."""
     sample_rate: int
     frame_count: int
-    dialogue_line_start_positions: tuple[float, ...] | None = None
+    dialogue_line_spans: tuple[tuple[float, float], ...] | None = None
 
     def __post_init__(self) -> None:
-        if self.dialogue_line_start_positions is None:
+        if self.dialogue_line_spans is None:
             return
         object.__setattr__(
             self,
-            "dialogue_line_start_positions",
-            tuple(float(position) for position in self.dialogue_line_start_positions),
+            "dialogue_line_spans",
+            tuple((float(start), float(end)) for start, end in self.dialogue_line_spans),
         )
 
 
@@ -96,11 +101,13 @@ class CachedVibeVoiceDouble:
 
         rng = np.random.default_rng(self.seed)
         audio = rng.standard_normal(metadata.frame_count, dtype=np.float32) * 1e-3
-        if metadata.dialogue_line_start_positions is None:
+        if metadata.dialogue_line_spans is None:
             return RenderResult(audio=audio)
         return ScriptRenderResult(
             audio=audio,
-            dialogue_line_start_positions=metadata.dialogue_line_start_positions,
+            timing=ScriptTiming(
+                tuple(DialogueLineTiming(start, end) for start, end in metadata.dialogue_line_spans)
+            ),
         )
 
     def _cache_key(self, request: ScriptRenderRequest) -> str:
@@ -159,7 +166,7 @@ class CachedVibeVoiceResource(VibeVoiceResource):
                 if not registration.future.done():
                     registration.future.set_result(result)
 
-    def _render_batch_sync(self, batch: Sequence) -> list[RenderResult]:
+    def _render_batch_sync(self, batch: Sequence) -> list[BackendTtsResult]:
         metadata_by_index: dict[int, CachedRenderMetadata] = {}
         uncached_batch: list[tuple[int, object]] = []
 
@@ -180,16 +187,22 @@ class CachedVibeVoiceResource(VibeVoiceResource):
                 [registration for _, registration in uncached_batch]
             )
             for (index, registration), generated in zip(uncached_batch, native_results, strict=True):
-                if isinstance(generated, ScriptRenderResult):
+                if isinstance(generated, BackendTtsResult):
                     native_audio = generated.audio
-                    dialogue_line_start_positions = generated.dialogue_line_start_positions
+                    sample_rate = generated.sample_rate
+                    dialogue_line_spans = (
+                        tuple((span.start, span.end) for span in generated.timing.dialogue_lines)
+                        if generated.timing is not None
+                        else None
+                    )
                 else:
                     native_audio = generated
-                    dialogue_line_start_positions = None
+                    sample_rate = self.sample_rate
+                    dialogue_line_spans = None
                 metadata = CachedRenderMetadata(
-                    sample_rate=self.sample_rate,
+                    sample_rate=sample_rate,
                     frame_count=int(native_audio.shape[0]),
-                    dialogue_line_start_positions=dialogue_line_start_positions,
+                    dialogue_line_spans=dialogue_line_spans,
                 )
                 self._store_cached_metadata(registration.request, metadata)
                 metadata_by_index[index] = metadata
@@ -203,23 +216,21 @@ class CachedVibeVoiceResource(VibeVoiceResource):
         self,
         registration: RegisteredRenderRequest,
         metadata: CachedRenderMetadata,
-    ) -> RenderResult:
+    ) -> BackendTtsResult:
         request = registration.request
         seed_material = self._cache_key(request)[:16]
         seed = self.seed ^ int(seed_material, 16)
         rng = np.random.default_rng(seed)
         native_audio = rng.standard_normal(metadata.frame_count, dtype=np.float32) * 1e-3
-        audio = convert_audio_format(
-            native_audio,
-            input_sample_rate=metadata.sample_rate,
-            output_sample_rate=self.config.resolved_output_sample_rate,
-            output_channels=self.config.resolved_output_channels,
-        )
-        if metadata.dialogue_line_start_positions is None:
-            return RenderResult(audio=audio)
-        return ScriptRenderResult(
-            audio=audio,
-            dialogue_line_start_positions=metadata.dialogue_line_start_positions,
+        timing = None
+        if metadata.dialogue_line_spans is not None:
+            timing = ScriptTiming(
+                tuple(DialogueLineTiming(start, end) for start, end in metadata.dialogue_line_spans)
+            )
+        return BackendTtsResult(
+            audio=native_audio,
+            sample_rate=metadata.sample_rate,
+            timing=timing,
         )
 
     def _load_cached_metadata(
@@ -294,7 +305,7 @@ class CachedQwenTtsResource(QwenTtsResource):
                 if not registration.future.done():
                     registration.future.set_result(result)
 
-    def _render_batch_sync(self, batch: Sequence) -> list[RenderResult]:
+    def _render_batch_sync(self, batch: Sequence) -> list[BackendTtsResult]:
         metadata_by_index: dict[int, CachedRenderMetadata] = {}
         uncached_batch: list[tuple[int, object]] = []
 
@@ -315,16 +326,22 @@ class CachedQwenTtsResource(QwenTtsResource):
                 [registration for _, registration in uncached_batch]
             )
             for (index, registration), generated in zip(uncached_batch, native_results, strict=True):
-                if isinstance(generated, ScriptRenderResult):
+                if isinstance(generated, BackendTtsResult):
                     native_audio = generated.audio
-                    dialogue_line_start_positions = generated.dialogue_line_start_positions
+                    sample_rate = generated.sample_rate
+                    dialogue_line_spans = (
+                        tuple((span.start, span.end) for span in generated.timing.dialogue_lines)
+                        if generated.timing is not None
+                        else None
+                    )
                 else:
                     native_audio = generated
-                    dialogue_line_start_positions = None
+                    sample_rate = self.sample_rate
+                    dialogue_line_spans = None
                 metadata = CachedRenderMetadata(
-                    sample_rate=self.sample_rate,
+                    sample_rate=sample_rate,
                     frame_count=int(native_audio.shape[0]),
-                    dialogue_line_start_positions=dialogue_line_start_positions,
+                    dialogue_line_spans=dialogue_line_spans,
                 )
                 self._store_cached_metadata(registration.request, metadata)
                 metadata_by_index[index] = metadata
@@ -338,23 +355,21 @@ class CachedQwenTtsResource(QwenTtsResource):
         self,
         registration: RegisteredRenderRequest,
         metadata: CachedRenderMetadata,
-    ) -> RenderResult:
+    ) -> BackendTtsResult:
         request = registration.request
         seed_material = self._cache_key(request)[:16]
         seed = self.seed ^ int(seed_material, 16)
         rng = np.random.default_rng(seed)
         native_audio = rng.standard_normal(metadata.frame_count, dtype=np.float32) * 1e-3
-        audio = convert_audio_format(
-            native_audio,
-            input_sample_rate=metadata.sample_rate,
-            output_sample_rate=self.config.resolved_output_sample_rate,
-            output_channels=self.config.resolved_output_channels,
-        )
-        if metadata.dialogue_line_start_positions is None:
-            return RenderResult(audio=audio)
-        return ScriptRenderResult(
-            audio=audio,
-            dialogue_line_start_positions=metadata.dialogue_line_start_positions,
+        timing = None
+        if metadata.dialogue_line_spans is not None:
+            timing = ScriptTiming(
+                tuple(DialogueLineTiming(start, end) for start, end in metadata.dialogue_line_spans)
+            )
+        return BackendTtsResult(
+            audio=native_audio,
+            sample_rate=metadata.sample_rate,
+            timing=timing,
         )
 
     def _load_cached_metadata(

@@ -14,12 +14,11 @@ from typing import Mapping, Sequence
 import soundfile as sf
 from carthage.dependency_injection import inject
 
-from .audio import convert_audio_format
-from .cache import CacheCollection, CacheKey, CacheManager
+from .cache import CacheManager
 from .config import ProductionConfig
 from .dialogue import DialogueLine, ScriptGap, ScriptRenderRequest, TtsResource
 from .effects import load_preprocessed_voice_reference
-from .rendering import RenderResult, ScriptRenderResult
+from .rendering import BackendTtsResult, DialogueLineTiming, ScriptTiming
 from .voice_reference import VoiceReferenceTranscriptionResource
 
 
@@ -58,7 +57,7 @@ class RegisteredProxyTtsRequest:
     request: ScriptRenderRequest
     future: asyncio.Future
 
-    async def render(self) -> RenderResult:
+    async def render(self) -> BackendTtsResult:
         return await self.resource.render_registered_request(self)
 
 
@@ -94,29 +93,26 @@ class ProxyTtsResource(TtsResource):
         self._voice_mounts: dict[Path, str] = {}
         self._capabilities: set[str] = set()
 
-    async def register_request(
-        self, request: ScriptRenderRequest | None
+    @property
+    def cache_collection_name(self) -> str:
+        return self.proxy_config.name
+
+    async def register_backend_request(
+        self, request: ScriptRenderRequest
     ) -> RegisteredProxyTtsRequest:
         loop = asyncio.get_running_loop()
         registration = RegisteredProxyTtsRequest(
             resource=self,
-            request=request or ScriptRenderRequest(),
+            request=request,
             future=loop.create_future(),
         )
         async with self._pending_lock:
-            if request is None:
-                registration.future.set_result(
-                    ScriptRenderResult.empty(
-                        channels=self.config.resolved_output_channels
-                    )
-                )
-            else:
-                self._pending.append(weakref.ref(registration))
+            self._pending.append(weakref.ref(registration))
         return registration
 
     async def render_registered_request(
         self, registration: RegisteredProxyTtsRequest
-    ) -> RenderResult:
+    ) -> BackendTtsResult:
         if registration.future.done():
             return await registration.future
         async with self._pending_lock:
@@ -144,33 +140,13 @@ class ProxyTtsResource(TtsResource):
 
     async def _render_batch(
         self, batch: Sequence[RegisteredProxyTtsRequest]
-    ) -> list[ScriptRenderResult]:
+    ) -> list[BackendTtsResult]:
         async with self._rpc_lock:
-            cache_collection = self.cache_manager[self.proxy_config.name]
-            cached_outputs: dict[int, ScriptRenderResult] = {}
-            uncached_batch: list[tuple[int, RegisteredProxyTtsRequest]] = []
-            for index, registration in enumerate(batch):
-                hit = cache_collection.find(
-                    registration.request,
-                    validate=lambda hit, request=registration.request: (
-                        self._validate_cached_result(request, hit)
-                    ),
-                )
-                if hit is None:
-                    uncached_batch.append((index, registration))
-                else:
-                    cached_outputs[index] = self._load_cached_result(hit)
-
-            if not uncached_batch:
-                return [cached_outputs[index] for index in range(len(batch))]
-
-            await self._ensure_process(
-                [registration.request for _, registration in uncached_batch]
-            )
+            await self._ensure_process([registration.request for registration in batch])
             if "needs_transcript" in self._capabilities:
                 references = {
                     id(line.speaker): line.speaker
-                    for _, registration in uncached_batch
+                    for registration in batch
                     for line in registration.request.dialogue_lines
                 }
                 await asyncio.gather(
@@ -188,7 +164,7 @@ class ProxyTtsResource(TtsResource):
                 "method": "render_batch",
                 "requests": [
                     self._serialize_request(registration.request)
-                    for _, registration in uncached_batch
+                    for registration in batch
                 ],
             }
             response = await self._exchange(message)
@@ -197,28 +173,9 @@ class ProxyTtsResource(TtsResource):
             if "error" in response:
                 raise RuntimeError(f"TTS proxy error: {response['error']}")
             raw_results = response["results"]
-            if len(raw_results) != len(uncached_batch):
+            if len(raw_results) != len(batch):
                 raise RuntimeError("TTS proxy returned the wrong number of results")
-            for (index, registration), raw_result in zip(
-                uncached_batch, raw_results, strict=True
-            ):
-                native_result, sample_rate, source_path = self._load_native_result(
-                    raw_result
-                )
-                hit = cache_collection.get_or_create(
-                    registration.request,
-                    lambda key, collection, request=registration.request,
-                    result=native_result, rate=sample_rate, source=source_path: (
-                        self._store_cached_result(
-                            key, collection, request, result, rate, source
-                        )
-                    ),
-                    validate=lambda hit, request=registration.request: (
-                        self._validate_cached_result(request, hit)
-                    ),
-                )
-                cached_outputs[index] = self._load_cached_result(hit)
-            return [cached_outputs[index] for index in range(len(batch))]
+            return [self._load_native_result(result) for result in raw_results]
 
     async def _ensure_process(self, requests: Sequence[ScriptRenderRequest]) -> None:
         if self._process is not None and self._process.returncode is None:
@@ -391,82 +348,22 @@ class ProxyTtsResource(TtsResource):
 
     def _load_native_result(
         self, result: Mapping[str, object]
-    ) -> tuple[ScriptRenderResult, int, Path]:
+    ) -> BackendTtsResult:
         wav_path = self._resolve_result_path(result)
         audio, sample_rate = sf.read(wav_path, dtype="float32", always_2d=False)
-        starts = result.get("dialogue_line_start_positions")
-        return (
-            ScriptRenderResult(
-                audio=audio,
-                dialogue_line_start_positions=(
-                    tuple(float(value) for value in starts) if starts is not None else None
-                ),
-            ),
-            int(sample_rate),
-            wav_path,
-        )
-
-    def _validate_cached_result(
-        self, request: ScriptRenderRequest, hit: dict[str, Path]
-    ) -> bool:
-        if not request.validate_cache_hit(hit):
-            return False
-        try:
-            payload = json.loads(hit["json"].read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return False
-        positions = payload.get("dialogue_line_start_positions")
-        return positions is None or (
-            isinstance(positions, list)
-            and len(positions) == len(request.dialogue_lines)
-        )
-
-    def _load_cached_result(self, hit: dict[str, Path]) -> ScriptRenderResult:
-        payload = json.loads(hit["json"].read_text(encoding="utf-8"))
-        audio, sample_rate = sf.read(hit["wav"], dtype="float32", always_2d=False)
-        return ScriptRenderResult(
-            audio=convert_audio_format(
-                audio,
-                input_sample_rate=int(sample_rate),
-                output_sample_rate=self.config.resolved_output_sample_rate,
-                output_channels=self.config.resolved_output_channels,
-            ),
-            dialogue_line_start_positions=(
+        spans = result.get("dialogue_line_spans")
+        timing = None
+        if spans is not None:
+            timing = ScriptTiming(
                 tuple(
-                    float(value)
-                    for value in payload["dialogue_line_start_positions"]
+                    DialogueLineTiming(start=float(span[0]), end=float(span[1]))
+                    for span in spans
                 )
-                if payload["dialogue_line_start_positions"] is not None
-                else None
-            ),
-        )
-
-    def _store_cached_result(
-        self,
-        key: CacheKey,
-        collection: CacheCollection,
-        request: ScriptRenderRequest,
-        result: ScriptRenderResult,
-        sample_rate: int,
-        source_path: Path,
-    ) -> None:
-        wav_path = collection.path_for_subtype(key, "wav")
-        json_path = collection.path_for_subtype(key, "json")
-        wav_path.parent.mkdir(parents=True, exist_ok=True)
-        if source_path != wav_path:
-            source_path.replace(wav_path)
-        json_path.write_text(
-            json.dumps(
-                request.build_cache_payload(
-                    frame_count=int(result.audio.shape[0]),
-                    sample_rate=sample_rate,
-                    dialogue_line_start_positions=result.dialogue_line_start_positions,
-                ),
-                indent=2,
-                sort_keys=True,
             )
-            + "\n",
-            encoding="utf-8",
+        return BackendTtsResult(
+            audio=audio,
+            sample_rate=int(sample_rate),
+            timing=timing,
         )
 
     def close(self, canceled_futures: bool = True):

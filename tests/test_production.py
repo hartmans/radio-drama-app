@@ -14,7 +14,7 @@ from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chai
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.production import ProductionPlan
-from radio_drama.rendering import RenderResult
+from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptTiming
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector as _make_async_injector, normalized_script_from_request
@@ -60,6 +60,14 @@ def test_cut_before_mark_on_production_can_target_inner_script(tmp_path: Path, n
             return Registered()
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (
+                    DialogueLineTiming(0.0, 0.5),
+                    DialogueLineTiming(0.5, 1.0),
+                )
+            )
+
         async def fill_start_positions(self, contents, result):
             updated: list[DialogueAudio | object] = []
             for content in contents:
@@ -116,6 +124,11 @@ def test_cut_before_mark_on_production_can_target_script_first_mark(tmp_path: Pa
             return Registered()
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (DialogueLineTiming(0.0, 0.5), DialogueLineTiming(0.5, 1.0))
+            )
+
         async def fill_start_positions(self, contents, result):
             updated: list[DialogueAudio | object] = []
             for content in contents:
@@ -172,6 +185,11 @@ def test_cut_after_mark_on_production_can_target_inner_script(tmp_path: Path, no
             return Registered()
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (DialogueLineTiming(0.0, 0.5), DialogueLineTiming(0.5, 1.0))
+            )
+
         async def fill_start_positions(self, contents, result):
             updated: list[DialogueAudio | object] = []
             for content in contents:
@@ -228,6 +246,11 @@ def test_cut_after_mark_on_production_can_target_script_last_mark(tmp_path: Path
             return Registered()
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (DialogueLineTiming(0.0, 0.5), DialogueLineTiming(0.5, 1.0))
+            )
+
         async def fill_start_positions(self, contents, result):
             updated: list[DialogueAudio | object] = []
             for content in contents:

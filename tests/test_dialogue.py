@@ -15,7 +15,7 @@ from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chai
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import RenderResult, ScriptRenderResult
+from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.vibevoice import VibeVoiceResource
 
@@ -84,8 +84,11 @@ def test_speaker_map_mapping_applies_effect_in_special_script_slice(tmp_path: Pa
                 async def render(self_nonlocal) -> RenderResult:
                     return ScriptRenderResult(
                         audio=np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32),
-                        dialogue_line_start_positions=(0.0,),
+                        timing=ScriptTiming((DialogueLineTiming(0.0, 1.0),)),
                     )
+
+                async def ensure_timing(self_nonlocal, contents, result):
+                    return result.timing
 
             return Registered()
 

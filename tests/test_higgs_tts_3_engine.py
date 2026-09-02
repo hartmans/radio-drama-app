@@ -113,7 +113,11 @@ def test_higgs_render_batch_bounds_work_and_uses_shared_line_assembly(
     results = FakeEngine().render_batch([_request(("One", "Two", "Three"))])
 
     assert seen == [["One", "Two"], ["Three"]]
-    assert results[0]["dialogue_line_start_positions"] == [0.0, 0.1, 0.2]
+    assert results[0]["dialogue_line_spans"] == [
+        [0.0, 0.1],
+        [0.1, 0.2],
+        [0.2, 0.3],
+    ]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
 

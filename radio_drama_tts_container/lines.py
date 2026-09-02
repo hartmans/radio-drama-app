@@ -80,7 +80,13 @@ def finish_line_work(
             destination.setsampwidth(width)
             destination.setframerate(rate)
             destination.writeframes(b"".join(chunks))
-        results.append({"wav": output.name, "dialogue_line_start_positions": starts})
+        ends = [*starts[1:], frames / sample_rate]
+        results.append(
+            {
+                "wav": output.name,
+                "dialogue_line_spans": [list(span) for span in zip(starts, ends, strict=True)],
+            }
+        )
     return results
 
 

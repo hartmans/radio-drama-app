@@ -23,7 +23,7 @@ from radio_drama.forced_alignment import (
     WhisperXResource,
     _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
-    fill_start_positions_from_rendered_script,
+    fill_start_positions_from_timing,
 )
 from radio_drama.init import radio_drama_injector
 from radio_drama.dialogue import (
@@ -34,7 +34,12 @@ from radio_drama.dialogue import (
     SpeakerVoiceReference,
     TtsResource,
 )
-from radio_drama.rendering import RenderResult, ScriptRenderResult
+from radio_drama.rendering import (
+    DialogueLineTiming,
+    RenderResult,
+    ScriptRenderResult,
+    ScriptTiming,
+)
 from radio_drama.vibevoice import VibeVoiceResource
 
 
@@ -174,29 +179,6 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
     assert "[forced_alignment] 0.500s 'Second line for alignment logging.'" in log_text
 
 
-def test_fill_start_positions_from_rendered_script_uses_native_line_starts():
-    speaker = SpeakerVoiceReference(
-        authored_name="Anna",
-        voice_name="anna.wav",
-        resolved_path=Path("anna.wav"),
-    )
-    contents = [
-        DialogueLine(speaker=speaker, spoken_text="First line."),
-        DialogueAudio(audio_plan=object()),
-        DialogueLine(speaker=speaker, spoken_text="Second line."),
-    ]
-
-    filled = fill_start_positions_from_rendered_script(
-        contents,
-        (0.25, 1.0),
-        duration_seconds=2.5,
-    )
-
-    assert filled[0].start_pos == 0.25
-    assert filled[1].start_pos == 1.0
-    assert filled[2].start_pos == 1.0
-
-
 def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
     config = ProductionConfig(
         voice_directory=tmp_path,
@@ -218,10 +200,15 @@ def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
             self.script_events = contents
 
         async def render(self) -> ScriptRenderResult:
-            return ScriptRenderResult(
-                audio=np.ones(8, dtype=np.float32),
-                dialogue_line_start_positions=(0.25, 1.0),
-            )
+                return ScriptRenderResult(
+                    audio=np.ones(8, dtype=np.float32),
+                    timing=ScriptTiming(
+                        (
+                            DialogueLineTiming(0.25, 1.0),
+                            DialogueLineTiming(1.0, 2.0),
+                        )
+                    ),
+                )
 
     class FakeWhisperX:
         async def fill_start_positions(self, contents, result):
@@ -522,7 +509,7 @@ def test_forced_alignment_script_gap_marks_omitted_interval():
     assert filled[2].start_pos == 3.0
 
 
-def test_fill_start_positions_from_rendered_script_infers_gap_boundaries():
+def test_line_end_timing_places_inline_audio_between_noncontiguous_lines():
     speaker = SpeakerVoiceReference(
         authored_name="Anna",
         voice_name="anna.wav",
@@ -530,21 +517,23 @@ def test_fill_start_positions_from_rendered_script_infers_gap_boundaries():
     )
     contents = [
         DialogueLine(speaker=speaker, spoken_text="First line."),
-        ScriptGap(label="gap"),
         DialogueAudio(audio_plan=object()),
         DialogueLine(speaker=speaker, spoken_text="Second line."),
     ]
 
-    filled = fill_start_positions_from_rendered_script(
+    filled = fill_start_positions_from_timing(
         contents,
-        (0.25, 1.0),
-        duration_seconds=2.5,
+        ScriptTiming(
+            (
+                DialogueLineTiming(0.0, 0.7),
+                DialogueLineTiming(1.2, 2.0),
+            )
+        ),
     )
 
-    assert filled[0].start_pos == 0.25
-    assert filled[1].start_pos == 1.0
-    assert filled[2].start_pos == 1.0
-    assert filled[3].start_pos == 1.0
+    assert filled[0].start_pos == 0.0
+    assert filled[1].start_pos == pytest.approx(0.95)
+    assert filled[2].start_pos == 1.2
 
 
 def test_whisperx_debug_writes_segment_payload(tmp_path: Path):

@@ -13,7 +13,7 @@ from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference, TtsResourc
 from radio_drama.document import parse_production_string
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.init import radio_drama_injector
-from radio_drama.rendering import RenderResult, ScriptRenderResult
+from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.training_samples import chunk_training_intervals, export_training_samples_from_plan
 from radio_drama.vibevoice import VibeVoiceResource
 
@@ -119,13 +119,16 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
             dialogue_lines = [line for line in request.dialogue_lines if line.spoken_text.strip()]
             line_count = len(dialogue_lines)
             frame_count = line_count * 4
-            positions = tuple(float(index) for index in range(line_count))
+            timings = tuple(
+                DialogueLineTiming(float(index), float(index + 1))
+                for index in range(line_count)
+            )
 
             class Registered:
                 async def render(self_nonlocal) -> ScriptRenderResult:
                     return ScriptRenderResult(
                         audio=np.arange(frame_count, dtype=np.float32),
-                        dialogue_line_start_positions=positions,
+                        timing=ScriptTiming(timings),
                     )
 
             return Registered()
@@ -195,7 +198,7 @@ def test_export_training_samples_from_plan_resamples_output(tmp_path: Path):
                 async def render(self_nonlocal) -> ScriptRenderResult:
                     return ScriptRenderResult(
                         audio=np.array([0.0, 1.0, 0.0, -1.0], dtype=np.float32),
-                        dialogue_line_start_positions=(0.0,),
+                        timing=ScriptTiming((DialogueLineTiming(0.0, 1.0),)),
                     )
 
             return Registered()
@@ -255,7 +258,7 @@ def test_export_training_samples_from_plan_defaults_to_backend_sample_rate(tmp_p
                 async def render(self_nonlocal) -> ScriptRenderResult:
                     return ScriptRenderResult(
                         audio=np.array([0.0, 1.0, 0.0, -1.0], dtype=np.float32),
-                        dialogue_line_start_positions=(0.0,),
+                        timing=ScriptTiming((DialogueLineTiming(0.0, 1.0),)),
                     )
 
             return Registered(self)
@@ -316,6 +319,14 @@ def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
             return [np.arange(8, dtype=np.float32) for _ in batch]
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (
+                    DialogueLineTiming(0.0, 1.0),
+                    DialogueLineTiming(1.0, 2.0),
+                )
+            )
+
         async def fill_start_positions(self, contents, result):
             updated = []
             line_index = 0

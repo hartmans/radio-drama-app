@@ -13,7 +13,13 @@ from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderReques
 from radio_drama.forced_alignment import copy_dialogue_contents
 from radio_drama.init import radio_drama_injector
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import RenderResult, ScriptRenderResult
+from radio_drama.rendering import (
+    BackendTtsResult,
+    DialogueLineTiming,
+    RenderResult,
+    ScriptRenderResult,
+    ScriptTiming,
+)
 from radio_drama.testing import CachedQwenTtsResource
 from radio_drama.testing import CachedVibeVoiceResource
 from radio_drama.testing import CachedWhisperXResource
@@ -81,7 +87,7 @@ class FakeCachedQwenTimedTtsResource(CachedQwenTtsResource):
 
     def _render_batch_native_sync(self, batch):
         self.native_call_count += 1
-        results: list[ScriptRenderResult] = []
+        results: list[BackendTtsResult] = []
         for index, registration in enumerate(batch):
             line_count = len(registration.request.dialogue_lines)
             if line_count == 0:
@@ -89,9 +95,20 @@ class FakeCachedQwenTimedTtsResource(CachedQwenTtsResource):
             else:
                 positions = tuple(float(i) * 0.5 for i in range(line_count))
             results.append(
-                ScriptRenderResult(
+                BackendTtsResult(
                     audio=np.full(self.native_frame_count, fill_value=index + 1, dtype=np.float32),
-                    dialogue_line_start_positions=positions,
+                    sample_rate=self.sample_rate,
+                    timing=ScriptTiming(
+                        tuple(
+                            DialogueLineTiming(
+                                start,
+                                positions[position_index + 1]
+                                if position_index + 1 < len(positions)
+                                else start + 0.5,
+                            )
+                            for position_index, start in enumerate(positions)
+                        )
+                    ),
                 )
             )
         return results
@@ -289,8 +306,10 @@ def test_cached_qwen_resource_replays_native_timing_metadata(
     assert cache_resource.native_call_count == 0
     assert isinstance(live_result, ScriptRenderResult)
     assert isinstance(cache_result, ScriptRenderResult)
-    assert live_result.dialogue_line_start_positions == (0.0, 0.5)
-    assert cache_result.dialogue_line_start_positions == (0.0, 0.5)
+    assert live_result.timing == ScriptTiming(
+        (DialogueLineTiming(0.0, 0.5), DialogueLineTiming(0.5, 1.0))
+    )
+    assert cache_result.timing == live_result.timing
 
 
 def test_cached_whisperx_resource_replays_cached_metadata(

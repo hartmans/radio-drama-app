@@ -99,5 +99,5 @@ def test_f5_render_batch_uses_shared_line_assembly(tmp_path, monkeypatch):
 
     result = FakeEngine().render_batch([_request()])
 
-    assert result[0]["dialogue_line_start_positions"] == [0.0]
+    assert result[0]["dialogue_line_spans"] == [[0.0, 0.1]]
     assert not list(tmp_path.glob("*.line-*.wav"))

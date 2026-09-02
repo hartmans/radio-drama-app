@@ -31,7 +31,13 @@ from radio_drama.forced_alignment import (
 )
 from radio_drama.init import radio_drama_injector
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import ProductionResult, RenderResult
+from radio_drama.rendering import (
+    BackendTtsResult,
+    DialogueLineTiming,
+    ProductionResult,
+    RenderResult,
+    ScriptTiming,
+)
 from radio_drama.vibevoice import VibeVoiceResource
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.testing import CachedRenderMetadata
@@ -103,20 +109,13 @@ def test_aligned_script_source_render_keeps_audio_and_records_markers(tmp_path: 
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
-            updated = []
-            for index, content in enumerate(contents):
-                if isinstance(content, DialogueAudio):
-                    updated.append(DialogueAudio(audio_plan=content.audio_plan, start_pos=0.5))
-                else:
-                    updated.append(
-                        type(content)(
-                            speaker=content.speaker,
-                            spoken_text=content.spoken_text,
-                            start_pos=float(index),
-                        )
-                    )
-            return updated
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                (
+                    DialogueLineTiming(0.0, 0.0),
+                    DialogueLineTiming(1.0, 1.0),
+                )
+            )
 
     class FakeSoundCache:
         async def preload(self, sound_path: Path):
@@ -158,7 +157,7 @@ def test_aligned_script_source_render_keeps_audio_and_records_markers(tmp_path: 
     assert isinstance(aligned_source, AlignedScriptSource)
     assert result.render_result.audio.shape == (4, 2)
     assert list(result.marker_frames) == [0, 2, 2, 4]
-    assert [content.start_pos for content in aligned_source.contents] == [0.0, 0.5, 2.0]
+    assert [content.start_pos for content in aligned_source.contents] == [0.0, 0.5, 1.0]
 
 
 def test_script_slice_and_concat_splice_sound_audio(tmp_path: Path):
@@ -242,11 +241,18 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
         def _render_batch_sync(self, batch):
             self.batch_sizes.append(len(batch))
             return [
-                np.full(index + 1, fill_value=index + 1, dtype=np.float32)
+                BackendTtsResult(
+                    np.full(index + 1, fill_value=(index + 1) / 10, dtype=np.float32),
+                    sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+                )
                 for index, _ in enumerate(batch)
             ]
 
-    config = ProductionConfig(voice_directory=tmp_path)
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+        output_channels=1,
+    )
 
     async def fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
@@ -273,7 +279,9 @@ def test_vibevoice_resource_batches_concurrent_requests(monkeypatch, tmp_path: P
 
     batch_sizes, results = asyncio.run(runner())
     assert batch_sizes == [2]
-    assert [result.audio.tolist() for result in results] == [[1.0], [2.0, 2.0]]
+    assert [result.audio.shape for result in results] == [(1,), (2,)]
+    assert np.allclose(results[0].audio, 0.1, atol=4e-5)
+    assert np.allclose(results[1].audio, 0.2, atol=4e-5)
 
 
 def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: Path):
@@ -293,9 +301,24 @@ def test_cut_before_mark_allows_dropped_vibevoice_requests_to_collect(tmp_path: 
             self.rendered_scripts.extend(
                 _normalized_script_from_request(registration.request) for registration in batch
             )
-            return [np.array([1.0], dtype=np.float32) for _ in batch]
+            return [
+                BackendTtsResult(
+                    np.array([1.0], dtype=np.float32),
+                    sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+                )
+                for _ in batch
+            ]
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                tuple(
+                    DialogueLineTiming(0.0, 0.0)
+                    for content in contents
+                    if isinstance(content, DialogueLine)
+                )
+            )
+
         async def fill_start_positions(self, contents, result):
             updated = []
             for content in contents:
@@ -361,7 +384,13 @@ def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(t
             self.rendered_scripts.extend(
                 _normalized_script_from_request(registration.request) for registration in batch
             )
-            return [np.array([1.0], dtype=np.float32) for _ in batch]
+            return [
+                BackendTtsResult(
+                    np.array([1.0], dtype=np.float32),
+                    sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+                )
+                for _ in batch
+            ]
 
     class FakeSoundCache:
         async def preload(self, sound_path: Path):
@@ -371,6 +400,15 @@ def test_cut_before_mark_drops_vibevoice_request_when_dropped_script_has_sound(t
             )
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                tuple(
+                    DialogueLineTiming(0.0, 0.0)
+                    for content in contents
+                    if isinstance(content, DialogueLine)
+                )
+            )
+
         async def fill_start_positions(self, contents, result):
             updated = []
             for content in contents:
@@ -435,9 +473,24 @@ def test_cut_after_mark_drops_vibevoice_requests_after_mark(tmp_path: Path):
             self.rendered_scripts.extend(
                 _normalized_script_from_request(registration.request) for registration in batch
             )
-            return [np.array([1.0], dtype=np.float32) for _ in batch]
+            return [
+                BackendTtsResult(
+                    np.array([1.0], dtype=np.float32),
+                    sample_rate=MODEL_NATIVE_SAMPLE_RATE,
+                )
+                for _ in batch
+            ]
 
     class FakeWhisperX:
+        async def script_timing(self, contents, result):
+            return ScriptTiming(
+                tuple(
+                    DialogueLineTiming(0.0, 0.0)
+                    for content in contents
+                    if isinstance(content, DialogueLine)
+                )
+            )
+
         async def fill_start_positions(self, contents, result):
             updated = []
             for content in contents:
@@ -784,8 +837,11 @@ def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Pa
             self._sample_rate = 24000
             return object()
 
-        def _prompt_items_by_voice_sync(self, voice_paths):
-            return {voice_path: [object()] for voice_path in voice_paths}
+        def _prompt_items_by_voice_sync(self, references):
+            return {
+                str(reference.resolved_path.expanduser().resolve()): [object()]
+                for reference in references
+            }
 
         def _generate_line_batch_native_sync(self, texts, prompt_items):
             self._sample_rate = 24000

@@ -5,15 +5,16 @@ import json
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 from carthage.dependency_injection import InjectionKey
 
 from radio_drama.cache import CacheCollection
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import SpeakerVoiceReference
+from radio_drama.dialogue import DialogueLine, ScriptGap, SpeakerVoiceReference
 from radio_drama.effects import VOICE_PREPROCESS_VERSION
 from radio_drama.forced_alignment import WhisperXResource
 from radio_drama.qwen_tts import QwenTtsResource
-from radio_drama.rendering import ScriptRenderResult
+from radio_drama.rendering import BackendTtsResult, DialogueLineTiming, ScriptTiming
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector, request_from_normalized_script
@@ -95,13 +96,120 @@ def test_vibevoice_resource_uses_shared_cache_manager_and_preserves_stem(
     assert live_result.audio.shape == (4, 2)
     assert np.array_equal(live_result.audio, replay_result.audio)
     assert sorted(path.name for path in cache_dir.iterdir()) == [
-        f"{expected_stem}.json",
+        f"{expected_stem}.meta",
         f"{expected_stem}.wav",
     ]
-    payload = json.loads((cache_dir / f"{expected_stem}.json").read_text(encoding="utf-8"))
-    assert payload["dialogue_lines"][0]["spoken_text"] == "Hello there."
+    payload = json.loads((cache_dir / f"{expected_stem}.meta").read_text(encoding="utf-8"))
     assert payload["frame_count"] == 2
     assert payload["sample_rate"] == 24000
+
+
+def test_vibevoice_adopts_legacy_wav_without_rewriting_audio(monkeypatch, tmp_path: Path):
+    config = ProductionConfig(output_sample_rate=24000, output_channels=1)
+    output_path = tmp_path / "render.wav"
+    request = request_from_normalized_script("Speaker 1: Legacy audio.", ("anna.wav",))
+    cache_dir = Path(f"{output_path}.cache")
+    collection = CacheCollection("vibevoice", cache_dir)
+    key = collection.key_for(request)
+    wav_path = collection.path_for_subtype(key, "wav")
+    json_path = collection.path_for_subtype(key, "json")
+    wav_path.parent.mkdir(parents=True)
+    sf.write(wav_path, np.array([0.25, -0.25], dtype=np.float32), 24000)
+    json_path.write_text(
+        json.dumps(request.build_cache_payload(sample_rate=24000, frame_count=2)),
+        encoding="utf-8",
+    )
+    original_wav = wav_path.read_bytes()
+
+    class LegacyOnlyVibeVoiceResource(VibeVoiceResource):
+        def _render_batch_native_sync(self, batch):
+            raise AssertionError("legacy audio should not be regenerated")
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, output_path=output_path)
+        try:
+            resource = await ainjector(LegacyOnlyVibeVoiceResource)
+            return await (await resource.register_request(request)).render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    meta_path = collection.path_for_subtype(key, "meta")
+    assert result.audio.shape == (2,)
+    assert wav_path.read_bytes() == original_wav
+    assert json_path.is_file()
+    assert meta_path.is_file()
+    assert json.loads(meta_path.read_text(encoding="utf-8"))["dialogue_line_spans"] is None
+
+
+def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
+    monkeypatch,
+    tmp_path: Path,
+):
+    config = ProductionConfig(output_sample_rate=24000, output_channels=1)
+    output_path = tmp_path / "render.wav"
+    request = request_from_normalized_script("Speaker 1: Align me.", ("anna.wav",))
+
+    class UntimedVibeVoiceResource(VibeVoiceResource):
+        native_calls = 0
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._sample_rate = 24000
+
+        def _render_batch_native_sync(self, batch):
+            type(self).native_calls += 1
+            return [np.array([0.25, -0.25], dtype=np.float32) for _ in batch]
+
+    class FakeWhisperX:
+        calls = 0
+
+        async def script_timing(self, contents, result):
+            type(self).calls += 1
+            return ScriptTiming((DialogueLineTiming(0.0, result.frame_count / 24000),))
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def render_and_align(contents):
+        injector, ainjector = await make_async_injector(config, output_path=output_path)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        try:
+            resource = await ainjector(UntimedVibeVoiceResource)
+            registration = await resource.register_request(request)
+            result = await registration.render()
+            timing = await registration.ensure_timing(contents, result)
+            return timing
+        finally:
+            injector.close()
+
+    contents = list(request.dialogue_contents)
+    first_timing = asyncio.run(render_and_align(contents))
+    collection = CacheCollection("vibevoice", Path(f"{output_path}.cache"))
+    key = collection.key_for(request)
+    wav_path = collection.path_for_subtype(key, "wav")
+    meta_path = collection.path_for_subtype(key, "meta")
+    original_wav = wav_path.read_bytes()
+    first_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    replay_timing = asyncio.run(render_and_align(contents))
+    changed_contents = [contents[0], ScriptGap(label="changed projection")]
+    changed_timing = asyncio.run(render_and_align(changed_contents))
+    changed_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    assert first_timing == replay_timing == changed_timing
+    assert UntimedVibeVoiceResource.native_calls == 1
+    assert FakeWhisperX.calls == 2
+    assert wav_path.read_bytes() == original_wav
+    assert first_payload["alignment_key"] != changed_payload["alignment_key"]
+    assert changed_payload["dialogue_line_spans"] == [[0.0, 2 / 24000]]
 
 
 def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Path):
@@ -121,9 +229,15 @@ def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Pat
         def _render_batch_native_sync(self, batch):
             self.native_call_count += 1
             return [
-                ScriptRenderResult(
+                BackendTtsResult(
                     audio=np.full(6, fill_value=index + 1, dtype=np.float32),
-                    dialogue_line_start_positions=(0.0, 0.5),
+                    sample_rate=24000,
+                    timing=ScriptTiming(
+                        (
+                            DialogueLineTiming(0.0, 0.5),
+                            DialogueLineTiming(0.5, 0.75),
+                        )
+                    ),
                 )
                 for index, _ in enumerate(batch)
             ]
@@ -155,12 +269,11 @@ def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Pat
     assert replay_call_count == 0
     assert live_result.audio.shape == (12, 2)
     assert np.array_equal(live_result.audio, replay_result.audio)
-    assert live_result.dialogue_line_start_positions == (0.0, 0.5)
-    assert replay_result.dialogue_line_start_positions == (0.0, 0.5)
-    payload = json.loads((cache_dir / f"{expected_stem}.json").read_text(encoding="utf-8"))
+    assert live_result.timing == replay_result.timing
+    payload = json.loads((cache_dir / f"{expected_stem}.meta").read_text(encoding="utf-8"))
     assert payload["frame_count"] == 6
     assert payload["sample_rate"] == 24000
-    assert payload["dialogue_line_start_positions"] == [0.0, 0.5]
+    assert payload["dialogue_line_spans"] == [[0.0, 0.5], [0.5, 0.75]]
 
 
 def test_qwentts_prompt_cache_path_includes_voice_preprocess_version(tmp_path: Path):

@@ -22,7 +22,7 @@ from .debug import write_debug_json, write_debug_message
 from .dialogue import DialogueAudio, DialogueContent, DialogueLine, ScriptEvent, ScriptGap
 from .model_loading import shared_model_load
 from .planning import PlanningNode
-from .rendering import RenderResult, ScriptRenderResult
+from .rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from .text import normalize_text_punctuation
 
 
@@ -157,6 +157,46 @@ class WhisperXResource(AsyncInjectable):
             duration_seconds=_audio_duration(result.audio, self.config.resolved_output_sample_rate),
         )
         return fill_start_positions_from_alignment(contents, alignment)
+
+    async def script_timing(
+        self,
+        contents: Sequence[ScriptEvent],
+        result: RenderResult,
+    ) -> ScriptTiming:
+        """Return forced-aligned line spans for a TTS cache entry."""
+
+        transcript = "\n".join(
+            content.spoken_text for content in contents if isinstance(content, DialogueLine)
+        )
+        registration = await self.register_request(
+            ForcedAlignmentRequest(
+                audio=result.audio,
+                sample_rate=self.config.resolved_output_sample_rate,
+                transcript=transcript,
+            )
+        )
+        response = await registration.align()
+        alignment = _alignment_result_from_whisperx_response(
+            transcript,
+            response,
+            duration_seconds=_audio_duration(
+                result.audio,
+                self.config.resolved_output_sample_rate,
+            ),
+        )
+        dialogue_contents = [
+            content for content in contents if isinstance(content, DialogueContent)
+        ]
+        spans = _stabilize_line_spans(
+            _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
+        )
+        return ScriptTiming(
+            tuple(
+                DialogueLineTiming(start=spans[index][0], end=spans[index][1])
+                for index, content in enumerate(dialogue_contents)
+                if isinstance(content, DialogueLine)
+            )
+        )
 
     async def transcribe_audio_sample(
         self,
@@ -456,17 +496,15 @@ class AlignedScriptSource(PlanningNode):
         if isinstance(self.audio_provider, AudioPlan):
             await self.audio_provider.layout()
         base_result = await self.audio_provider.render()
-        if (
-            isinstance(base_result, ScriptRenderResult)
-            and base_result.dialogue_line_start_positions is not None
-        ):
-            self.contents = fill_start_positions_from_rendered_script(
+        from .dialogue import ScriptPlan
+
+        if isinstance(self.audio_provider, ScriptPlan):
+            timing = await self.audio_provider.ensure_timing(self.contents, base_result)
+            self.contents = fill_start_positions_from_timing(self.contents, timing)
+        elif isinstance(base_result, ScriptRenderResult) and base_result.timing is not None:
+            self.contents = fill_start_positions_from_timing(
                 self.contents,
-                base_result.dialogue_line_start_positions,
-                duration_seconds=_audio_duration(
-                    base_result.audio,
-                    self.config.resolved_output_sample_rate,
-                ),
+                base_result.timing,
             )
         else:
             resource = await self.ainjector.get_instance_async(WhisperXResource)
@@ -659,45 +697,31 @@ def fill_start_positions_from_alignment(
     return copied_contents
 
 
-def fill_start_positions_from_rendered_script(
+def fill_start_positions_from_timing(
     contents: Sequence[ScriptEvent],
-    dialogue_line_start_positions: Sequence[float],
-    *,
-    duration_seconds: float,
+    timing: ScriptTiming,
 ) -> list[ScriptEvent]:
+    """Project complete line spans onto gaps and inline audio markers."""
+
     copied_contents = copy_dialogue_contents(contents)
-    dialogue_lines = [content for content in copied_contents if isinstance(content, DialogueLine)]
-    if len(dialogue_lines) != len(dialogue_line_start_positions):
-        raise RuntimeError(
-            "Rendered script timing metadata must have one start position per DialogueLine"
-        )
-
-    line_starts = [float(position) for position in dialogue_line_start_positions]
-    line_spans: list[tuple[float, float]] = []
-    for index, line in enumerate(dialogue_lines):
-        line.start_pos = line_starts[index]
-        next_start = duration_seconds if index + 1 >= len(line_starts) else line_starts[index + 1]
-        line_spans.append((line.start_pos, next_start))
-
-    dialogue_contents = [content for content in copied_contents if isinstance(content, DialogueContent)]
+    line_spans = [(line.start, line.end) for line in timing.dialogue_lines]
+    dialogue_contents = [
+        content for content in copied_contents if isinstance(content, DialogueContent)
+    ]
     dialogue_content_spans = _merge_dialogue_content_spans(dialogue_contents, line_spans)
-    stabilized_dialogue_spans = _stabilize_line_spans(dialogue_content_spans)
-
+    stabilized_spans = _stabilize_line_spans(dialogue_content_spans)
     content_index = 0
     for content in copied_contents:
         if isinstance(content, DialogueContent):
-            start_pos, _ = dialogue_content_spans[content_index]
-            content.start_pos = cast_float(start_pos) if start_pos is not None else math.nan
+            content.start_pos = stabilized_spans[content_index][0]
             content_index += 1
-
     for index, content in enumerate(copied_contents):
         if isinstance(content, DialogueAudio):
             content.start_pos = _dialogue_audio_start_pos(
                 copied_contents,
-                stabilized_dialogue_spans,
+                stabilized_spans,
                 index,
             )
-
     return copied_contents
 
 

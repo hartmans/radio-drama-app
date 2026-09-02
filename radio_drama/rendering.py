@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -63,14 +64,32 @@ class ProductionResult(RenderResult):
     """Top-level rendered production audio."""
 
 
+@dataclass(frozen=True, slots=True)
+class DialogueLineTiming:
+    """Start and end seconds for one rendered dialogue line."""
+
+    start: float
+    end: float
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptTiming:
+    """Timing entries parallel to a script request's dialogue lines."""
+
+    dialogue_lines: tuple[DialogueLineTiming, ...]
+
+
 @dataclass(slots=True)
 class ScriptRenderResult(RenderResult):
-    """Rendered script audio plus optional per-dialogue-line start positions.
+    """Production-format script audio plus optional line timing."""
 
-    ``dialogue_line_start_positions`` uses the same units and coordinate system
-    as ``ScriptEvent.start_pos``: seconds in the rendered script timeline.
-    The tuple is parallel to the script's ``DialogueLine`` sequence and may be
-    omitted when the backend cannot provide native line timing metadata.
-    """
+    timing: ScriptTiming | None = None
 
-    dialogue_line_start_positions: tuple[float, ...] | None = None
+
+@dataclass(slots=True)
+class BackendTtsResult(RenderResult):
+    """Backend-native script audio, its sample rate, and optional timing."""
+
+    sample_rate: int = 0
+    timing: ScriptTiming | None = None
+    cache_wav_path: Path | None = None
