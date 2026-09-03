@@ -28,8 +28,9 @@ class FrontMatter:
     conventional TITLE/TIT2, ALBUM/TALB, ARTIST/TPE1, TRACKNUMBER/TRCK, and
     DISCNUMBER/TPOS fields in Vorbis comments and ID3v2.4. ``description`` maps
     to the format's description field. ``credits`` is authored display text
-    and is combined with minimal Freesound attribution in COMMENT/COMM. FLAC
-    and Ogg use Vorbis comments; MP3 output requests ID3v2.4 from ffmpeg.
+    and is combined with minimal Freesound attribution in CREDITS for FLAC/Ogg
+    and COMM for MP3. FLAC and Ogg use Vorbis comments; MP3 output requests
+    ID3v2.4 from ffmpeg.
     """
 
     series: str | None = None
@@ -41,8 +42,15 @@ class FrontMatter:
     season: int | None = None
     artwork: Path | None = None
 
-    def metadata(self, *, sound_credits: str = "") -> dict[str, str]:
-        """Return ffmpeg metadata names common to Vorbis comments and ID3."""
+    def metadata(self, *, output_type: str, sound_credits: str = "") -> dict[str, str]:
+        """Return metadata names appropriate to one output container.
+
+        FLAC and Ogg store the generated block in the extensible ``CREDITS``
+        Vorbis comment, leaving ``DESCRIPTION`` solely for the episode
+        synopsis. MP3 uses ffmpeg's ``comment`` key, which becomes an ID3 COMM
+        frame. This distinction avoids ffmpeg mapping both description and
+        comment to repeated, case-insensitive DESCRIPTION values in FLAC.
+        """
 
         metadata = {}
         for name in ("title", "artist", "description"):
@@ -57,7 +65,7 @@ class FrontMatter:
             metadata["disc"] = str(self.season)
         comment = credits_comment(self.credits, sound_credits=sound_credits)
         if comment:
-            metadata["comment"] = comment
+            metadata["comment" if output_type == "mp3" else "credits"] = comment
         return metadata
 
 
@@ -137,7 +145,9 @@ def write_audio_file(
     WAV is written directly and does not receive front-matter tags. Other
     formats are encoded by ffmpeg from a temporary float WAV. Ogg Vorbis uses
     the intentionally fixed quality setting 8.5; MP3 uses LAME's quality-based
-    VBR mode and ID3v2.4; FLAC uses ffmpeg's native lossless encoder.
+    VBR mode and ID3v2.4; FLAC uses ffmpeg's native lossless encoder. ffmpeg is
+    invoked without a shell, and filesystem operands are absolute paths so
+    user-authored filenames cannot be interpreted as command options.
     """
 
     output = Path(path)
@@ -153,7 +163,12 @@ def write_audio_file(
     artwork = frontmatter.artwork
     if artwork is not None and not artwork.is_file():
         raise ValueError(f"Artwork file was not found: {artwork}")
-    metadata = frontmatter.metadata(sound_credits=sound_credits)
+    metadata = frontmatter.metadata(
+        output_type=output_type,
+        sound_credits=sound_credits,
+    )
+    ffmpeg_output = output.absolute()
+    ffmpeg_artwork = artwork.resolve() if artwork is not None else None
     with tempfile.TemporaryDirectory(prefix="radio-drama-output-") as temp_dir:
         source = Path(temp_dir) / "production.wav"
         sf.write(source, result.audio, sample_rate, subtype="FLOAT")
@@ -167,34 +182,40 @@ def write_audio_file(
             "-i",
             str(source),
         ]
-        if artwork is not None and output_type == "ogg":
+        if ffmpeg_artwork is not None and output_type == "ogg":
             picture_metadata = Path(temp_dir) / "picture.ffmetadata"
             picture_metadata.write_text(
                 ";FFMETADATA1\nMETADATA_BLOCK_PICTURE="
-                + _ogg_picture_block(artwork)
+                + _ogg_picture_block(ffmpeg_artwork)
                 + "\n",
                 encoding="ascii",
             )
             command.extend(
                 ["-f", "ffmetadata", "-i", str(picture_metadata), "-map_metadata", "1"]
             )
-        if artwork is not None and output_type != "ogg":
-            command.extend(["-i", str(artwork), "-map", "0:a", "-map", "1:v"])
+        if ffmpeg_artwork is not None and output_type != "ogg":
+            command.extend(["-i", str(ffmpeg_artwork), "-map", "0:a", "-map", "1:v"])
         if output_type == "ogg":
             command.extend(["-c:a", "libvorbis", "-q:a", "8.5"])
         elif output_type == "mp3":
             command.extend(["-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "4"])
         else:
             command.extend(["-c:a", "flac"])
-        if artwork is not None and output_type != "ogg":
+        if ffmpeg_artwork is not None and output_type != "ogg":
             command.extend(["-c:v", "copy", "-disposition:v", "attached_pic"])
             command.extend(["-metadata:s:v", "title=Cover (front)"])
             command.extend(["-metadata:s:v", "comment=Cover (front)"])
         for name, value in metadata.items():
             command.extend(["-metadata", f"{name}={value}"])
-        command.append(str(output))
+        command.append(str(ffmpeg_output))
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
         except FileNotFoundError as exc:
             raise RuntimeError(
                 "ffmpeg is required for compressed audio output"

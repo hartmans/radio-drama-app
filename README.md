@@ -121,8 +121,10 @@ Example:
 fields are optional. `credits` is a list of display strings whose spelling and
 capitalization are preserved. For FLAC, MP3, and Ogg output, authored credits
 and automatically discovered Freesound attribution are embedded in the audio
-comment as minimal, plain-text-readable Markdown. WAV output does not embed
-front matter.
+as minimal, plain-text-readable Markdown. MP3 stores the block in its comment
+frame; FLAC and Ogg use a separate `CREDITS` Vorbis comment so their
+`DESCRIPTION` remains the episode synopsis. WAV output does not embed front
+matter.
 
 ```xml
 <frontmatter>

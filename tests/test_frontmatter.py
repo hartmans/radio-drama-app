@@ -106,8 +106,20 @@ def test_write_audio_file_encodes_audio_and_metadata(tmp_path, suffix, artwork_s
     assert tags["artist"] == "Example Artist"
     assert tags["track"] == "4"
     assert tags["disc"] == "2"
-    assert "Qwen TTS Voice Design" in tags["comment"]
-    assert "“Bell” by Example" in tags["comment"]
+    credits_key = "comment" if suffix == "mp3" else "credits"
+    assert "Qwen TTS Voice Design" in tags[credits_key]
+    assert "“Bell” by Example" in tags[credits_key]
+    if suffix != "mp3":
+        assert tags.get("description", tags.get("comment")) == "Example description"
+    if suffix == "flac":
+        raw_flac = subprocess.run(
+            ["metaflac", "--list", "--block-type=VORBIS_COMMENT", str(output)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.lower()
+        assert raw_flac.count("description=example description") == 1
+        assert "credits=## credits" in raw_flac
     assert any(stream["codec_type"] == "video" for stream in payload["streams"])
 
 
@@ -117,6 +129,15 @@ def test_document_reports_missing_artwork_at_frontmatter(tmp_path):
             "<production><frontmatter>artwork: missing.jpg</frontmatter></production>",
             source_name=str(tmp_path / "episode.xml"),
         )
+
+
+def test_ffmpeg_output_path_cannot_be_interpreted_as_an_option(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = RenderResult(audio=np.zeros((480, 2), dtype=np.float32))
+
+    write_audio_file("-episode.mp3", result, 48_000)
+
+    assert (tmp_path / "-episode.mp3").is_file()
 
 
 def test_cache_directory_always_uses_wav_name():
