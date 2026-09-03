@@ -7,6 +7,7 @@ import mimetypes
 import struct
 import subprocess
 import tempfile
+from datetime import date as Date
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -30,7 +31,9 @@ class FrontMatter:
     to the format's description field. ``credits`` is authored display text
     and is combined with minimal Freesound attribution in CREDITS for FLAC/Ogg
     and COMM for MP3. FLAC and Ogg use Vorbis comments; MP3 output requests
-    ID3v2.4 from ffmpeg.
+    ID3v2.4 from ffmpeg. ``date`` maps to DATE/TDRC and ``copyright`` to
+    COPYRIGHT/TCOP. ``guid`` is the stable episode identity used by podcast
+    sidecar output and is also retained as a custom audio metadata value.
     """
 
     series: str | None = None
@@ -41,6 +44,9 @@ class FrontMatter:
     description: str | None = None
     season: int | None = None
     artwork: Path | None = None
+    guid: str | None = None
+    copyright: str | None = None
+    date: Date | None = None
 
     def metadata(self, *, output_type: str, sound_credits: str = "") -> dict[str, str]:
         """Return metadata names appropriate to one output container.
@@ -53,7 +59,7 @@ class FrontMatter:
         """
 
         metadata = {}
-        for name in ("title", "artist", "description"):
+        for name in ("title", "artist", "description", "copyright"):
             value = getattr(self, name)
             if value is not None:
                 metadata[name] = value
@@ -63,6 +69,10 @@ class FrontMatter:
             metadata["track"] = str(self.episode)
         if self.season is not None:
             metadata["disc"] = str(self.season)
+        if self.date is not None:
+            metadata["date"] = self.date.isoformat()
+        if self.guid is not None:
+            metadata["podcast_guid"] = self.guid
         comment = credits_comment(self.credits, sound_credits=sound_credits)
         if comment:
             metadata["comment" if output_type == "mp3" else "credits"] = comment
@@ -85,13 +95,15 @@ def parse_frontmatter(
     unknown = sorted(set(loaded) - allowed)
     if unknown:
         raise ValueError(f"unknown front matter field(s): {', '.join(unknown)}")
-    for name in ("series", "title", "artist", "description"):
+    for name in ("series", "title", "artist", "description", "guid", "copyright"):
         if (
             name in loaded
             and loaded[name] is not None
             and not isinstance(loaded[name], str)
         ):
             raise ValueError(f"front matter {name} must be a string")
+    if isinstance(loaded.get("guid"), str) and not loaded["guid"].strip():
+        raise ValueError("front matter guid must not be empty")
     for name in ("episode", "season"):
         if name in loaded and loaded[name] is not None:
             if not isinstance(loaded[name], int) or isinstance(loaded[name], bool):
@@ -116,6 +128,16 @@ def parse_frontmatter(
         if base_directory is not None and not artwork_path.is_file():
             raise ValueError(f"front matter artwork was not found: {artwork_path}")
         loaded["artwork"] = artwork_path
+    authored_date = loaded.get("date")
+    if authored_date is not None:
+        if isinstance(authored_date, str):
+            try:
+                authored_date = Date.fromisoformat(authored_date)
+            except ValueError as exc:
+                raise ValueError("front matter date must use YYYY-MM-DD") from exc
+        if type(authored_date) is not Date:
+            raise ValueError("front matter date must use YYYY-MM-DD")
+        loaded["date"] = authored_date
     return FrontMatter(**loaded)
 
 

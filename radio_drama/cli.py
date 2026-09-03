@@ -59,6 +59,11 @@ def initialize_arg_parser(
         help="Output format using the input filename stem; mutually exclusive with --output.",
     )
     parser.add_argument(
+        "--podcast",
+        action="store_true",
+        help="Write a staticsite Markdown sidecar next to the rendered audio.",
+    )
+    parser.add_argument(
         "-r",
         "--output-sample-rate",
         type=int,

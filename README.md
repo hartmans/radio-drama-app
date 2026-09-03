@@ -71,6 +71,7 @@ Useful options:
 * `--sounds-dir PATH`: directory searched recursively for relative `<sound>` references
 * `--output PATH`: output path ending in `.wav`, `.flac`, `.mp3`, or `.ogg`; defaults to `INPUT.wav`
 * `--output-type TYPE`: use the input filename stem with output type `wav`, `flac`, `mp3`, or `ogg`; mutually exclusive with `--output`
+* `--podcast`: write a sibling staticsite Markdown page (`episode.flac` produces `episode.md`); requires `guid` in `<frontmatter>`
 * `--output-sample-rate N`: override the production sample rate
 * `--output-channels N`: override the output channel count
 * `--model-file PATH`: override the VibeVoice model path
@@ -138,15 +139,29 @@ matter.
   description: The third episode of Nothing but the Succubus.
   season: 1
   artwork: artwork/nothing_but_the_succubus.jpg
+  guid: 3478d53c-9a7e-4e8d-a54a-25f979e0b459
+  copyright: Copyright 2026 BlindDancer AI
+  date: 2026-09-02
 </frontmatter>
 ```
 
 The supported fields are `series`, `episode`, `title`, `artist`, `credits`,
-`description`, `season`, and `artwork`. Artwork may be a JPEG or PNG path and
-is resolved relative to the production XML file. It is embedded as front-cover
-art in FLAC, MP3, and Ogg output. Series and episode metadata use the
-conventional album and track fields in each output format; season uses the disc
-field.
+`description`, `season`, `artwork`, `guid`, `copyright`, and `date`. Artwork may
+be a JPEG or PNG path and is resolved relative to the production XML file. It
+is embedded as front-cover art in FLAC, MP3, and Ogg output. Dates must be
+authored as `YYYY-MM-DD`; rendering never substitutes the current date. Series
+and episode metadata use the conventional album and track fields in each
+output format; season uses the disc field.
+
+With `--podcast`, the Markdown sidecar contains staticsite YAML metadata for
+the audio filename, generated duration, stable GUID, and the authored episode
+fields. Its show notes—and the sidecar's `description` value—combine the
+episode description, authored credits, and discovered sound credits. Generate
+a UUIDv4 to paste into a new episode with:
+
+```bash
+python -m radio_drama.podcast_guid
+```
 
 Freesound credits can also be printed without rendering audio:
 

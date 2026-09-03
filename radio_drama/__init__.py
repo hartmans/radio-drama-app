@@ -105,7 +105,8 @@ from .forced_alignment import (
 )
 from .init import radio_drama_injector
 from .planning import PlanningNode
-from .production import ProductionPlan, write_production
+from .podcast_guid import generate_podcast_guid
+from .production import ProductionPlan, write_podcast_sidecar, write_production
 from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
 from .rendering import DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
@@ -160,6 +161,7 @@ __all__ = [
     "EffectStage",
     "FrontMatter",
     "FrontmatterNode",
+    "generate_podcast_guid",
     "AddedEffectStage",
     "DryEffectStage",
     "ScaledEffectStage",
@@ -193,6 +195,7 @@ __all__ = [
     "ProductionNode",
     "ProductionPlan",
     "write_production",
+    "write_podcast_sidecar",
     "ProxyMount",
     "ProxyTtsConfig",
     "ProxyTtsResource",

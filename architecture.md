@@ -177,6 +177,10 @@ encoded through each container's native front-cover mechanism.
 `radio_drama.production.write_production()` coordinates a completed production
 plan and render result with those services; CLI and REPL production output use
 that same entry point.
+`radio_drama.podcast_guid` is a standard-library-only UUID generator for
+creating a persistent episode identity. Optional podcast publication writes a
+sibling staticsite Markdown page from the already-authoritative `FrontMatter`;
+staticsite remains responsible for site and feed generation.
 
 ## Resource layer
 

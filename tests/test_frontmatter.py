@@ -1,9 +1,12 @@
 import json
 import subprocess
+import uuid
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 from PIL import Image
 
 from radio_drama.cache import cache_directory_for_output
@@ -11,7 +14,10 @@ from radio_drama.cli import initialize_arg_parser, resolved_output_path
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.frontmatter import FrontMatter, parse_frontmatter, write_audio_file
-from radio_drama.rendering import RenderResult
+from radio_drama.podcast_guid import generate_podcast_guid
+from radio_drama.production import write_podcast_sidecar
+from radio_drama.rendering import ProductionResult, RenderResult
+from radio_drama_app import main as render_main
 
 
 def test_frontmatter_element_parses_all_optional_fields():
@@ -29,6 +35,9 @@ def test_frontmatter_element_parses_all_optional_fields():
             description: A mysterious encounter.
             season: 1
             artwork: artwork/cover.jpg
+            guid: 3478d53c-9a7e-4e8d-a54a-25f979e0b459
+            copyright: Copyright 2026 Example
+            date: 2026-09-02
           </frontmatter>
         </production>
         """
@@ -43,6 +52,9 @@ def test_frontmatter_element_parses_all_optional_fields():
         description="A mysterious encounter.",
         season=1,
         artwork=Path("artwork/cover.jpg"),
+        guid="3478d53c-9a7e-4e8d-a54a-25f979e0b459",
+        copyright="Copyright 2026 Example",
+        date=date(2026, 9, 2),
     )
 
 
@@ -68,6 +80,8 @@ def test_write_audio_file_encodes_audio_and_metadata(tmp_path, suffix, artwork_s
         description: Example description
         season: 2
         artwork: {artwork.name}
+        copyright: Copyright 2026 Example
+        date: 2026-09-02
         """,
         base_directory=tmp_path,
     )
@@ -106,6 +120,8 @@ def test_write_audio_file_encodes_audio_and_metadata(tmp_path, suffix, artwork_s
     assert tags["artist"] == "Example Artist"
     assert tags["track"] == "4"
     assert tags["disc"] == "2"
+    assert tags["copyright"] == "Copyright 2026 Example"
+    assert tags["date"] == "2026-09-02"
     credits_key = "comment" if suffix == "mp3" else "credits"
     assert "Qwen TTS Voice Design" in tags[credits_key]
     assert "“Bell” by Example" in tags[credits_key]
@@ -138,6 +154,70 @@ def test_ffmpeg_output_path_cannot_be_interpreted_as_an_option(tmp_path, monkeyp
     write_audio_file("-episode.mp3", result, 48_000)
 
     assert (tmp_path / "-episode.mp3").is_file()
+
+
+def test_podcast_guid_generator_returns_uuid4():
+    generated = uuid.UUID(generate_podcast_guid())
+
+    assert generated.version == 4
+
+
+def test_podcast_sidecar_exposes_structured_metadata_and_combined_notes(tmp_path):
+    audio_path = tmp_path / "episode.flac"
+    frontmatter = FrontMatter(
+        series="Example Series",
+        episode=4,
+        season=2,
+        title="Episode 4: Example",
+        description="Episode synopsis.",
+        credits=("Qwen TTS Voice Design",),
+        guid="3478d53c-9a7e-4e8d-a54a-25f979e0b459",
+        copyright="Copyright 2026 Example",
+        date=date(2026, 9, 2),
+    )
+    result = ProductionResult(audio=np.zeros((96_001, 2), dtype=np.float32))
+
+    sidecar = write_podcast_sidecar(
+        audio_path,
+        result,
+        48_000,
+        frontmatter,
+        sound_credits="## Sound credits\n\n- Bell by Example",
+    )
+
+    contents = sidecar.read_text(encoding="utf-8")
+    _, yaml_text, body = contents.split("---", 2)
+    metadata = yaml.safe_load(yaml_text)
+    assert sidecar == tmp_path / "episode.md"
+    assert metadata["date"] == date(2026, 9, 2)
+    assert metadata["podcast_audio"] == "episode.flac"
+    assert metadata["podcast_duration"] == "00:00:03"
+    assert metadata["podcast_guid"] == frontmatter.guid
+    assert metadata["description"] == body.strip()
+    assert "Episode synopsis." in body
+    assert "Qwen TTS Voice Design" in body
+    assert "Bell by Example" in body
+
+
+def test_podcast_sidecar_requires_guid(tmp_path):
+    with pytest.raises(ValueError, match="requires front matter guid"):
+        write_podcast_sidecar(
+            tmp_path / "episode.flac",
+            ProductionResult(audio=np.zeros((1, 2), dtype=np.float32)),
+            48_000,
+            FrontMatter(),
+        )
+
+
+def test_podcast_cli_rejects_document_without_guid(tmp_path, capsys):
+    production = tmp_path / "episode.xml"
+    production.write_text("<production />", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        render_main([str(production), "--podcast"])
+
+    assert exc_info.value.code == 1
+    assert "--podcast requires <frontmatter> to include guid" in capsys.readouterr().err
 
 
 def test_cache_directory_always_uses_wav_name():
