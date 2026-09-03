@@ -69,8 +69,8 @@ Useful options:
 
 * `--voice-dir PATH`: directory containing reference voice files
 * `--sounds-dir PATH`: directory searched recursively for relative `<sound>` references
-* `--output PATH`: output path ending in `.wav`, `.flac`, `.mp3`, or `.ogg`; defaults to `INPUT.wav`
-* `--output-type TYPE`: use the input filename stem with output type `wav`, `flac`, `mp3`, or `ogg`; mutually exclusive with `--output`
+* `--output PATH`: output path ending in `.wav`, `.flac`, `.mp3`, `.ogg`, or `.m4a`; defaults to `INPUT.wav`
+* `--output-type TYPE`: use the input filename stem with output type `wav`, `flac`, `mp3`, `ogg`, or `m4a`; mutually exclusive with `--output`
 * `--podcast`: write a sibling staticsite Markdown page (`episode.flac` produces `episode.md`); requires `guid` in `<frontmatter>`
 * `--output-sample-rate N`: override the production sample rate
 * `--output-channels N`: override the output channel count
@@ -80,8 +80,9 @@ Useful options:
 If `--sounds-dir` is not supplied, relative sound references are resolved under a `sounds/` directory next to the XML file.
 
 The production speech cache always uses the encoding-independent name
-`INPUT.wav.cache`. Thus rendering `INPUT.mp3`, `INPUT.flac`, and `INPUT.ogg`
-reuses the same cache. Ogg output currently uses Vorbis quality 8.5.
+`INPUT.wav.cache`. Thus rendering `INPUT.mp3`, `INPUT.flac`, `INPUT.ogg`, and
+`INPUT.m4a` reuses the same cache. Ogg output currently uses Vorbis quality
+8.5. M4A output uses AAC-LC at 128 kbps with an MPEG-4 fast-start layout.
 
 ## Current XML Schema
 
@@ -120,10 +121,10 @@ Example:
 
 `<frontmatter>` contains optional YAML metadata for the rendered episode. All
 fields are optional. `credits` is a list of display strings whose spelling and
-capitalization are preserved. For FLAC, MP3, and Ogg output, authored credits
-and automatically discovered Freesound attribution are embedded in the audio
-as minimal, plain-text-readable Markdown. MP3 stores the block in its comment
-frame; FLAC and Ogg use a separate `CREDITS` Vorbis comment so their
+capitalization are preserved. For FLAC, MP3, Ogg, and M4A output, authored
+credits and automatically discovered Freesound attribution are embedded in the audio
+as minimal, plain-text-readable Markdown. MP3 and M4A store the block in their
+comment fields; FLAC and Ogg use a separate `CREDITS` Vorbis comment so their
 `DESCRIPTION` remains the episode synopsis. WAV output does not embed front
 matter.
 
@@ -148,7 +149,7 @@ matter.
 The supported fields are `series`, `episode`, `title`, `artist`, `credits`,
 `description`, `season`, `artwork`, `guid`, `copyright`, and `date`. Artwork may
 be a JPEG or PNG path and is resolved relative to the production XML file. It
-is embedded as front-cover art in FLAC, MP3, and Ogg output. Dates must be
+is embedded as front-cover art in FLAC, MP3, Ogg, and M4A output. Dates must be
 authored as `YYYY-MM-DD`; rendering never substitutes the current date. Series
 and episode metadata use the conventional album and track fields in each
 output format; season uses the disc field.

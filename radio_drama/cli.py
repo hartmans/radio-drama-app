@@ -50,7 +50,7 @@ def initialize_arg_parser(
         default=None,
         type=recognized_output_path,
         help=output_help
-        or "Output audio path; the .wav, .flac, .mp3, or .ogg suffix selects its format.",
+        or "Output audio path; the .wav, .flac, .mp3, .ogg, or .m4a suffix selects its format.",
     )
     output_group.add_argument(
         "--output-type",

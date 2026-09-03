@@ -18,7 +18,7 @@ from PIL import Image
 from .rendering import RenderResult
 
 
-SUPPORTED_OUTPUT_TYPES = ("wav", "flac", "mp3", "ogg")
+SUPPORTED_OUTPUT_TYPES = ("wav", "flac", "mp3", "ogg", "m4a")
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,13 +27,13 @@ class FrontMatter:
 
     ``title``, ``series``, ``artist``, ``episode``, and ``season`` map to the
     conventional TITLE/TIT2, ALBUM/TALB, ARTIST/TPE1, TRACKNUMBER/TRCK, and
-    DISCNUMBER/TPOS fields in Vorbis comments and ID3v2.4. ``description`` maps
-    to the format's description field. ``credits`` is authored display text
-    and is combined with minimal Freesound attribution in CREDITS for FLAC/Ogg
-    and COMM for MP3. FLAC and Ogg use Vorbis comments; MP3 output requests
-    ID3v2.4 from ffmpeg. ``date`` maps to DATE/TDRC and ``copyright`` to
-    COPYRIGHT/TCOP. ``guid`` is the stable episode identity used by podcast
-    sidecar output and is also retained as a custom audio metadata value.
+    DISCNUMBER/TPOS fields in Vorbis comments and ID3v2.4, or their MPEG-4
+    equivalents. ``description`` maps to the format's description field.
+    ``credits`` is authored display text combined with minimal Freesound
+    attribution. FLAC and Ogg use Vorbis comments, MP3 uses ID3v2.4, and M4A
+    uses iTunes-style MPEG-4 metadata. ``guid`` is the stable episode identity
+    used by podcast sidecar output and is retained in audio containers that
+    support custom metadata.
     """
 
     series: str | None = None
@@ -53,9 +53,10 @@ class FrontMatter:
 
         FLAC and Ogg store the generated block in the extensible ``CREDITS``
         Vorbis comment, leaving ``DESCRIPTION`` solely for the episode
-        synopsis. MP3 uses ffmpeg's ``comment`` key, which becomes an ID3 COMM
-        frame. This distinction avoids ffmpeg mapping both description and
-        comment to repeated, case-insensitive DESCRIPTION values in FLAC.
+        synopsis. MP3 and M4A use ffmpeg's ``comment`` key, which becomes an
+        ID3 COMM frame or MPEG-4 comment atom. This distinction avoids ffmpeg
+        mapping both description and comment to repeated, case-insensitive
+        DESCRIPTION values in FLAC.
         """
 
         metadata = {}
@@ -75,7 +76,9 @@ class FrontMatter:
             metadata["podcast_guid"] = self.guid
         comment = credits_comment(self.credits, sound_credits=sound_credits)
         if comment:
-            metadata["comment" if output_type == "mp3" else "credits"] = comment
+            metadata[
+                "comment" if output_type in {"mp3", "m4a"} else "credits"
+            ] = comment
         return metadata
 
 
@@ -162,13 +165,14 @@ def write_audio_file(
     *,
     sound_credits: str = "",
 ) -> None:
-    """Encode WAV, FLAC, MP3, or Ogg audio and embed applicable metadata.
+    """Encode WAV, FLAC, MP3, Ogg, or M4A audio and embed applicable metadata.
 
     WAV is written directly and does not receive front-matter tags. Other
     formats are encoded by ffmpeg from a temporary float WAV. Ogg Vorbis uses
     the intentionally fixed quality setting 8.5; MP3 uses LAME's quality-based
-    VBR mode and ID3v2.4; FLAC uses ffmpeg's native lossless encoder. ffmpeg is
-    invoked without a shell, and filesystem operands are absolute paths so
+    VBR mode and ID3v2.4; FLAC uses ffmpeg's native lossless encoder. M4A uses
+    AAC-LC at 128 kbps in an MPEG-4 fast-start container. ffmpeg is invoked
+    without a shell, and filesystem operands are absolute paths so
     user-authored filenames cannot be interpreted as command options.
     """
 
@@ -221,6 +225,19 @@ def write_audio_file(
             command.extend(["-c:a", "libvorbis", "-q:a", "8.5"])
         elif output_type == "mp3":
             command.extend(["-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "4"])
+        elif output_type == "m4a":
+            command.extend(
+                [
+                    "-c:a",
+                    "aac",
+                    "-profile:a",
+                    "aac_low",
+                    "-b:a",
+                    "128k",
+                    "-movflags",
+                    "+faststart",
+                ]
+            )
         else:
             command.extend(["-c:a", "flac"])
         if ffmpeg_artwork is not None and output_type != "ogg":

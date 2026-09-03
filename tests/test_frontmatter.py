@@ -62,7 +62,7 @@ def test_empty_production_has_empty_frontmatter():
     assert parse_production_string("<production />").frontmatter == FrontMatter()
 
 
-@pytest.mark.parametrize("suffix", ["flac", "mp3", "ogg"])
+@pytest.mark.parametrize("suffix", ["flac", "mp3", "ogg", "m4a"])
 @pytest.mark.parametrize("artwork_suffix", ["jpg", "png"])
 def test_write_audio_file_encodes_audio_and_metadata(tmp_path, suffix, artwork_suffix):
     output = tmp_path / f"episode.{suffix}"
@@ -122,7 +122,7 @@ def test_write_audio_file_encodes_audio_and_metadata(tmp_path, suffix, artwork_s
     assert tags["disc"] == "2"
     assert tags["copyright"] == "Copyright 2026 Example"
     assert tags["date"] == "2026-09-02"
-    credits_key = "comment" if suffix == "mp3" else "credits"
+    credits_key = "comment" if suffix in {"mp3", "m4a"} else "credits"
     assert "Qwen TTS Voice Design" in tags[credits_key]
     assert "“Bell” by Example" in tags[credits_key]
     if suffix != "mp3":
@@ -224,12 +224,16 @@ def test_cache_directory_always_uses_wav_name():
     assert cache_directory_for_output("episode.mp3").name == "episode.wav.cache"
     assert cache_directory_for_output("episode.ogg").name == "episode.wav.cache"
     assert cache_directory_for_output("episode.flac").name == "episode.wav.cache"
+    assert cache_directory_for_output("episode.m4a").name == "episode.wav.cache"
 
 
 def test_output_type_selects_suffix_and_is_exclusive_with_output():
     parser = initialize_arg_parser("test")
     args = parser.parse_args(["episode.xml", "--output-type", "flac"])
     assert resolved_output_path(args) == Path("episode.flac")
+
+    args = parser.parse_args(["episode.xml", "--output-type", "m4a"])
+    assert resolved_output_path(args) == Path("episode.m4a")
 
     with pytest.raises(SystemExit):
         parser.parse_args(
