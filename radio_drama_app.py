@@ -12,7 +12,8 @@ from radio_drama.cli import build_injector_from_namespace, initialize_arg_parser
 from radio_drama.debug import reset_debug_outputs
 from radio_drama.document import parse_production_file
 from radio_drama.errors import DocumentError
-from radio_drama.production import write_production
+from radio_drama.frontmatter import write_audio_file
+from radio_drama.production import render_from_input, write_production
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -28,6 +29,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--cut-after",
         default=None,
         help="Drop all production audio after the named <mark>.",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        help="Reuse a final WAV instead of rendering the production plan.",
+    )
+    parser.add_argument(
+        "--no-wav",
+        action="store_true",
+        help="Do not also write WAV when the selected output is another format.",
     )
     args = parser.parse_args(argv)
 
@@ -52,13 +63,32 @@ def main(argv: Sequence[str] | None = None) -> None:
             if args.cut_after is not None:
                 production_plan.cut_after_mark(args.cut_after)
                 gc.collect()
-            production_result = await production_plan.render()
+            if args.input is None:
+                production_result = await production_plan.render()
+            else:
+                production_result = await asyncio.to_thread(
+                    render_from_input,
+                    args.input,
+                    config,
+                )
             await write_production(
                 production_plan,
                 production_result,
                 output_path,
                 podcast=args.podcast,
             )
+            if (
+                output_path.suffix.lower() != ".wav"
+                and not args.no_wav
+                and args.input is None
+            ):
+                await asyncio.to_thread(
+                    write_audio_file,
+                    output_path.with_suffix(".wav"),
+                    production_result,
+                    config.resolved_output_sample_rate,
+                    production_node.frontmatter,
+                )
         finally:
             injector.close()
 

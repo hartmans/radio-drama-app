@@ -106,7 +106,8 @@ from .forced_alignment import (
 from .init import radio_drama_injector
 from .planning import PlanningNode
 from .podcast_guid import generate_podcast_guid
-from .production import ProductionPlan, write_podcast_sidecar, write_production
+from .frontmatter import write_podcast_sidecar
+from .production import ProductionPlan, render_from_input, write_production
 from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
 from .rendering import DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
@@ -194,6 +195,7 @@ __all__ = [
     "ProductionDocumentPath",
     "ProductionNode",
     "ProductionPlan",
+    "render_from_input",
     "write_production",
     "write_podcast_sidecar",
     "ProxyMount",

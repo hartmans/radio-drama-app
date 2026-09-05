@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
-import yaml
 from carthage.dependency_injection import inject
+import soundfile as sf
 
 from .audio import ComposeAudioPlan
 from .config import ProductionConfig
@@ -49,6 +48,34 @@ class ProductionPlan(ComposeAudioPlan):
         return RenderResult(audio=audio)
 
 
+def render_from_input(
+    input_path: str | Path,
+    config: ProductionConfig,
+) -> ProductionResult:
+    """Load final production audio, requiring the configured output format.
+
+    Reused input is deliberately not resampled or remixed: doing either here
+    would make this path behave differently from a freshly rendered plan.
+    """
+
+    input_path = Path(input_path)
+    info = sf.info(input_path)
+    if info.format != "WAV":
+        raise ValueError(f"Input audio must be a WAV file: {input_path}")
+    if info.samplerate != config.resolved_output_sample_rate:
+        raise ValueError(
+            f"Input WAV sample rate {info.samplerate} does not match configured "
+            f"sample rate {config.resolved_output_sample_rate}: {input_path}"
+        )
+    if info.channels != config.resolved_output_channels:
+        raise ValueError(
+            f"Input WAV channel count {info.channels} does not match configured "
+            f"channel count {config.resolved_output_channels}: {input_path}"
+        )
+    audio, _ = sf.read(input_path, dtype="float32")
+    return ProductionResult(audio=audio)
+
+
 async def write_production(
     plan: ProductionPlan,
     result: ProductionResult,
@@ -59,7 +86,7 @@ async def write_production(
     """Write a rendered production in the format selected by its output suffix."""
 
     from .freesound import credits_for_plan, markdown_credits
-    from .frontmatter import write_audio_file
+    from .frontmatter import write_audio_file, write_podcast_sidecar
 
     output = Path(output_path)
     sound_credits = ""
@@ -86,62 +113,4 @@ async def write_production(
         )
 
 
-def write_podcast_sidecar(
-    audio_path: str | Path,
-    result: ProductionResult,
-    sample_rate: int,
-    frontmatter,
-    *,
-    sound_credits: str = "",
-) -> Path:
-    """Write the staticsite episode page paired with one rendered audio file."""
-
-    from .frontmatter import credits_comment
-
-    if frontmatter.guid is None:
-        raise ValueError("Podcast output requires front matter guid")
-    audio_path = Path(audio_path)
-    sidecar_path = audio_path.with_suffix(".md")
-    notes = credits_comment(frontmatter.credits, sound_credits=sound_credits)
-    if frontmatter.description:
-        notes = "\n\n".join(part for part in (frontmatter.description, notes) if part)
-    metadata = {
-        "title": frontmatter.title,
-        "series": frontmatter.series,
-        "episode": frontmatter.episode,
-        "season": frontmatter.season,
-        "date": frontmatter.date,
-        "description": notes or None,
-        "podcast_audio": audio_path.name,
-        "podcast_duration": _podcast_duration(result.frame_count, sample_rate),
-        "podcast_guid": frontmatter.guid,
-        "copyright": frontmatter.copyright,
-        "image": (
-            Path(os.path.relpath(frontmatter.artwork, sidecar_path.parent)).as_posix()
-            if frontmatter.artwork is not None
-            else None
-        ),
-        "syndicated": True,
-    }
-    metadata = {name: value for name, value in metadata.items() if value is not None}
-    yaml_text = yaml.safe_dump(
-        metadata,
-        allow_unicode=True,
-        sort_keys=False,
-        default_flow_style=False,
-    ).rstrip()
-    body = notes + "\n" if notes else ""
-    sidecar_path.write_text(f"---\n{yaml_text}\n---\n\n{body}", encoding="utf-8")
-    return sidecar_path
-
-
-def _podcast_duration(frame_count: int, sample_rate: int) -> str:
-    """Return a whole-second podcast duration as HH:MM:SS."""
-
-    total_seconds = (frame_count + sample_rate - 1) // sample_rate
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-__all__ = ["ProductionPlan", "write_podcast_sidecar", "write_production"]
+__all__ = ["ProductionPlan", "render_from_input", "write_production"]

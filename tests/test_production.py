@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import soundfile as sf
 from carthage.dependency_injection import InjectionKey
 
 from radio_drama.config import ProductionConfig
@@ -13,11 +14,48 @@ from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
 from radio_drama.forced_alignment import WhisperXResource
-from radio_drama.production import ProductionPlan
-from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptTiming
+from radio_drama.production import ProductionPlan, render_from_input
+from radio_drama.rendering import (
+    DialogueLineTiming,
+    ProductionResult,
+    RenderResult,
+    ScriptTiming,
+)
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector as _make_async_injector, normalized_script_from_request
+
+
+def test_render_from_input_loads_production_format_wav(tmp_path: Path):
+    input_path = tmp_path / "rendered.wav"
+    expected = np.array([[0.25, -0.25], [0.5, -0.5]], dtype=np.float32)
+    sf.write(input_path, expected, 48_000, subtype="FLOAT")
+
+    result = render_from_input(input_path, ProductionConfig())
+
+    assert isinstance(result, ProductionResult)
+    np.testing.assert_array_equal(result.audio, expected)
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "channels", "message"),
+    [
+        (24_000, 2, "sample rate 24000 does not match configured sample rate 48000"),
+        (48_000, 1, "channel count 1 does not match configured channel count 2"),
+    ],
+)
+def test_render_from_input_requires_configured_audio_format(
+    tmp_path: Path,
+    sample_rate: int,
+    channels: int,
+    message: str,
+):
+    input_path = tmp_path / "rendered.wav"
+    audio = np.zeros(4) if channels == 1 else np.zeros((4, channels))
+    sf.write(input_path, audio, sample_rate)
+
+    with pytest.raises(ValueError, match=message):
+        render_from_input(input_path, ProductionConfig())
 
 
 @effect_chain_function

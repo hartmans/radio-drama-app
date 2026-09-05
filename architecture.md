@@ -179,7 +179,8 @@ plan and render result with those services; CLI and REPL production output use
 that same entry point.
 `radio_drama.podcast_guid` is a standard-library-only UUID generator for
 creating a persistent episode identity. Optional podcast publication writes a
-sibling staticsite Markdown page from the already-authoritative `FrontMatter`;
+sibling staticsite Markdown page through `radio_drama.frontmatter` from the
+already-authoritative `FrontMatter`;
 staticsite remains responsible for site and feed generation.
 
 ## Resource layer
@@ -250,6 +251,7 @@ Current rendering contract:
 * `RenderResult.audio` is a contiguous `float32` numpy array
 * current internal render results are already in production format
 * `ProductionResult` is the top-level rendered output type
+* `render_from_input()` constructs a `ProductionResult` from an already-final WAV only when its sample rate and channel count match `ProductionConfig`; this is the supported boundary for re-encoding a prior render without running the plan again
 * effect processing mutates the `RenderResult.audio` buffer in place and does not carry separate timing metadata in the result object
 * per-node `effect` expressions run after `gain` and before `pan`; they are separate from compose-local preset buses
 * inline sounds currently splice into dialogue at forced-alignment cut points by slicing the rendered speech and composing the inserted sounds into the same timeline

@@ -71,6 +71,8 @@ Useful options:
 * `--sounds-dir PATH`: directory searched recursively for relative `<sound>` references
 * `--output PATH`: output path ending in `.wav`, `.flac`, `.mp3`, `.ogg`, or `.m4a`; defaults to `INPUT.wav`
 * `--output-type TYPE`: use the input filename stem with output type `wav`, `flac`, `mp3`, `ogg`, or `m4a`; mutually exclusive with `--output`
+* `--input PATH`: reuse an existing final WAV instead of rendering the production; its sample rate and channels must match the configured production format
+* `--no-wav`: suppress the companion WAV normally written with a non-WAV output; implied by `--input`
 * `--podcast`: write a sibling staticsite Markdown page (`episode.flac` produces `episode.md`); requires `guid` in `<frontmatter>`
 * `--output-sample-rate N`: override the production sample rate
 * `--output-channels N`: override the output channel count
@@ -78,6 +80,9 @@ Useful options:
 * `--batch-size N`, `--device NAME`, `--cfg-scale X`, `--disable-prefill`, `--ddpm-inference-steps N`: VibeVoice overrides
 
 If `--sounds-dir` is not supplied, relative sound references are resolved under a `sounds/` directory next to the XML file.
+When the selected output is FLAC, MP3, Ogg, or M4A, the renderer also writes
+a WAV with the same stem by default. Supplying `--input` avoids rewriting that
+source WAV while allowing another output encoding and its metadata to be made.
 
 The production speech cache always uses the encoding-independent name
 `INPUT.wav.cache`. Thus rendering `INPUT.mp3`, `INPUT.flac`, `INPUT.ogg`, and
