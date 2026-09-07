@@ -315,15 +315,28 @@ def test_proxy_prepares_and_reuses_normalized_voice_by_speaker_name(
         gain=3.0,
     )
     request = ScriptRenderRequest(
-        dialogue_lines=[DialogueLine(speaker=speaker, spoken_text="Hello.")]
+        dialogue_lines=[
+            DialogueLine(speaker=speaker, spoken_text="Hello."),
+            DialogueLine(speaker=SpeakerVoiceReference(
+                authored_name="Other", voice_name="voice", resolved_path=voice_path,
+                gain=3.0, effect_expression="telephone",
+            ), spoken_text="Alias."),
+            DialogueLine(speaker=SpeakerVoiceReference(
+                authored_name="Quiet", voice_name="voice", resolved_path=voice_path,
+                gain=0.0,
+            ), spoken_text="Quiet."),
+        ]
     )
 
     resource._prepare_voice_references([request], tmp_path / "cache")
     first_mounts = dict(resource._voice_mounts)
     resource._prepare_voice_references([request], tmp_path / "cache")
 
-    assert calls == [(voice_path, 3.0)]
-    assert resource._voice_paths == {"narrator": "/voices/0.wav"}
+    assert calls == [(voice_path, 3.0), (voice_path, 0.0)]
+    assert resource._voice_paths == {
+        "narrator": "/voices/0.wav", "other": "/voices/0.wav", "quiet": "/voices/1.wav",
+    }
+    assert len(resource._voice_mounts) == 2
     assert resource._voice_mounts == first_mounts
     cached_path = next(iter(resource._voice_mounts))
     assert cached_path.parent == (tmp_path / "cache" / "normalized_voices").resolve()

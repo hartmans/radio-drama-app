@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from radio_drama.proxy import load_proxy_tts_configs
-from radio_drama_tts_container import artifact_name, finish_line_work, prepare_line_work
+from radio_drama_tts_container import SpeakerSlots, artifact_name, finish_line_work, prepare_line_work
 from tts_engines.chatterbox.engine import ChatterboxEngine
 from tts_engines.zonos.engine import (
     ZonosEngine,
@@ -282,12 +282,13 @@ def test_moss_ttsd_normalizes_text_and_coalesces_same_speaker_turns(monkeypatch)
         "voice_path": "/voices/second.wav",
         "transcript": "“Reference two”.",
     }
+    alias = dict(first, authored_name="alias", effect="telephone")
     FakeEngine().prepare_request(
         {
             "first_words": "test",
             "dialogue_contents": [
                 {"type": "line", "speaker": first, "spoken_text": "“One”—here."},
-                {"type": "line", "speaker": first, "spoken_text": "Then… there."},
+                {"type": "line", "speaker": alias, "spoken_text": "Then… there."},
                 {"type": "line", "speaker": second, "spoken_text": "“Two”."},
                 {"type": "line", "speaker": first, "spoken_text": "Three."},
             ],
@@ -298,6 +299,20 @@ def test_moss_ttsd_normalizes_text_and_coalesces_same_speaker_turns(monkeypatch)
         '[S1] "Reference"---one... [S2] "Reference two". '
         '[S1] "One"---here. Then... there. [S2] "Two". [S1] Three.'
     )
+    assert seen["reference"] == ["codes-/voices/first.wav", "codes-/voices/second.wav"]
+
+
+def test_speaker_slots_distinguish_path_and_gain_only():
+    slots = SpeakerSlots()
+    first = {"voice_path": "/voices/a.wav", "authored_name": "A"}
+    assert slots.assign(first) == 0
+    assert slots.assign(dict(first, authored_name="B", gain=0, effect="telephone")) == 0
+    louder = dict(first, gain=3.0)
+    other = dict(first, voice_path="/voices/b.wav")
+    assert slots.assign(louder) == 1
+    assert slots.assign(other) == 2
+    assert slots.assign(first) == 0
+    assert slots.references == [first, louder, other]
 
 
 def test_moss_ttsd_accepts_empty_scripts(tmp_path, monkeypatch):

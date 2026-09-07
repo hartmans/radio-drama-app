@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from radio_drama.text import normalize_text_punctuation
-from radio_drama_tts_container import artifact_name, run_server, write_pcm16_wav
+from radio_drama_tts_container import SpeakerSlots, artifact_name, run_server, write_pcm16_wav
 
 
 MODEL = os.environ.get("MOSS_TTSD_MODEL", "OpenMOSS-Team/MOSS-TTSD-v1.0")
@@ -92,18 +92,16 @@ class MossTtsdEngine:
 
     def prepare_request(self, request: Mapping[str, Any]) -> PreparedRequest:
         """Translate one proxy script into a MOSS continuation conversation."""
-        speakers: dict[str, tuple[str, Mapping[str, Any]]] = {}
+        speakers = SpeakerSlots()
         generated_lines: list[str] = []
-        previous_speaker_key: str | None = None
+        previous_speaker_key: int | None = None
         for content in request["dialogue_contents"]:
             if content.get("type") != "line":
                 previous_speaker_key = None
                 continue
             speaker = content["speaker"]
-            speaker_key = str(speaker["authored_name"])
-            if speaker_key not in speakers:
-                speakers[speaker_key] = (f"S{len(speakers) + 1}", speaker)
-            speaker_tag, _speaker = speakers[speaker_key]
+            speaker_key = speakers.assign(speaker)
+            speaker_tag = f"S{speaker_key + 1}"
             text = normalize_text_punctuation(str(content["spoken_text"]))
             if speaker_key != previous_speaker_key:
                 generated_lines.append(f"[{speaker_tag}] {text}")
@@ -112,7 +110,7 @@ class MossTtsdEngine:
             previous_speaker_key = speaker_key
 
         output_path = Path(artifact_name(request))
-        if not speakers:
+        if not speakers.references:
             return PreparedRequest(output_path, None)
 
         import torch
@@ -122,7 +120,8 @@ class MossTtsdEngine:
         prompt_texts: list[str] = []
         prompt_wavs: list[Any] = []
         reference_codes: list[Any] = []
-        for speaker_tag, speaker in speakers.values():
+        for slot, speaker in enumerate(speakers.references, start=1):
+            speaker_tag = f"S{slot}"
             wav, codes = self._reference_audio(str(speaker["voice_path"]))
             prompt_wavs.append(wav)
             reference_codes.append(codes)

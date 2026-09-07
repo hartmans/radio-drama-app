@@ -474,33 +474,31 @@ class VibeVoiceResource(TtsResource):
         *,
         voice_sample_rate: int,
     ) -> tuple[str, list[np.ndarray]]:
-        speaker_numbers: dict[str, int] = {}
-        loaded_voice_samples: dict[tuple[Path, float], np.ndarray] = {}
+        speaker_numbers: dict[tuple[Path, float], int] = {}
         voice_samples: list[np.ndarray] = []
         normalized_lines: list[str] = []
 
         for line in request.dialogue_lines:
-            speaker_key = line.speaker.authored_name.lower()
+            speaker_key = (
+                Path(line.speaker.resolved_path).expanduser().resolve(),
+                line.speaker.gain,
+            )
             speaker_number = speaker_numbers.get(speaker_key)
             if speaker_number is None:
                 speaker_number = len(voice_samples) + 1
                 speaker_numbers[speaker_key] = speaker_number
-                resolved_path = Path(line.speaker.resolved_path).expanduser().resolve()
-                voice_reference = (resolved_path, line.speaker.gain)
-                voice_sample = loaded_voice_samples.get(voice_reference)
-                if voice_sample is None:
-                    if line.speaker.gain:
-                        voice_sample = self._preprocessed_voice_sample_sync(
-                            resolved_path,
-                            output_sample_rate=voice_sample_rate,
-                            gain_db=line.speaker.gain,
-                        )
-                    else:
-                        voice_sample = self._preprocessed_voice_sample_sync(
-                            resolved_path,
-                            output_sample_rate=voice_sample_rate,
-                        )
-                    loaded_voice_samples[voice_reference] = voice_sample
+                resolved_path, gain = speaker_key
+                if gain:
+                    voice_sample = self._preprocessed_voice_sample_sync(
+                        resolved_path,
+                        output_sample_rate=voice_sample_rate,
+                        gain_db=gain,
+                    )
+                else:
+                    voice_sample = self._preprocessed_voice_sample_sync(
+                        resolved_path,
+                        output_sample_rate=voice_sample_rate,
+                    )
                 voice_samples.append(voice_sample)
             for paragraph in self._normalized_script_paragraphs(line.spoken_text):
                 normalized_lines.append(f"Speaker {speaker_number}: {paragraph}")

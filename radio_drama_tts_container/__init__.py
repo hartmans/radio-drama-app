@@ -8,8 +8,10 @@ from .server import (
     write_pcm16_wav,
 )
 from .lines import LineWork, finish_line_work, prepare_line_work, remove_line_work
+from .speakers import SpeakerSlots
 
 __all__ = [
+    "SpeakerSlots",
     "PROTOCOL",
     "PROTOCOL_VERSION",
     "artifact_name",

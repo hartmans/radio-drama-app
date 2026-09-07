@@ -309,7 +309,12 @@ class ProxyTtsResource(TtsResource):
         voice_directory.mkdir(parents=True, exist_ok=True)
         self._voice_paths = {}
         self._voice_mounts = {}
-        for index, (speaker_name, reference) in enumerate(sorted(references.items())):
+        targets: dict[tuple[Path, float], str] = {}
+        for speaker_name, reference in sorted(references.items()):
+            reference_key = (reference.resolved_path.expanduser().resolve(), reference.gain)
+            if reference_key in targets:
+                self._voice_paths[speaker_name] = targets[reference_key]
+                continue
             cache_path = voice_directory / self._voice_cache_filename(speaker_name)
             if not cache_path.exists():
                 audio, sample_rate = load_preprocessed_voice_reference(
@@ -317,7 +322,8 @@ class ProxyTtsResource(TtsResource):
                     gain_db=reference.gain,
                 )
                 sf.write(cache_path, audio, sample_rate, subtype="PCM_16")
-            target = f"/voices/{index}.wav"
+            target = f"/voices/{len(targets)}.wav"
+            targets[reference_key] = target
             self._voice_paths[speaker_name] = target
             self._voice_mounts[cache_path.resolve()] = target
 

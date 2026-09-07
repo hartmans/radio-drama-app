@@ -367,10 +367,20 @@ def test_vibevoice_resource_preprocesses_unique_reference_voices_per_request(
         "Speaker 1: Hello there.\nSpeaker 1: Welcome back.\nSpeaker 2: General Kenobi.",
         (str(voice_path), str(other_voice_path)),
     )
+    request.dialogue_contents.extend([
+        DialogueLine(speaker=SpeakerVoiceReference(
+            authored_name="Alias", voice_name="anna", resolved_path=voice_path,
+            effect_expression="telephone",
+        ), spoken_text="Same reference."),
+        DialogueLine(speaker=SpeakerVoiceReference(
+            authored_name="Louder", voice_name="anna", resolved_path=voice_path,
+            gain=3.0,
+        ), spoken_text="Different gain."),
+    ])
     seen_paths: list[tuple[Path, int]] = []
 
     class FakeVibeVoiceResource(VibeVoiceResource):
-        def _preprocessed_voice_sample_sync(self, voice_path: Path, *, output_sample_rate: int):
+        def _preprocessed_voice_sample_sync(self, voice_path: Path, *, output_sample_rate: int, gain_db=0.0):
             seen_paths.append((voice_path, output_sample_rate))
             value = float(len(seen_paths))
             return np.full(3, value, dtype=np.float32)
@@ -392,12 +402,15 @@ def test_vibevoice_resource_preprocesses_unique_reference_voices_per_request(
     assert normalized_script == (
         "Speaker 1: Hello there.\n"
         "Speaker 1: Welcome back.\n"
-        "Speaker 2: General Kenobi."
+        "Speaker 2: General Kenobi.\n"
+        "Speaker 1: Same reference.\n"
+        "Speaker 3: Different gain."
     )
     assert seen_paths == [
         (voice_path.expanduser().resolve(), 16000),
         (other_voice_path.expanduser().resolve(), 16000),
+        (voice_path.expanduser().resolve(), 16000),
     ]
-    assert len(voice_samples) == 2
+    assert len(voice_samples) == 3
     np.testing.assert_allclose(voice_samples[0], np.full(3, 1.0, dtype=np.float32))
     np.testing.assert_allclose(voice_samples[1], np.full(3, 2.0, dtype=np.float32))
