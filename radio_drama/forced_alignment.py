@@ -26,7 +26,11 @@ from .rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, Scr
 from .text import normalize_text_punctuation
 
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+_TOKEN_RE = re.compile(r"[A-Za-z']+|[0-9]|(?<=[0-9])\.(?=[0-9])")
+_NUMBER_TOKENS = dict(zip(
+    ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "point"),
+    (*"0123456789", "."),
+))
 _WHISPERX_LANGUAGE = "en"
 _WHISPERX_MODEL = "large-v3"
 _WHISPERX_SAMPLE_RATE = 16000
@@ -196,12 +200,13 @@ class WhisperXResource(AsyncInjectable):
         dialogue_contents = [
             content for content in contents if isinstance(content, DialogueContent)
         ]
-        spans = _stabilize_line_spans(
-            _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
-        )
+        spans = _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
         return ScriptTiming(
             tuple(
-                DialogueLineTiming(start=spans[index][0], end=spans[index][1])
+                DialogueLineTiming(
+                    start=math.nan if spans[index][0] is None else spans[index][0],
+                    end=math.nan if spans[index][1] is None else spans[index][1],
+                )
                 for index, content in enumerate(dialogue_contents)
                 if isinstance(content, DialogueLine)
             )
@@ -689,53 +694,42 @@ def fill_start_positions_from_alignment(
     contents: Sequence[ScriptEvent],
     alignment: AlignmentResult,
 ) -> list[ScriptEvent]:
-    copied_contents = copy_dialogue_contents(contents)
-    dialogue_contents = [content for content in copied_contents if isinstance(content, DialogueContent)]
-    raw_dialogue_spans = _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
-    stabilized_dialogue_spans = _stabilize_line_spans(raw_dialogue_spans)
-
-    content_index = 0
-    for content in copied_contents:
-        if isinstance(content, DialogueContent):
-            start_pos, _ = raw_dialogue_spans[content_index]
-            content.start_pos = cast_float(start_pos) if start_pos is not None else math.nan
-            content_index += 1
-
-    for index, content in enumerate(copied_contents):
-        if isinstance(content, DialogueAudio):
-            content.start_pos = _dialogue_audio_start_pos(
-                copied_contents,
-                stabilized_dialogue_spans,
-                index,
-            )
-
-    return copied_contents
+    dialogue_contents = [content for content in contents if isinstance(content, DialogueContent)]
+    spans = _dialogue_content_spans_from_alignment(dialogue_contents, alignment)
+    return _fill_start_positions_from_spans(contents, spans)
 
 
 def fill_start_positions_from_timing(
     contents: Sequence[ScriptEvent],
     timing: ScriptTiming,
 ) -> list[ScriptEvent]:
-    """Project complete line spans onto gaps and inline audio markers."""
-
-    copied_contents = copy_dialogue_contents(contents)
-    line_spans = [(line.start, line.end) for line in timing.dialogue_lines]
-    dialogue_contents = [
-        content for content in copied_contents if isinstance(content, DialogueContent)
+    """Project cached or native timing without losing unknown boundaries."""
+    line_spans = [
+        (None if math.isnan(line.start) else line.start,
+         None if math.isnan(line.end) else line.end)
+        for line in timing.dialogue_lines
     ]
-    dialogue_content_spans = _merge_dialogue_content_spans(dialogue_contents, line_spans)
-    stabilized_spans = _stabilize_line_spans(dialogue_content_spans)
+    dialogue_contents = [content for content in contents if isinstance(content, DialogueContent)]
+    spans = _merge_dialogue_content_spans(dialogue_contents, line_spans)
+    return _fill_start_positions_from_spans(contents, spans)
+
+
+def _fill_start_positions_from_spans(
+    contents: Sequence[ScriptEvent],
+    spans: Sequence[tuple[float | None, float | None]],
+) -> list[ScriptEvent]:
+    """Keep raw dialogue boundaries and use legacy fallback only for inline audio."""
+    copied_contents = copy_dialogue_contents(contents)
+    stabilized_spans = _stabilize_line_spans(spans)
     content_index = 0
-    for content in copied_contents:
-        if isinstance(content, DialogueContent):
-            content.start_pos = stabilized_spans[content_index][0]
-            content_index += 1
     for index, content in enumerate(copied_contents):
-        if isinstance(content, DialogueAudio):
+        if isinstance(content, DialogueContent):
+            start, _ = spans[content_index]
+            content.start_pos = math.nan if start is None else start
+            content_index += 1
+        elif isinstance(content, DialogueAudio):
             content.start_pos = _dialogue_audio_start_pos(
-                copied_contents,
-                stabilized_spans,
-                index,
+                copied_contents, stabilized_spans, index,
             )
     return copied_contents
 
@@ -1439,8 +1433,15 @@ def _line_ends_with_clause(
 
 @lru_cache(maxsize=8192)
 def _normalized_tokens(text: str) -> tuple[str, ...]:
+    """Match spoken digits and ASR numeric tokens without altering authored speech.
+
+    Numeric groups split into digits; decimal points survive only between
+    digits, while the spoken word point maps to the same token. Hyphens and
+    sentence punctuation separate tokens. Expanded ASR tokens keep their
+    source word's timestamps in ``_aligned_word_tokens``.
+    """
     return tuple(
-        token.lower()
+        _NUMBER_TOKENS.get(token.lower(), token.lower())
         for token in _TOKEN_RE.findall(normalize_text_punctuation(text))
     )
 

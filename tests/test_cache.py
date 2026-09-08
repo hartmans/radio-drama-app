@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -168,9 +169,12 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
 
     class FakeWhisperX:
         calls = 0
+        missing = False
 
         async def script_timing(self, contents, result):
             type(self).calls += 1
+            if self.missing:
+                return ScriptTiming((DialogueLineTiming(math.nan, math.nan),))
             return ScriptTiming((DialogueLineTiming(0.0, result.frame_count / 24000),))
 
     async def fake_to_thread(func, *args, **kwargs):
@@ -221,6 +225,20 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
     assert FakeWhisperX.calls == 3
     assert UntimedVibeVoiceResource.native_calls == 1
     assert wav_path.read_bytes() == original_wav
+
+    # Missing alignment remains missing after a write/read cycle, without
+    # regenerating speech or silently replacing the cached NaNs with zeros.
+    FakeWhisperX.missing = True
+    missing_contents = [contents[0], ScriptGap(label="unmatched projection")]
+    for _ in range(2):
+        missing_timing = asyncio.run(render_and_align(missing_contents))
+        assert math.isnan(missing_timing.dialogue_lines[0].start)
+        assert math.isnan(missing_timing.dialogue_lines[0].end)
+    assert FakeWhisperX.calls == 4
+    assert UntimedVibeVoiceResource.native_calls == 1
+    assert wav_path.read_bytes() == original_wav
+    missing_payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert math.isnan(missing_payload["dialogue_line_spans"][0][0])
 
 
 def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Path):

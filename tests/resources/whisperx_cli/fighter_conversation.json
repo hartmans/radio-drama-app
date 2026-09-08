@@ -1,0 +1,450 @@
+{
+  "aligned_segments": [
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 3.053,
+      "start": 0.172,
+      "text": " Sabre 1-1 flight, contact Washington Center, 132.45.",
+      "words": [
+        {
+          "end": 0.692,
+          "score": 0.725,
+          "start": 0.172,
+          "word": "Sabre"
+        },
+        {
+          "end": 0.932,
+          "score": 0.843,
+          "start": 0.792,
+          "word": "1-1"
+        },
+        {
+          "end": 1.232,
+          "score": 0.869,
+          "start": 0.972,
+          "word": "flight,"
+        },
+        {
+          "end": 1.733,
+          "score": 0.888,
+          "start": 1.272,
+          "word": "contact"
+        },
+        {
+          "end": 2.273,
+          "score": 0.881,
+          "start": 1.773,
+          "word": "Washington"
+        },
+        {
+          "end": 2.653,
+          "score": 0.77,
+          "start": 2.313,
+          "word": "Center,"
+        },
+        {
+          "end": 3.053,
+          "score": 0.88,
+          "start": 2.673,
+          "word": "132.45."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 4.173,
+      "start": 3.073,
+      "text": "132.45, Sabre 1-1.",
+      "words": [
+        {
+          "end": 3.353,
+          "score": 0.925,
+          "start": 3.073,
+          "word": "132.45,"
+        },
+        {
+          "end": 3.913,
+          "score": 0.449,
+          "start": 3.393,
+          "word": "Sabre"
+        },
+        {
+          "end": 4.173,
+          "score": 0.711,
+          "start": 3.973,
+          "word": "1-1."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 10.876,
+      "start": 4.213,
+      "text": "Washington Center, Southwest 1-1-73, 33.6 descending via the Raven 9.",
+      "words": [
+        {
+          "end": 5.774,
+          "score": 0.479,
+          "start": 4.213,
+          "word": "Washington"
+        },
+        {
+          "end": 6.194,
+          "score": 0.489,
+          "start": 5.814,
+          "word": "Center,"
+        },
+        {
+          "end": 6.894,
+          "score": 0.445,
+          "start": 6.234,
+          "word": "Southwest"
+        },
+        {
+          "end": 7.154,
+          "score": 0.84,
+          "start": 6.914,
+          "word": "1-1-73,"
+        },
+        {
+          "end": 7.574,
+          "score": 0.94,
+          "start": 7.214,
+          "word": "33.6"
+        },
+        {
+          "end": 8.815,
+          "score": 0.614,
+          "start": 7.594,
+          "word": "descending"
+        },
+        {
+          "end": 10.435,
+          "score": 0.37,
+          "start": 10.295,
+          "word": "via"
+        },
+        {
+          "end": 10.615,
+          "score": 0.43,
+          "start": 10.455,
+          "word": "the"
+        },
+        {
+          "end": 10.776,
+          "score": 0.137,
+          "start": 10.656,
+          "word": "Raven"
+        },
+        {
+          "end": 10.876,
+          "score": 0.44,
+          "start": 10.796,
+          "word": "9."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 12.456,
+      "start": 10.896,
+      "text": "Southwest 1-1-73, Washington Center.",
+      "words": [
+        {
+          "end": 11.296,
+          "score": 0.51,
+          "start": 10.896,
+          "word": "Southwest"
+        },
+        {
+          "end": 11.496,
+          "score": 0.709,
+          "start": 11.316,
+          "word": "1-1-73,"
+        },
+        {
+          "end": 11.956,
+          "score": 0.463,
+          "start": 11.516,
+          "word": "Washington"
+        },
+        {
+          "end": 12.456,
+          "score": 0.453,
+          "start": 11.976,
+          "word": "Center."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 17.238,
+      "start": 12.496,
+      "text": "Washington Center, Sabre 1-1 flight, two aircraft, passing flight level 210 for 450.",
+      "words": [
+        {
+          "end": 13.236,
+          "score": 0.489,
+          "start": 12.496,
+          "word": "Washington"
+        },
+        {
+          "end": 13.877,
+          "score": 0.678,
+          "start": 13.256,
+          "word": "Center,"
+        },
+        {
+          "end": 14.077,
+          "score": 0.354,
+          "start": 13.897,
+          "word": "Sabre"
+        },
+        {
+          "end": 14.157,
+          "score": 0.954,
+          "start": 14.097,
+          "word": "1-1"
+        },
+        {
+          "end": 14.477,
+          "score": 0.458,
+          "start": 14.197,
+          "word": "flight,"
+        },
+        {
+          "end": 15.617,
+          "score": 0.332,
+          "start": 14.497,
+          "word": "two"
+        },
+        {
+          "end": 15.977,
+          "score": 0.399,
+          "start": 15.637,
+          "word": "aircraft,"
+        },
+        {
+          "end": 16.217,
+          "score": 0.191,
+          "start": 16.017,
+          "word": "passing"
+        },
+        {
+          "end": 16.517,
+          "score": 0.406,
+          "start": 16.237,
+          "word": "flight"
+        },
+        {
+          "end": 16.638,
+          "score": 0.002,
+          "start": 16.537,
+          "word": "level"
+        },
+        {
+          "end": 16.898,
+          "score": 0.807,
+          "start": 16.758,
+          "word": "210"
+        },
+        {
+          "end": 17.118,
+          "score": 0.343,
+          "start": 16.958,
+          "word": "for"
+        },
+        {
+          "end": 17.238,
+          "score": 0.874,
+          "start": 17.138,
+          "word": "450."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 22.099,
+      "start": 17.278,
+      "text": "Sabre 1-1 flight, Washington Center, radar contact.",
+      "words": [
+        {
+          "end": 17.558,
+          "score": 0.416,
+          "start": 17.278,
+          "word": "Sabre"
+        },
+        {
+          "end": 18.338,
+          "score": 0.917,
+          "start": 17.578,
+          "word": "1-1"
+        },
+        {
+          "end": 18.698,
+          "score": 0.485,
+          "start": 18.358,
+          "word": "flight,"
+        },
+        {
+          "end": 20.339,
+          "score": 0.908,
+          "start": 19.859,
+          "word": "Washington"
+        },
+        {
+          "end": 20.679,
+          "score": 0.829,
+          "start": 20.359,
+          "word": "Center,"
+        },
+        {
+          "end": 21.759,
+          "score": 0.654,
+          "start": 20.699,
+          "word": "radar"
+        },
+        {
+          "end": 22.099,
+          "score": 0.6,
+          "start": 21.779,
+          "word": "contact."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.084375,
+      "end": 34.539,
+      "start": 30.547,
+      "text": " Flight heading 110, climb and maintain flight level 450.",
+      "words": [
+        {
+          "end": 30.748,
+          "score": 0.314,
+          "start": 30.547,
+          "word": "Flight"
+        },
+        {
+          "end": 31.249,
+          "score": 0.871,
+          "start": 30.788,
+          "word": "heading"
+        },
+        {
+          "end": 31.61,
+          "score": 0.835,
+          "start": 31.269,
+          "word": "110,"
+        },
+        {
+          "end": 32.954,
+          "score": 0.596,
+          "start": 31.691,
+          "word": "climb"
+        },
+        {
+          "end": 33.095,
+          "score": 0.594,
+          "start": 33.015,
+          "word": "and"
+        },
+        {
+          "end": 33.536,
+          "score": 0.478,
+          "start": 33.115,
+          "word": "maintain"
+        },
+        {
+          "end": 33.797,
+          "score": 0.388,
+          "start": 33.596,
+          "word": "flight"
+        },
+        {
+          "end": 34.038,
+          "score": 0.629,
+          "start": 33.817,
+          "word": "level"
+        },
+        {
+          "end": 34.539,
+          "score": 0.721,
+          "start": 34.158,
+          "word": "450."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.084375,
+      "end": 38.291,
+      "start": 34.599,
+      "text": "Heading 110, climb flight level 450, Sabre 11.",
+      "words": [
+        {
+          "end": 36.244,
+          "score": 0.849,
+          "start": 34.599,
+          "word": "Heading"
+        },
+        {
+          "end": 37.047,
+          "score": 0.79,
+          "start": 36.545,
+          "word": "110,"
+        },
+        {
+          "end": 37.328,
+          "score": 0.835,
+          "start": 37.067,
+          "word": "climb"
+        },
+        {
+          "end": 37.588,
+          "score": 0.623,
+          "start": 37.348,
+          "word": "flight"
+        },
+        {
+          "end": 37.749,
+          "score": 0.71,
+          "start": 37.609,
+          "word": "level"
+        },
+        {
+          "end": 37.869,
+          "score": 0.532,
+          "start": 37.769,
+          "word": "450,"
+        },
+        {
+          "end": 38.09,
+          "score": 0.469,
+          "start": 37.889,
+          "word": "Sabre"
+        },
+        {
+          "end": 38.291,
+          "score": 0.906,
+          "start": 38.11,
+          "word": "11."
+        }
+      ]
+    }
+  ],
+  "decision": "aligned_word_matching",
+  "transcript": "Saber One One flight, contact Washington Center one-three-two point four-five.\nOne-three-two point four-five, Saber One One.\nWashington Center, Southwest 1173, 33.6, descending via the Raven 9.\nSouthwest 1173, Washington Center.\nWashington Center, Saber One One flight, two aircraft, passing flight level two-one-zero for four-five-zero.\nSaber One One flight, Washington Center, radar contact. Fly heading one-one-zero. Climb and maintain flight level four-five-zero.\nHeading one-one-zero, climb flight level four-five-zero, Saber One One.",
+  "transcription_segments": [
+    {
+      "avg_logprob": -0.09001736359463798,
+      "end": 30.102,
+      "start": 0.132,
+      "text": " Sabre 1-1 flight, contact Washington Center, 132.45. 132.45, Sabre 1-1. Washington Center, Southwest 1-1-73, 33.6 descending via the Raven 9. Southwest 1-1-73, Washington Center. Washington Center, Sabre 1-1 flight, two aircraft, passing flight level 210 for 450. Sabre 1-1 flight, Washington Center, radar contact."
+    },
+    {
+      "avg_logprob": -0.084375,
+      "end": 39.755,
+      "start": 30.507,
+      "text": " Flight heading 110, climb and maintain flight level 450. Heading 110, climb flight level 450, Sabre 11."
+    }
+  ]
+}

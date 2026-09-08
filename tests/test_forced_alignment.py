@@ -25,6 +25,8 @@ from radio_drama.forced_alignment import (
     _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
     fill_start_positions_from_timing,
+    _normalized_tokens,
+    _aligned_word_tokens,
 )
 from radio_drama.init import radio_drama_injector
 from radio_drama.dialogue import (
@@ -703,3 +705,70 @@ def test_whisperx_resource_batches_registered_requests_and_skips_align_when_not_
         "transcription_exact_clause_match",
         "transcription_exact_clause_match",
     ]
+
+
+@pytest.mark.parametrize("text", [
+    "one-three-two point four-five", "132.45.", "132.45,",
+])
+def test_radio_frequency_tokens(text):
+    assert _normalized_tokens(text) == ("1", "3", "2", ".", "4", "5")
+
+
+@pytest.mark.parametrize("text", ["1173", "1-1-73", "one one seven three"])
+def test_callsign_digit_tokens(text):
+    assert _normalized_tokens(text) == ("1", "1", "7", "3")
+
+
+def test_numeric_word_expansion_keeps_original_timestamps():
+    assert _aligned_word_tokens([AlignedWord("132.45.", 2.673, 3.053)]) == [
+        (token, 2.673, 3.053) for token in ("1", "3", "2", ".", "4", "5")
+    ]
+    assert _normalized_tokens("Hello. Zero-nine!") == ("hello", "0", "9")
+
+
+def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundaries():
+    payload = json.loads((RESOURCE_DIR.parent / "whisperx_cli" / "fighter_conversation.json").read_text())
+    response = WhisperXResponse(
+        transcription_segments=tuple(payload["transcription_segments"]),
+        aligned_segments=tuple(payload["aligned_segments"]),
+        decision=payload["decision"],
+    )
+    speaker = SpeakerVoiceReference(authored_name="Anna", voice_name="anna.wav", resolved_path=Path("anna.wav"))
+    contents = [DialogueLine(speaker=speaker, spoken_text=line) for line in payload["transcript"].splitlines()]
+    contents.insert(2, ScriptGap())
+    # This line is absent from the audio: both source paths must keep NaN and
+    # retain the old placement of inline audio around an unmatched line.
+    contents.extend([
+        DialogueLine(speaker=speaker, spoken_text="Purple elephants dance beautifully."),
+        DialogueAudio(audio_plan=object()),
+    ])
+
+    class SavedWhisperX(WhisperXResource):
+        async def register_request(self, request):
+            async def align():
+                return response
+            return SimpleNamespace(align=align)
+
+    async def runner():
+        config = ProductionConfig(output_sample_rate=24000, output_channels=1)
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(SavedWhisperX)
+            audio = RenderResult(audio=np.zeros(953600, dtype=np.float32))
+            direct = await resource.fill_start_positions(contents, audio)
+            timing = await resource.script_timing(contents, audio)
+            projected = fill_start_positions_from_timing(contents, timing)
+            return direct, timing, projected
+        finally:
+            injector.close()
+
+    direct, timing, projected = asyncio.run(runner())
+    expected = [0.172, 3.073, 4.213, 10.896, 12.496, 17.278, 34.599]
+    for result in (direct, projected):
+        lines = [event for event in result if isinstance(event, DialogueLine)]
+        assert [line.start_pos for line in lines[:-1]] == pytest.approx(expected)
+        assert math.isnan(lines[-1].start_pos)
+        assert result[-1].start_pos == pytest.approx(38.291)
+        assert result[2].start_pos == pytest.approx(4.173)
+    assert math.isnan(timing.dialogue_lines[-1].start)
+    assert math.isnan(timing.dialogue_lines[-1].end)

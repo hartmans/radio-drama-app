@@ -66,7 +66,7 @@ class ProductionResult(RenderResult):
 
 @dataclass(frozen=True, slots=True)
 class DialogueLineTiming:
-    """Start and end seconds for one rendered dialogue line."""
+    """Start and end seconds for one rendered dialogue line; NaN means unknown."""
 
     start: float
     end: float
