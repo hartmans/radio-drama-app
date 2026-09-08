@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -507,6 +508,60 @@ def test_forced_alignment_script_gap_marks_omitted_interval():
     assert filled[0].start_pos == 1.0
     assert filled[1].start_pos == 1.6
     assert filled[2].start_pos == 3.0
+
+
+@pytest.mark.parametrize("timing_method", ["fill_start_positions", "script_timing"])
+def test_gap_alignment_keeps_words_even_when_clauses_match(timing_method):
+    config = ProductionConfig(output_sample_rate=16000, output_channels=1)
+    segments = [
+        {"text": "First line.", "start": 1.0, "end": 2.0,
+         "words": [{"word": "First", "start": 1.0, "end": 1.5},
+                   {"word": "line", "start": 1.5, "end": 2.0}]},
+        {"text": "Second line.", "start": 3.0, "end": 4.0,
+         "words": [{"word": "Second", "start": 3.0, "end": 3.5},
+                   {"word": "line", "start": 3.5, "end": 4.0}]},
+    ]
+    align_calls = []
+
+    def align(*args, **kwargs):
+        align_calls.append(True)
+        return {"segments": segments}
+
+    class FakeWhisperX(WhisperXResource):
+        def _ensure_asr_model(self):
+            return SimpleNamespace(transcribe=lambda *args, **kwargs: {"segments": segments})
+
+        def _ensure_align_model(self):
+            return object(), {}
+
+        def _ensure_whisperx_module(self):
+            return SimpleNamespace(align=align)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeWhisperX)
+            speaker = SpeakerVoiceReference(
+                authored_name="Anna", voice_name="anna.wav", resolved_path=Path("anna.wav")
+            )
+            contents = [
+                ScriptGap(),
+                DialogueLine(speaker=speaker, spoken_text="First line."),
+                ScriptGap(),
+                DialogueLine(speaker=speaker, spoken_text="Second line."),
+            ]
+            return await getattr(resource, timing_method)(
+                contents, RenderResult(audio=np.zeros(80000, dtype=np.float32))
+            )
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert align_calls == [True]
+    if timing_method == "script_timing":
+        assert [(line.start, line.end) for line in result.dialogue_lines] == [(1.0, 2.0), (3.0, 4.0)]
+    else:
+        assert [line.start_pos for line in result if isinstance(line, DialogueLine)] == [1.0, 3.0]
 
 
 def test_line_end_timing_places_inline_audio_between_noncontiguous_lines():

@@ -810,6 +810,64 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
     assert result.audio.tolist() == recording_audio.tolist()
 
 
+@pytest.mark.parametrize("tts_intro", ["", "Anna: Generated introduction."])
+def test_leading_recording_gap_excludes_lead_in(tmp_path: Path, tts_intro: str):
+    (tmp_path / "anna.wav").write_bytes(b"voice")
+    sound_file = tmp_path / "sounds" / "recording.wav"
+    sound_file.parent.mkdir()
+    sound_file.write_bytes(b"recording")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+    alignment_calls = []
+
+    class FakeTts:
+        async def register_request(self, request):
+            class Registered:
+                async def render(self):
+                    return ScriptRenderResult(
+                        audio=np.array([10., 11., 12., 13.], dtype=np.float32),
+                        timing=ScriptTiming((DialogueLineTiming(0., .5), DialogueLineTiming(.5, 1.))),
+                    )
+            return Registered()
+
+    class FakeWhisperX:
+        async def fill_start_positions(self, contents, result):
+            assert [type(content) for content in contents] == [ScriptGap, DialogueLine]
+            alignment_calls.append(True)
+            return fill_recording_timing(contents)
+
+    def fill_recording_timing(contents):
+        from radio_drama.forced_alignment import fill_start_positions_from_timing
+        return fill_start_positions_from_timing(contents, ScriptTiming((DialogueLineTiming(.5, 1.),)))
+
+    class FakeSoundCache:
+        async def preload(self, sound_path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=np.array([1., 2., 3., 4.], dtype=np.float32)))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTts(), close=False)
+        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                f'''<production><speaker-map>Anna: anna.wav</speaker-map>
+                <script><recording ref="recording" />{tts_intro}
+                <script-gap mode="exclude" />~Anna: Recorded reply.
+                </script></production>''', source_name=str(xml_path),
+            )
+            plan = await root.plan(ainjector)
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert alignment_calls == [True]
+    assert result.audio.tolist() == ([10., 11., 3., 4.] if tts_intro else [3., 4.])
+
+
 def test_recording_projection_tracks_current_dialogue_source(tmp_path: Path):
     voice_file = tmp_path / "anna.wav"
     voice_file.write_bytes(b"fake")

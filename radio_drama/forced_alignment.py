@@ -68,9 +68,16 @@ class _WordMatchCandidate:
 
 @dataclass(frozen=True, slots=True)
 class ForcedAlignmentRequest:
+    """Source audio and transcript, optionally requiring word-level matching.
+
+    Gap resynchronization needs words even when clause counts match, so these
+    requests must bypass both clause-only result shortcuts.
+    """
+
     audio: np.ndarray
     sample_rate: int
     transcript: str
+    require_word_timings: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +155,7 @@ class WhisperXResource(AsyncInjectable):
                 audio=result.audio,
                 sample_rate=self.config.resolved_output_sample_rate,
                 transcript=transcript,
+                require_word_timings=any(isinstance(content, ScriptGap) for content in contents),
             )
         )
         whisperx_response = await registration.align()
@@ -173,6 +181,7 @@ class WhisperXResource(AsyncInjectable):
                 audio=result.audio,
                 sample_rate=self.config.resolved_output_sample_rate,
                 transcript=transcript,
+                require_word_timings=any(isinstance(content, ScriptGap) for content in contents),
             )
         )
         response = await registration.align()
@@ -352,7 +361,10 @@ class WhisperXResource(AsyncInjectable):
             return None
         transcript_lines = _transcript_lines(prepared.request.transcript)
         transcription_clauses = _clauses_from_segments(prepared.transcription_segments)
-        if _line_spans_from_exact_clauses(transcript_lines, transcription_clauses) is not None:
+        if (
+            not prepared.request.require_word_timings
+            and _line_spans_from_exact_clauses(transcript_lines, transcription_clauses) is not None
+        ):
             response = WhisperXResponse(
                 transcription_segments=prepared.transcription_segments,
                 aligned_segments=None,
@@ -374,7 +386,10 @@ class WhisperXResource(AsyncInjectable):
         )
         aligned_segments = tuple(aligned.get("segments", []))
         aligned_clauses = _clauses_from_segments(aligned_segments)
-        if _line_spans_from_exact_clauses(transcript_lines, aligned_clauses) is not None:
+        if (
+            not prepared.request.require_word_timings
+            and _line_spans_from_exact_clauses(transcript_lines, aligned_clauses) is not None
+        ):
             response = WhisperXResponse(
                 transcription_segments=prepared.transcription_segments,
                 aligned_segments=aligned_segments,

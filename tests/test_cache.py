@@ -211,6 +211,17 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
     assert first_payload["alignment_key"] != changed_payload["alignment_key"]
     assert changed_payload["dialogue_line_spans"] == [[0.0, 2 / 24000]]
 
+    # Old algorithm results must be replaced without synthesizing audio again,
+    # even when the authored projection has not changed.
+    old_payload = dict(changed_payload)
+    old_payload["alignment_key"] = "script-timing-v1:" + changed_payload["alignment_key"].split(":", 1)[1]
+    old_payload["dialogue_line_spans"] = [[0.0, 0.0]]
+    meta_path.write_text(json.dumps(old_payload), encoding="utf-8")
+    assert asyncio.run(render_and_align(changed_contents)) == changed_timing
+    assert FakeWhisperX.calls == 3
+    assert UntimedVibeVoiceResource.native_calls == 1
+    assert wav_path.read_bytes() == original_wav
+
 
 def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Path):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)

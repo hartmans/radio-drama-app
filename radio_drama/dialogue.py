@@ -922,7 +922,11 @@ class ScriptPlan(AudioPlan):
         )
 
     def recording_projection(self) -> list[ScriptEvent]:
-        """Return recording-local alignment events without TTS-only transcript."""
+        """Retain gaps adjacent to recorded dialogue, across source transitions.
+
+        Inline audio follows the preceding source; a gap also belongs to the
+        following source so that a leading recording exclusion survives.
+        """
         retained: list[ScriptEvent] = []
         has_recording = any(
             isinstance(event, DialogueLine) and event.source == "recording"
@@ -931,13 +935,22 @@ class ScriptPlan(AudioPlan):
         if not has_recording:
             return retained
         current_source: Literal["tts", "recording"] | None = None
-        for event in self.script_events:
+        for index, event in enumerate(self.script_events):
             if isinstance(event, DialogueLine):
                 current_source = event.source
                 if current_source == "recording":
                     retained.append(event)
-            elif isinstance(event, ScriptGap) and current_source == "recording":
-                retained.append(event)
+            elif isinstance(event, ScriptGap):
+                next_source = next(
+                    (
+                        following.source
+                        for following in self.script_events[index + 1 :]
+                        if isinstance(following, DialogueLine)
+                    ),
+                    None,
+                )
+                if current_source == "recording" or next_source == "recording":
+                    retained.append(event)
             elif isinstance(event, DialogueAudio) and current_source == "recording":
                 retained.append(event)
         return retained
