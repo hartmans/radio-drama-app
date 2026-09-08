@@ -58,6 +58,7 @@ class AlignedClause:
 class AlignmentResult:
     words: tuple[AlignedWord, ...]
     clauses: tuple[AlignedClause, ...]
+    transcription_clauses: tuple[AlignedClause, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -779,16 +780,11 @@ def _boundary_info_for_marker(
 def _line_spans_from_alignment(
     dialogue_lines: Sequence[DialogueLine],
     alignment: AlignmentResult,
+    *,
+    allow_positional_clauses: bool = True,
 ) -> list[tuple[float | None, float | None]]:
     if not dialogue_lines:
         return []
-
-    exact_clause_spans = _line_spans_from_exact_clauses(
-        [line.spoken_text for line in dialogue_lines],
-        alignment.clauses,
-    )
-    if exact_clause_spans is not None:
-        return exact_clause_spans
 
     normalized_line_tokens = [tuple(_normalized_tokens(line.spoken_text)) for line in dialogue_lines]
     clause_starts = _clause_starts_by_token_offset(alignment.clauses)
@@ -799,9 +795,30 @@ def _line_spans_from_alignment(
     cumulative_line_tokens = 0
     spans: list[tuple[float | None, float | None]] = []
 
+    earliest = 0.0
+    clause_sources = (alignment.transcription_clauses, alignment.clauses)
+    clause_cursors = [0, 0]
     for line_tokens in normalized_line_tokens:
         line_start_offset = cumulative_line_tokens
         cumulative_line_tokens += len(line_tokens)
+        clause_match = None
+        for source_index, clauses in enumerate(clause_sources):
+            clause_match = _find_exact_clause_span(
+                line_tokens, clauses, start_index=clause_cursors[source_index], earliest=earliest,
+            )
+            if clause_match is not None:
+                start, end, next_clause = clause_match
+                clause_cursors[source_index] = next_clause
+                spans.append((start, end))
+                earliest = max(earliest, end)
+                while word_search_index < len(aligned_tokens):
+                    word_start = aligned_tokens[word_search_index][1]
+                    if word_start is not None and word_start >= earliest:
+                        break
+                    word_search_index += 1
+                break
+        if clause_match is not None:
+            continue
         start_time: float | None = None
         end_time: float | None = None
         matched_word_span = _match_line_in_aligned_tokens(
@@ -815,16 +832,20 @@ def _line_spans_from_alignment(
 
         clause_start = clause_starts.get(line_start_offset)
         if (
-            clause_start is not None
+            allow_positional_clauses
+            and clause_start is not None
             and clause_start.start is not None
+            and clause_start.start >= earliest
             and _line_begins_with_clause(line_tokens, clause_start)
         ):
             start_time = clause_start.start
         clause_match = clause_endings.get(cumulative_line_tokens)
-        if clause_match is not None and _line_ends_with_clause(line_tokens, clause_match):
-            if clause_match.end is not None:
+        if allow_positional_clauses and clause_match is not None and _line_ends_with_clause(line_tokens, clause_match):
+            if clause_match.end is not None and clause_match.end >= max(earliest, start_time or 0.0):
                 end_time = clause_match.end
         spans.append((start_time, end_time))
+        if end_time is not None:
+            earliest = max(earliest, end_time)
 
     return spans
 
@@ -885,39 +906,11 @@ def _line_spans_from_alignment_segments(
     dialogue_contents: Sequence[DialogueContent],
     alignment: AlignmentResult,
 ) -> list[tuple[float | None, float | None]]:
-    aligned_tokens = _aligned_word_tokens(alignment.words)
-    aligned_token_index = _aligned_token_positions_by_text(aligned_tokens)
-    word_search_index = 0
-    spans: list[tuple[float | None, float | None]] = []
-    pending_line_tokens: list[tuple[str, ...]] = []
-
-    def flush_pending_block(start_index: int) -> int:
-        next_index = start_index
-        for line_tokens in pending_line_tokens:
-            start_time: float | None = None
-            end_time: float | None = None
-            matched_word_span = _match_line_in_aligned_tokens(
-                line_tokens,
-                aligned_tokens,
-                aligned_token_index,
-                start_index=next_index,
-            )
-            if matched_word_span is not None:
-                start_time, end_time, next_index = matched_word_span
-            spans.append((start_time, end_time))
-        pending_line_tokens.clear()
-        return next_index
-
-    for content in dialogue_contents:
-        if isinstance(content, DialogueLine):
-            pending_line_tokens.append(tuple(_normalized_tokens(content.spoken_text)))
-            continue
-        if pending_line_tokens:
-            word_search_index = flush_pending_block(word_search_index)
-
-    if pending_line_tokens:
-        word_search_index = flush_pending_block(word_search_index)
-    return spans
+    return _line_spans_from_alignment(
+        [content for content in dialogue_contents if isinstance(content, DialogueLine)],
+        alignment,
+        allow_positional_clauses=False,
+    )
 
 
 def _stabilize_line_spans(
@@ -1004,13 +997,21 @@ def _alignment_result_from_whisperx_response(
         return AlignmentResult(words=(), clauses=tuple(clauses))
     if response.decision == "aligned_exact_clause_match" and response.aligned_segments is not None:
         clauses = _clauses_from_segments(response.aligned_segments)
-        return AlignmentResult(words=(), clauses=tuple(clauses))
+        return AlignmentResult(
+            words=(), clauses=tuple(clauses),
+            transcription_clauses=tuple(_clauses_from_segments(response.transcription_segments)),
+        )
     if response.aligned_segments is None:
         clauses = _clauses_from_segments(response.transcription_segments)
         return AlignmentResult(words=(), clauses=tuple(clauses))
-    return _alignment_result_from_whisperx(
+    aligned = _alignment_result_from_whisperx(
         {"segments": list(response.aligned_segments)},
         clauses=_clauses_from_segments(response.aligned_segments),
+    )
+    return AlignmentResult(
+        words=aligned.words,
+        clauses=aligned.clauses,
+        transcription_clauses=tuple(_clauses_from_segments(response.transcription_segments)),
     )
 
 
@@ -1069,6 +1070,38 @@ def _clauses_from_segments(segments: Sequence[dict]) -> list[AlignedClause]:
     ]
 
 
+def _find_exact_clause_span(
+    line_tokens: Sequence[str],
+    clauses: Sequence[AlignedClause],
+    *,
+    start_index: int,
+    earliest: float,
+) -> tuple[float, float, int] | None:
+    """Find whole consecutive clauses by text, without moving behind prior output.
+
+    Original ASR segments and acoustically aligned clauses are searched
+    separately: exact original segments keep their independent boundaries.
+    """
+    target = tuple(line_tokens)
+    if not target:
+        return None
+    for index in range(start_index, len(clauses)):
+        start = clauses[index].start
+        if start is None or start < earliest:
+            continue
+        tokens: list[str] = []
+        for end_index in range(index, len(clauses)):
+            tokens.extend(_normalized_tokens(clauses[end_index].text))
+            if tuple(tokens) != target[:len(tokens)]:
+                break
+            if tuple(tokens) == target:
+                end = clauses[end_index].end
+                if end is not None and end >= start:
+                    return start, end, end_index + 1
+                break
+    return None
+
+
 def _line_spans_from_exact_clauses(
     line_texts: Sequence[str],
     clauses: Sequence[AlignedClause],
@@ -1083,6 +1116,7 @@ def _line_spans_from_exact_clauses(
     for line_text in line_texts:
         target_token_count = len(_normalized_tokens(line_text))
         accumulated_tokens = 0
+        matched_tokens: list[str] = []
         line_start: float | None = None
         line_end: float | None = None
 
@@ -1097,8 +1131,9 @@ def _line_spans_from_exact_clauses(
             if clause.end is not None:
                 line_end = clause.end
             accumulated_tokens += clause_token_count
+            matched_tokens.extend(_normalized_tokens(clause.text))
 
-        if accumulated_tokens != target_token_count:
+        if tuple(matched_tokens) != _normalized_tokens(line_text):
             return None
         spans.append((line_start, line_end))
 

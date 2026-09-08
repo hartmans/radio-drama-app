@@ -772,3 +772,42 @@ def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundar
         assert result[2].start_pos == pytest.approx(4.173)
     assert math.isnan(timing.dialogue_lines[-1].start)
     assert math.isnan(timing.dialogue_lines[-1].end)
+
+
+def test_extended_recording_prefers_original_segment_over_compressed_alignment():
+    payload = json.loads((RESOURCE_DIR.parent / "whisperx_cli" / "extended_recording.json").read_text())
+    response = WhisperXResponse(
+        transcription_segments=tuple(payload["transcription_segments"]),
+        aligned_segments=tuple(payload["aligned_segments"]),
+        decision=payload["decision"],
+    )
+    alignment = _alignment_result_from_whisperx_response(payload["transcript"], response, duration_seconds=213.1)
+    speaker = SpeakerVoiceReference(authored_name="ATC", voice_name="atc.wav", resolved_path=Path("atc.wav"))
+    contents = [ScriptGap()]
+    for text in payload["transcript"].splitlines():
+        contents.extend([DialogueLine(speaker=speaker, spoken_text=text), ScriptGap()])
+    result = fill_start_positions_from_alignment(contents, alignment)
+    # Southwest 1105 is only a subclause of an original segment: retain its
+    # aligned boundary. United 746 is an entire original segment: retain all
+    # 13.432 seconds rather than the aligner's compressed 4.344 seconds.
+    assert result[5].start_pos == pytest.approx(26.317)
+    assert result[6].start_pos == pytest.approx(29.280)
+    assert result[9].start_pos == pytest.approx(124.805)
+    assert result[10].start_pos == pytest.approx(138.237)
+
+
+def test_clause_matches_are_per_line_ordered_and_use_actual_text():
+    from radio_drama.forced_alignment import _line_spans_from_exact_clauses
+    assert _line_spans_from_exact_clauses(["Wrong words."], [AlignedClause("Other text.", 1., 2.)]) is None
+    speaker = SpeakerVoiceReference(authored_name="ATC", voice_name="atc.wav", resolved_path=Path("atc.wav"))
+    contents = [ScriptGap()]
+    for text in ("Alpha bravo.", "Charlie delta.", "Echo foxtrot.", "Alpha bravo.", "Missing entirely."):
+        contents.append(DialogueLine(speaker=speaker, spoken_text=text))
+    alignment = AlignmentResult(
+        transcription_clauses=(AlignedClause("Alpha bravo.", 1., 3.), AlignedClause("Alpha bravo.", 9., 10.)),
+        clauses=(AlignedClause("Charlie", 4., 4.5), AlignedClause("delta.", 4.5, 5.)),
+        words=(AlignedWord("Echo", 6., 6.5), AlignedWord("foxtrot", 6.5, 7.)),
+    )
+    result = fill_start_positions_from_alignment(contents, alignment)
+    assert [line.start_pos for line in result[1:-1]] == [1., 4., 6., 9.]
+    assert math.isnan(result[-1].start_pos)

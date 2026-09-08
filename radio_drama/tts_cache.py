@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from .dialogue import ScriptEvent, ScriptRenderRequest, TtsResource
 
 
-_ALIGNMENT_VERSION = "script-timing-v3"
+_ALIGNMENT_VERSION = "script-timing-v4"
 
 
 @dataclass(slots=True)

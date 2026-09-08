@@ -1,0 +1,1308 @@
+{
+  "aligned_segments": [
+    {
+      "avg_logprob": -0.2054687559604645,
+      "end": 13.118,
+      "start": 11.017,
+      "text": " Good day, Washington Center.",
+      "words": [
+        {
+          "end": 11.097,
+          "score": 0.017,
+          "start": 11.017,
+          "word": "Good"
+        },
+        {
+          "end": 11.237,
+          "score": 0.28,
+          "start": 11.117,
+          "word": "day,"
+        },
+        {
+          "end": 12.178,
+          "score": 0.431,
+          "start": 11.257,
+          "word": "Washington"
+        },
+        {
+          "end": 13.118,
+          "score": 0.664,
+          "start": 12.358,
+          "word": "Center."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2054687559604645,
+      "end": 15.22,
+      "start": 13.138,
+      "text": "Southwest 1173, 33.6 descending via the Raven line.",
+      "words": [
+        {
+          "end": 13.499,
+          "score": 0.443,
+          "start": 13.138,
+          "word": "Southwest"
+        },
+        {
+          "end": 13.719,
+          "score": 0.896,
+          "start": 13.519,
+          "word": "1173,"
+        },
+        {
+          "end": 13.979,
+          "score": 0.809,
+          "start": 13.759,
+          "word": "33.6"
+        },
+        {
+          "end": 14.519,
+          "score": 0.584,
+          "start": 14.139,
+          "word": "descending"
+        },
+        {
+          "end": 14.619,
+          "score": 0.174,
+          "start": 14.539,
+          "word": "via"
+        },
+        {
+          "end": 14.719,
+          "score": 0.788,
+          "start": 14.639,
+          "word": "the"
+        },
+        {
+          "end": 14.98,
+          "score": 0.936,
+          "start": 14.759,
+          "word": "Raven"
+        },
+        {
+          "end": 15.22,
+          "score": 0.941,
+          "start": 15.02,
+          "word": "line."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2054687559604645,
+      "end": 18.141,
+      "start": 16.841,
+      "text": "Southwest 1173, Washington Center.",
+      "words": [
+        {
+          "end": 17.321,
+          "score": 0.395,
+          "start": 16.841,
+          "word": "Southwest"
+        },
+        {
+          "end": 17.581,
+          "score": 0.97,
+          "start": 17.421,
+          "word": "1173,"
+        },
+        {
+          "end": 17.881,
+          "score": 0.284,
+          "start": 17.601,
+          "word": "Washington"
+        },
+        {
+          "end": 18.141,
+          "score": 0.398,
+          "start": 17.901,
+          "word": "Center."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2054687559604645,
+      "end": 19.542,
+      "start": 18.161,
+      "text": "Southwest 1105, are you up?",
+      "words": [
+        {
+          "end": 18.522,
+          "score": 0.414,
+          "start": 18.161,
+          "word": "Southwest"
+        },
+        {
+          "end": 18.802,
+          "score": 0.735,
+          "start": 18.542,
+          "word": "1105,"
+        },
+        {
+          "end": 19.342,
+          "score": 0.323,
+          "start": 19.282,
+          "word": "are"
+        },
+        {
+          "end": 19.462,
+          "score": 0.354,
+          "start": 19.362,
+          "word": "you"
+        },
+        {
+          "end": 19.542,
+          "score": 0.351,
+          "start": 19.482,
+          "word": "up?"
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3772681389124163,
+      "end": 26.257,
+      "start": 21.393,
+      "text": " Yeah, we just got the handoff leveling here, 3, or sorry, 230, Southwest 1105.",
+      "words": [
+        {
+          "end": 21.553,
+          "score": 0.289,
+          "start": 21.393,
+          "word": "Yeah,"
+        },
+        {
+          "end": 21.633,
+          "score": 0.392,
+          "start": 21.573,
+          "word": "we"
+        },
+        {
+          "end": 21.793,
+          "score": 0.392,
+          "start": 21.653,
+          "word": "just"
+        },
+        {
+          "end": 21.934,
+          "score": 0.796,
+          "start": 21.833,
+          "word": "got"
+        },
+        {
+          "end": 22.054,
+          "score": 0.324,
+          "start": 21.954,
+          "word": "the"
+        },
+        {
+          "end": 22.394,
+          "score": 0.697,
+          "start": 22.074,
+          "word": "handoff"
+        },
+        {
+          "end": 22.754,
+          "score": 0.781,
+          "start": 22.434,
+          "word": "leveling"
+        },
+        {
+          "end": 22.954,
+          "score": 0.51,
+          "start": 22.794,
+          "word": "here,"
+        },
+        {
+          "end": 23.275,
+          "score": 0.73,
+          "start": 22.994,
+          "word": "3,"
+        },
+        {
+          "end": 23.455,
+          "score": 0.396,
+          "start": 23.375,
+          "word": "or"
+        },
+        {
+          "end": 23.695,
+          "score": 0.287,
+          "start": 23.475,
+          "word": "sorry,"
+        },
+        {
+          "end": 24.536,
+          "score": 0.66,
+          "start": 23.955,
+          "word": "230,"
+        },
+        {
+          "end": 25.937,
+          "score": 0.535,
+          "start": 24.636,
+          "word": "Southwest"
+        },
+        {
+          "end": 26.257,
+          "score": 0.79,
+          "start": 26.017,
+          "word": "1105."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3772681389124163,
+      "end": 29.28,
+      "start": 26.317,
+      "text": "Southwest 1105, Washington Center, climb maintain for level 270, maintain 2909.",
+      "words": [
+        {
+          "end": 26.578,
+          "score": 0.354,
+          "start": 26.317,
+          "word": "Southwest"
+        },
+        {
+          "end": 26.858,
+          "score": 0.705,
+          "start": 26.618,
+          "word": "1105,"
+        },
+        {
+          "end": 27.318,
+          "score": 0.823,
+          "start": 26.878,
+          "word": "Washington"
+        },
+        {
+          "end": 27.679,
+          "score": 0.315,
+          "start": 27.398,
+          "word": "Center,"
+        },
+        {
+          "end": 27.859,
+          "score": 0.247,
+          "start": 27.699,
+          "word": "climb"
+        },
+        {
+          "end": 28.179,
+          "score": 0.214,
+          "start": 27.879,
+          "word": "maintain"
+        },
+        {
+          "end": 28.339,
+          "score": 0.371,
+          "start": 28.199,
+          "word": "for"
+        },
+        {
+          "end": 28.539,
+          "score": 0.252,
+          "start": 28.359,
+          "word": "level"
+        },
+        {
+          "end": 28.659,
+          "score": 0.798,
+          "start": 28.559,
+          "word": "270,"
+        },
+        {
+          "end": 29.08,
+          "score": 0.397,
+          "start": 28.779,
+          "word": "maintain"
+        },
+        {
+          "end": 29.28,
+          "score": 0.754,
+          "start": 29.1,
+          "word": "2909."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3772681389124163,
+      "end": 38.168,
+      "start": 29.34,
+      "text": "Okay, 270 and .65, and that's currently... Roger, perfect, thank you.",
+      "words": [
+        {
+          "end": 29.52,
+          "score": 0.329,
+          "start": 29.34,
+          "word": "Okay,"
+        },
+        {
+          "end": 29.72,
+          "score": 0.615,
+          "start": 29.58,
+          "word": "270"
+        },
+        {
+          "end": 29.96,
+          "score": 0.73,
+          "start": 29.8,
+          "word": "and"
+        },
+        {
+          "end": 32.022,
+          "score": 0.848,
+          "start": 31.802,
+          "word": ".65,"
+        },
+        {
+          "end": 32.383,
+          "score": 0.433,
+          "start": 32.202,
+          "word": "and"
+        },
+        {
+          "end": 33.363,
+          "score": 0.437,
+          "start": 33.083,
+          "word": "that's"
+        },
+        {
+          "end": 34.765,
+          "score": 0.576,
+          "start": 33.504,
+          "word": "currently..."
+        },
+        {
+          "end": 37.347,
+          "score": 0.621,
+          "start": 35.745,
+          "word": "Roger,"
+        },
+        {
+          "end": 37.687,
+          "score": 0.382,
+          "start": 37.407,
+          "word": "perfect,"
+        },
+        {
+          "end": 37.927,
+          "score": 0.295,
+          "start": 37.727,
+          "word": "thank"
+        },
+        {
+          "end": 38.168,
+          "score": 0.472,
+          "start": 37.987,
+          "word": "you."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3772681389124163,
+      "end": 38.608,
+      "start": 38.428,
+      "text": "Yeah.",
+      "words": [
+        {
+          "end": 38.608,
+          "score": 0.457,
+          "start": 38.428,
+          "word": "Yeah."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2170608059780018,
+      "end": 71.224,
+      "start": 65.282,
+      "text": " Southwest 1173, last guy said he gave you a descend V over Yeager, you're about 4,000 feet high, are you able to catch up on the arrival?",
+      "words": [
+        {
+          "end": 66.242,
+          "score": 0.461,
+          "start": 65.282,
+          "word": "Southwest"
+        },
+        {
+          "end": 66.482,
+          "score": 0.826,
+          "start": 66.282,
+          "word": "1173,"
+        },
+        {
+          "end": 66.702,
+          "score": 0.828,
+          "start": 66.522,
+          "word": "last"
+        },
+        {
+          "end": 66.883,
+          "score": 0.492,
+          "start": 66.742,
+          "word": "guy"
+        },
+        {
+          "end": 67.043,
+          "score": 0.564,
+          "start": 66.923,
+          "word": "said"
+        },
+        {
+          "end": 67.123,
+          "score": 0.905,
+          "start": 67.063,
+          "word": "he"
+        },
+        {
+          "end": 67.283,
+          "score": 0.992,
+          "start": 67.163,
+          "word": "gave"
+        },
+        {
+          "end": 67.383,
+          "score": 0.986,
+          "start": 67.323,
+          "word": "you"
+        },
+        {
+          "end": 67.423,
+          "score": 0.0,
+          "start": 67.403,
+          "word": "a"
+        },
+        {
+          "end": 67.683,
+          "score": 0.446,
+          "start": 67.443,
+          "word": "descend"
+        },
+        {
+          "end": 67.843,
+          "score": 0.669,
+          "start": 67.703,
+          "word": "V"
+        },
+        {
+          "end": 68.043,
+          "score": 0.904,
+          "start": 67.863,
+          "word": "over"
+        },
+        {
+          "end": 68.703,
+          "score": 0.7,
+          "start": 68.083,
+          "word": "Yeager,"
+        },
+        {
+          "end": 68.903,
+          "score": 0.465,
+          "start": 68.743,
+          "word": "you're"
+        },
+        {
+          "end": 69.103,
+          "score": 0.98,
+          "start": 68.943,
+          "word": "about"
+        },
+        {
+          "end": 69.423,
+          "score": 0.742,
+          "start": 69.123,
+          "word": "4,000"
+        },
+        {
+          "end": 69.623,
+          "score": 0.364,
+          "start": 69.443,
+          "word": "feet"
+        },
+        {
+          "end": 69.843,
+          "score": 0.605,
+          "start": 69.643,
+          "word": "high,"
+        },
+        {
+          "end": 70.004,
+          "score": 0.226,
+          "start": 69.883,
+          "word": "are"
+        },
+        {
+          "end": 70.184,
+          "score": 0.796,
+          "start": 70.024,
+          "word": "you"
+        },
+        {
+          "end": 70.364,
+          "score": 0.845,
+          "start": 70.224,
+          "word": "able"
+        },
+        {
+          "end": 70.424,
+          "score": 0.996,
+          "start": 70.384,
+          "word": "to"
+        },
+        {
+          "end": 70.584,
+          "score": 0.354,
+          "start": 70.444,
+          "word": "catch"
+        },
+        {
+          "end": 70.724,
+          "score": 0.345,
+          "start": 70.644,
+          "word": "up"
+        },
+        {
+          "end": 70.804,
+          "score": 0.851,
+          "start": 70.764,
+          "word": "on"
+        },
+        {
+          "end": 70.884,
+          "score": 0.004,
+          "start": 70.824,
+          "word": "the"
+        },
+        {
+          "end": 71.224,
+          "score": 0.544,
+          "start": 70.904,
+          "word": "arrival?"
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2170608059780018,
+      "end": 72.924,
+      "start": 71.604,
+      "text": "Yeah, we're looking good for now, Southwest 1173.",
+      "words": [
+        {
+          "end": 71.704,
+          "score": 0.14,
+          "start": 71.604,
+          "word": "Yeah,"
+        },
+        {
+          "end": 71.824,
+          "score": 0.05,
+          "start": 71.724,
+          "word": "we're"
+        },
+        {
+          "end": 71.984,
+          "score": 0.036,
+          "start": 71.844,
+          "word": "looking"
+        },
+        {
+          "end": 72.104,
+          "score": 0.099,
+          "start": 72.004,
+          "word": "good"
+        },
+        {
+          "end": 72.184,
+          "score": 0.013,
+          "start": 72.124,
+          "word": "for"
+        },
+        {
+          "end": 72.384,
+          "score": 0.674,
+          "start": 72.204,
+          "word": "now,"
+        },
+        {
+          "end": 72.704,
+          "score": 0.365,
+          "start": 72.404,
+          "word": "Southwest"
+        },
+        {
+          "end": 72.924,
+          "score": 0.567,
+          "start": 72.724,
+          "word": "1173."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2170608059780018,
+      "end": 88.449,
+      "start": 72.944,
+      "text": "Southwest 1105, call me, 185, level 300.",
+      "words": [
+        {
+          "end": 73.164,
+          "score": 0.091,
+          "start": 72.944,
+          "word": "Southwest"
+        },
+        {
+          "end": 73.365,
+          "score": 0.847,
+          "start": 73.184,
+          "word": "1105,"
+        },
+        {
+          "end": 87.769,
+          "score": 0.495,
+          "start": 87.589,
+          "word": "call"
+        },
+        {
+          "end": 87.929,
+          "score": 0.39,
+          "start": 87.809,
+          "word": "me,"
+        },
+        {
+          "end": 88.029,
+          "score": 0.793,
+          "start": 87.949,
+          "word": "185,"
+        },
+        {
+          "end": 88.249,
+          "score": 0.847,
+          "start": 88.069,
+          "word": "level"
+        },
+        {
+          "end": 88.449,
+          "score": 0.533,
+          "start": 88.269,
+          "word": "300."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.2170608059780018,
+      "end": 89.65,
+      "start": 88.469,
+      "text": "Call me, 185, 300, Southwest 105.",
+      "words": [
+        {
+          "end": 88.689,
+          "score": 0.571,
+          "start": 88.469,
+          "word": "Call"
+        },
+        {
+          "end": 88.909,
+          "score": 0.51,
+          "start": 88.729,
+          "word": "me,"
+        },
+        {
+          "end": 89.109,
+          "score": 0.719,
+          "start": 88.929,
+          "word": "185,"
+        },
+        {
+          "end": 89.29,
+          "score": 0.674,
+          "start": 89.189,
+          "word": "300,"
+        },
+        {
+          "end": 89.53,
+          "score": 0.271,
+          "start": 89.31,
+          "word": "Southwest"
+        },
+        {
+          "end": 89.65,
+          "score": 0.701,
+          "start": 89.57,
+          "word": "105."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.5132575757575758,
+      "end": 97.63,
+      "start": 94.169,
+      "text": " Blue Street 55... Blue Street 5544, climb maintain 5 level 270.",
+      "words": [
+        {
+          "end": 94.509,
+          "score": 0.477,
+          "start": 94.169,
+          "word": "Blue"
+        },
+        {
+          "end": 95.309,
+          "score": 0.632,
+          "start": 94.549,
+          "word": "Street"
+        },
+        {
+          "end": 96.249,
+          "score": 0.859,
+          "start": 95.849,
+          "word": "55..."
+        },
+        {
+          "end": 96.409,
+          "score": 0.255,
+          "start": 96.289,
+          "word": "Blue"
+        },
+        {
+          "end": 96.649,
+          "score": 0.247,
+          "start": 96.429,
+          "word": "Street"
+        },
+        {
+          "end": 96.849,
+          "score": 0.784,
+          "start": 96.669,
+          "word": "5544,"
+        },
+        {
+          "end": 97.05,
+          "score": 0.247,
+          "start": 96.909,
+          "word": "climb"
+        },
+        {
+          "end": 97.33,
+          "score": 0.405,
+          "start": 97.07,
+          "word": "maintain"
+        },
+        {
+          "end": 97.37,
+          "score": 0.512,
+          "start": 97.35,
+          "word": "5"
+        },
+        {
+          "end": 97.53,
+          "score": 0.338,
+          "start": 97.41,
+          "word": "level"
+        },
+        {
+          "end": 97.63,
+          "score": 0.303,
+          "start": 97.55,
+          "word": "270."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.5132575757575758,
+      "end": 98.37,
+      "start": 97.65,
+      "text": "270, Blue Street 544.",
+      "words": [
+        {
+          "end": 97.75,
+          "score": 0.837,
+          "start": 97.65,
+          "word": "270,"
+        },
+        {
+          "end": 97.91,
+          "score": 0.189,
+          "start": 97.77,
+          "word": "Blue"
+        },
+        {
+          "end": 98.19,
+          "score": 0.35,
+          "start": 97.93,
+          "word": "Street"
+        },
+        {
+          "end": 98.37,
+          "score": 0.773,
+          "start": 98.25,
+          "word": "544."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.5132575757575758,
+      "end": 117.973,
+      "start": 98.81,
+      "text": "United 745, 14,000, 270.",
+      "words": [
+        {
+          "end": 99.23,
+          "score": 0.463,
+          "start": 98.81,
+          "word": "United"
+        },
+        {
+          "end": 99.75,
+          "score": 0.507,
+          "start": 99.27,
+          "word": "745,"
+        },
+        {
+          "end": 100.15,
+          "score": 0.56,
+          "start": 99.77,
+          "word": "14,000,"
+        },
+        {
+          "end": 117.973,
+          "score": 0.702,
+          "start": 117.733,
+          "word": "270."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3335193544626236,
+      "end": 129.229,
+      "start": 124.885,
+      "text": " United 746, Washington Center, climb maintain 5-0-2-7-0, maintain 2-9-0-9 2-9-0-9 2-7-0-9",
+      "words": [
+        {
+          "end": 125.065,
+          "score": 0.291,
+          "start": 124.885,
+          "word": "United"
+        },
+        {
+          "end": 125.225,
+          "score": 0.506,
+          "start": 125.085,
+          "word": "746,"
+        },
+        {
+          "end": 126.206,
+          "score": 0.525,
+          "start": 125.265,
+          "word": "Washington"
+        },
+        {
+          "end": 126.607,
+          "score": 0.602,
+          "start": 126.286,
+          "word": "Center,"
+        },
+        {
+          "end": 126.927,
+          "score": 0.353,
+          "start": 126.627,
+          "word": "climb"
+        },
+        {
+          "end": 127.507,
+          "score": 0.473,
+          "start": 127.007,
+          "word": "maintain"
+        },
+        {
+          "end": 127.828,
+          "score": 0.671,
+          "start": 127.527,
+          "word": "5-0-2-7-0,"
+        },
+        {
+          "end": 128.408,
+          "score": 0.764,
+          "start": 127.848,
+          "word": "maintain"
+        },
+        {
+          "end": 128.588,
+          "score": 0.701,
+          "start": 128.428,
+          "word": "2-9-0-9"
+        },
+        {
+          "end": 128.749,
+          "score": 0.68,
+          "start": 128.608,
+          "word": "2-9-0-9"
+        },
+        {
+          "end": 129.229,
+          "score": 0.927,
+          "start": 128.849,
+          "word": "2-7-0-9"
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 175.889,
+      "start": 171.467,
+      "text": " Delta 325, can I stay for stomach approach 121205?",
+      "words": [
+        {
+          "end": 171.827,
+          "score": 0.568,
+          "start": 171.467,
+          "word": "Delta"
+        },
+        {
+          "end": 172.107,
+          "score": 0.902,
+          "start": 171.887,
+          "word": "325,"
+        },
+        {
+          "end": 172.427,
+          "score": 0.755,
+          "start": 172.207,
+          "word": "can"
+        },
+        {
+          "end": 172.568,
+          "score": 0.49,
+          "start": 172.508,
+          "word": "I"
+        },
+        {
+          "end": 172.948,
+          "score": 0.475,
+          "start": 172.668,
+          "word": "stay"
+        },
+        {
+          "end": 173.208,
+          "score": 0.674,
+          "start": 173.048,
+          "word": "for"
+        },
+        {
+          "end": 173.648,
+          "score": 0.389,
+          "start": 173.228,
+          "word": "stomach"
+        },
+        {
+          "end": 174.668,
+          "score": 0.559,
+          "start": 173.748,
+          "word": "approach"
+        },
+        {
+          "end": 175.889,
+          "score": 0.784,
+          "start": 175.509,
+          "word": "121205?"
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 177.349,
+      "start": 175.909,
+      "text": "2105, that's 325, get in.",
+      "words": [
+        {
+          "end": 176.389,
+          "score": 0.738,
+          "start": 175.909,
+          "word": "2105,"
+        },
+        {
+          "end": 176.529,
+          "score": 0.221,
+          "start": 176.409,
+          "word": "that's"
+        },
+        {
+          "end": 176.749,
+          "score": 0.804,
+          "start": 176.549,
+          "word": "325,"
+        },
+        {
+          "end": 176.969,
+          "score": 0.396,
+          "start": 176.769,
+          "word": "get"
+        },
+        {
+          "end": 177.349,
+          "score": 0.602,
+          "start": 177.029,
+          "word": "in."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 187.093,
+      "start": 182.711,
+      "text": "Washington Center, Southwest 1260, 320 descendant via the Raven arrival.",
+      "words": [
+        {
+          "end": 183.171,
+          "score": 0.588,
+          "start": 182.711,
+          "word": "Washington"
+        },
+        {
+          "end": 183.432,
+          "score": 0.559,
+          "start": 183.191,
+          "word": "Center,"
+        },
+        {
+          "end": 184.152,
+          "score": 0.543,
+          "start": 183.512,
+          "word": "Southwest"
+        },
+        {
+          "end": 184.572,
+          "score": 0.869,
+          "start": 184.192,
+          "word": "1260,"
+        },
+        {
+          "end": 184.812,
+          "score": 0.713,
+          "start": 184.612,
+          "word": "320"
+        },
+        {
+          "end": 185.953,
+          "score": 0.568,
+          "start": 184.852,
+          "word": "descendant"
+        },
+        {
+          "end": 186.293,
+          "score": 0.534,
+          "start": 186.033,
+          "word": "via"
+        },
+        {
+          "end": 186.413,
+          "score": 0.814,
+          "start": 186.313,
+          "word": "the"
+        },
+        {
+          "end": 186.713,
+          "score": 0.55,
+          "start": 186.453,
+          "word": "Raven"
+        },
+        {
+          "end": 187.093,
+          "score": 0.944,
+          "start": 186.753,
+          "word": "arrival."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 191.054,
+      "start": 187.713,
+      "text": "Southwest 1260, Washington Center, Delta 325, summit at 2999.",
+      "words": [
+        {
+          "end": 188.253,
+          "score": 0.533,
+          "start": 187.713,
+          "word": "Southwest"
+        },
+        {
+          "end": 188.553,
+          "score": 0.788,
+          "start": 188.293,
+          "word": "1260,"
+        },
+        {
+          "end": 189.214,
+          "score": 0.512,
+          "start": 188.593,
+          "word": "Washington"
+        },
+        {
+          "end": 189.454,
+          "score": 0.218,
+          "start": 189.234,
+          "word": "Center,"
+        },
+        {
+          "end": 189.834,
+          "score": 0.495,
+          "start": 189.514,
+          "word": "Delta"
+        },
+        {
+          "end": 190.054,
+          "score": 0.647,
+          "start": 189.854,
+          "word": "325,"
+        },
+        {
+          "end": 190.474,
+          "score": 0.465,
+          "start": 190.094,
+          "word": "summit"
+        },
+        {
+          "end": 190.734,
+          "score": 0.603,
+          "start": 190.634,
+          "word": "at"
+        },
+        {
+          "end": 191.054,
+          "score": 0.789,
+          "start": 190.774,
+          "word": "2999."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 194.216,
+      "start": 193.055,
+      "text": "Copy, 2999, Southwest 1260.",
+      "words": [
+        {
+          "end": 193.335,
+          "score": 0.878,
+          "start": 193.055,
+          "word": "Copy,"
+        },
+        {
+          "end": 193.695,
+          "score": 0.741,
+          "start": 193.355,
+          "word": "2999,"
+        },
+        {
+          "end": 194.036,
+          "score": 0.341,
+          "start": 193.735,
+          "word": "Southwest"
+        },
+        {
+          "end": 194.216,
+          "score": 0.689,
+          "start": 194.056,
+          "word": "1260."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.25177557360042224,
+      "end": 209.137,
+      "start": 208.433,
+      "text": " Center, Southwest 1173.",
+      "words": [
+        {
+          "end": 208.675,
+          "score": 0.593,
+          "start": 208.433,
+          "word": "Center,"
+        },
+        {
+          "end": 208.996,
+          "score": 0.402,
+          "start": 208.695,
+          "word": "Southwest"
+        },
+        {
+          "end": 209.137,
+          "score": 0.885,
+          "start": 209.016,
+          "word": "1173."
+        }
+      ]
+    },
+    {
+      "avg_logprob": -0.25177557360042224,
+      "end": 209.579,
+      "start": 209.157,
+      "text": "See you again.",
+      "words": [
+        {
+          "end": 209.338,
+          "score": 0.438,
+          "start": 209.157,
+          "word": "See"
+        },
+        {
+          "end": 209.419,
+          "score": 0.034,
+          "start": 209.358,
+          "word": "you"
+        },
+        {
+          "end": 209.579,
+          "score": 0.262,
+          "start": 209.439,
+          "word": "again."
+        }
+      ]
+    }
+  ],
+  "decision": "aligned_word_matching",
+  "transcript": "Washington Center, Southwest 1173, 33.6, descending via the Raven 9.\nSouthwest 1173, Washington Center.\nSouthwest 1105, Washington Center, climb maintain for level 270, maintain 2909.\nUnited 745, 14,000, 270.\nUnited 746, Washington Center, climb maintain 5-0-2-7-0, maintain 2-9-0-9 2-9-0-9 2-7-0-9\nDelta 325, can I stay for stomach approach 121205?",
+  "transcription_segments": [
+    {
+      "avg_logprob": -0.2054687559604645,
+      "end": 21.023,
+      "start": 0.031,
+      "text": " Good day, Washington Center. Southwest 1173, 33.6 descending via the Raven line. Southwest 1173, Washington Center. Southwest 1105, are you up?"
+    },
+    {
+      "avg_logprob": -0.3772681389124163,
+      "end": 43.332,
+      "start": 21.293,
+      "text": " Yeah, we just got the handoff leveling here, 3, or sorry, 230, Southwest 1105. Southwest 1105, Washington Center, climb maintain for level 270, maintain 2909. Okay, 270 and .65, and that's currently... Roger, perfect, thank you. Yeah."
+    },
+    {
+      "avg_logprob": -0.2170608059780018,
+      "end": 93.991,
+      "start": 65.202,
+      "text": " Southwest 1173, last guy said he gave you a descend V over Yeager, you're about 4,000 feet high, are you able to catch up on the arrival? Yeah, we're looking good for now, Southwest 1173. Southwest 1105, call me, 185, level 300. Call me, 185, 300, Southwest 105."
+    },
+    {
+      "avg_logprob": -0.5132575757575758,
+      "end": 122.594,
+      "start": 94.109,
+      "text": " Blue Street 55... Blue Street 5544, climb maintain 5 level 270. 270, Blue Street 544. United 745, 14,000, 270."
+    },
+    {
+      "avg_logprob": -0.3335193544626236,
+      "end": 138.237,
+      "start": 124.805,
+      "text": " United 746, Washington Center, climb maintain 5-0-2-7-0, maintain 2-9-0-9 2-9-0-9 2-7-0-9"
+    },
+    {
+      "avg_logprob": -0.3536931809150811,
+      "end": 195.376,
+      "start": 171.127,
+      "text": " Delta 325, can I stay for stomach approach 121205? 2105, that's 325, get in. Washington Center, Southwest 1260, 320 descendant via the Raven arrival. Southwest 1260, Washington Center, Delta 325, summit at 2999. Copy, 2999, Southwest 1260."
+    },
+    {
+      "avg_logprob": -0.25177557360042224,
+      "end": 212.977,
+      "start": 208.353,
+      "text": " Center, Southwest 1173. See you again."
+    }
+  ]
+}
