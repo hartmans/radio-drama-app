@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 import yaml
 from carthage.dependency_injection import AsyncInjector
 
-from .cli import build_injector_from_namespace, initialize_arg_parser
+from .cli_utils import build_injector_from_namespace, initialize_arg_parser
 from .document import parse_production_file
 from .errors import DocumentError
 from .sound import SoundPlan, sound_plans_in

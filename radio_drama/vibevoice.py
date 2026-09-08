@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+import sys
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,12 @@ import numpy as np
 import soundfile as sf
 import torch
 from carthage.dependency_injection import inject
+# An uninstalled checkout uses the VibeVoice submodule. Wheels include that same
+# package at top level, without installing VibeVoice's conflicting metadata.
+_vibevoice_source = Path(__file__).resolve().parents[1] / "vibevoice"
+if (_vibevoice_source / "vibevoice" / "__init__.py").is_file():
+    sys.path.insert(0, str(_vibevoice_source))
+
 from vibevoice.modular.modeling_vibevoice_inference import (
     VibeVoiceForConditionalGenerationInference,
 )

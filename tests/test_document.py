@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-import radio_drama_app
+import radio_drama.cli as radio_drama_app
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError, SourceLocation
 

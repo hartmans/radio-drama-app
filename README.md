@@ -5,15 +5,26 @@ This app renders a production XML document into a WAV, FLAC, MP3, or Ogg radio d
 ## Quick Start
 
 ```console
+git submodule update --init vibevoice
 python -mvenv .venv
-.venv/bin/python install -r requirements.txt
+.venv/bin/python -m pip install .
 ```
+The build includes the existing `vibevoice` submodule's Python package,
+configuration files, and license directly, without installing the VibeVoice
+project's conflicting Transformers dependency pins. Qwen-TTS supplies the
+Transformers requirement. Source archives include the submodule's package too.
+
+The installed renderer is `radio_drama_app`. For an uninstalled checkout,
+`python /path/to/radio-drama-app/radio_drama_app.py ...` selects the source tree
+alongside that helper; its Python environment must already have the dependencies.
+The VibeVoice backend uses the repository's `vibevoice` submodule in this mode.
+
 You will need a copy of the VibeVoice-Large model, which has been removed by microsoft from Huggingface. See [community pages](https://github.com/vibevoice-community/vibevoice) for download instructions. The license of the model is clearly open weight; if you can obtain a copy its legality is clear.
 
 Render the included demo:
 
 ```bash
-.venv/bin/python radio_drama_app.py \
+.venv/bin/radio_drama_app \
   demo.xml \
   --voice-dir example_voices \
   --sounds-dir example_sounds \
@@ -59,7 +70,7 @@ The repository includes a small self-contained demo set:
 
 ## Command-Line Rendering
 
-The main renderer is `radio_drama_app.py`.
+The installed renderer is `radio_drama_app`; `radio_drama_app.py` is its source-tree helper.
 
 ```bash
 ~/ai/vibevoice/.venv/bin/python radio_drama_app.py INPUT.xml [options]

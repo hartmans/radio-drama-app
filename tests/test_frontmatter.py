@@ -10,7 +10,7 @@ import yaml
 from PIL import Image
 
 from radio_drama.cache import cache_directory_for_output
-from radio_drama.cli import initialize_arg_parser, resolved_output_path
+from radio_drama.cli_utils import initialize_arg_parser, resolved_output_path
 from radio_drama.document import parse_production_string
 from radio_drama.errors import DocumentError
 from radio_drama.frontmatter import (
@@ -21,7 +21,7 @@ from radio_drama.frontmatter import (
 )
 from radio_drama.podcast_guid import generate_podcast_guid
 from radio_drama.rendering import ProductionResult, RenderResult
-from radio_drama_app import main as render_main
+from radio_drama.cli import main as render_main
 
 
 def test_frontmatter_element_parses_all_optional_fields():

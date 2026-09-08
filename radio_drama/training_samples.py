@@ -13,7 +13,7 @@ from pathlib import Path
 import soundfile as sf
 
 from .audio import resample_audio
-from .cli import build_injector_from_namespace, initialize_arg_parser
+from .cli_utils import build_injector_from_namespace, initialize_arg_parser
 from .dialogue import DialogueAudio, DialogueLine, ScriptEvent, ScriptPlan
 from .document import parse_production_file
 from .errors import DocumentError

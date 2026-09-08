@@ -3,3 +3,7 @@ frontend/dist/
 frontend/node_modules/
 
 .venv
+
+build/
+dist/
+*.egg-info/
