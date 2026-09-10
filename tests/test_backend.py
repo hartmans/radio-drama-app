@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import io
 
 import numpy as np
@@ -8,91 +7,75 @@ import pytest
 from fastapi.testclient import TestClient
 from scipy.io import wavfile
 
-from radio_drama.backend import PresetAudioStore, available_preview_presets, create_app
+from radio_drama.backend import ExpressionCacheStore, create_app
+from radio_drama.effects import EffectChainRegistry
 from radio_drama.rendering import RenderResult
 
 
-def _base_result() -> RenderResult:
-    frames = 4096
-    ramp = np.linspace(-0.3, 0.3, frames, dtype=np.float32)
-    audio = np.column_stack((ramp, ramp[::-1]))
-    return RenderResult(audio=audio)
-
-
-def test_preset_audio_store_prepares_and_slices():
-    store = PresetAudioStore(base_result=_base_result(), sample_rate=48000)
-
-    prepared_names = asyncio.run(
-        store.prepare_presets([" none ", " narrator ", "indoor1", "narrator1"])
+@pytest.fixture
+def audio_store(tmp_path):
+    ramp = np.linspace(-0.3, 0.3, 4096, dtype=np.float32)
+    registry = EffectChainRegistry()
+    registry.add_from_expression("preview", "gain(line(6.0206))")
+    return ExpressionCacheStore(
+        base_result=RenderResult(audio=np.column_stack((ramp, ramp[::-1]))),
+        sample_rate=48000,
+        cache_dir=tmp_path,
+        effect_chains=registry,
     )
-    sliced = store.slice_preset("narrator", from_time=0.01)
-    dry_sliced = store.slice_preset("none", from_time=0.01)
-
-    assert prepared_names == ("none", "narrator", "indoor1")
-    assert sliced.audio.shape == (3616, 2)
-    assert np.shares_memory(sliced.audio, store.prepared_results["narrator"].audio)
-    assert np.shares_memory(dry_sliced.audio, store.base_result.audio)
-    assert np.allclose(dry_sliced.audio, store.base_result.audio[480:])
 
 
-@pytest.mark.parametrize(
-    "preset_name",
-    [preset_name for preset_name in available_preview_presets() if preset_name != "none"],
-)
-def test_built_in_presets_materially_change_audio(preset_name: str):
-    store = PresetAudioStore(base_result=_base_result(), sample_rate=48000)
+def test_backend_status_and_base_audio(audio_store):
+    with TestClient(create_app(audio_store)) as client:
+        response = client.get("/api/status")
+        assert response.status_code == 200
+        status = response.json()
+        assert status["preset_expressions"]["preview"] == "gain(line(6.0206))"
+        assert status["total_duration_seconds"] == pytest.approx(4096 / 48000)
+        assert status["sample_rate"] == 48000
+        audio_response = client.get(f"/api/cache/{status['base_audio_file']}")
 
-    asyncio.run(store.prepare_presets([preset_name]))
-    processed = store.prepared_results[preset_name].audio
-    base = store.base_result.audio
-    diff_rms = np.sqrt(np.mean(np.square(processed - base), dtype=np.float64))
-
-    assert diff_rms > 0.01
-
-
-def test_backend_audio_slice_requires_prepared_preset():
-    app = create_app(PresetAudioStore(base_result=_base_result(), sample_rate=48000))
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/audio-slice",
-            json={"preset_name": "narrator", "from_time": 0.0},
-        )
-
-    assert response.status_code == 409
-    assert "has not been prepared" in response.json()["detail"]
-
-
-def test_backend_prepare_and_slice_endpoints():
-    app = create_app(PresetAudioStore(base_result=_base_result(), sample_rate=48000))
-
-    with TestClient(app) as client:
-        available_response = client.get("/api/presets/available")
-        prepare_response = client.post(
-            "/api/presets/prepare",
-            json={"preset_names": ["none", "narrator", "outdoor2"]},
-        )
-        slice_response = client.post(
-            "/api/audio-slice",
-            json={"preset_name": "outdoor2", "from_time": 0.02},
-        )
-        dry_slice_response = client.post(
-            "/api/audio-slice",
-            json={"preset_name": "none", "from_time": 0.02},
-        )
-
-    assert available_response.status_code == 200
-    assert available_response.json()["preset_names"][0] == "none"
-    assert prepare_response.status_code == 200
-    assert prepare_response.json()["preset_names"] == ["none", "narrator", "outdoor2"]
-    assert slice_response.status_code == 200
-    assert dry_slice_response.status_code == 200
-    assert slice_response.headers["content-type"] == "audio/wav"
-
-    sample_rate, audio = wavfile.read(io.BytesIO(slice_response.content))
-    dry_sample_rate, dry_audio = wavfile.read(io.BytesIO(dry_slice_response.content))
+    assert audio_response.status_code == 200
+    sample_rate, audio = wavfile.read(io.BytesIO(audio_response.content))
     assert sample_rate == 48000
-    assert dry_sample_rate == 48000
-    assert audio.shape == (3136, 2)
-    assert dry_audio.shape == (3136, 2)
-    assert not np.allclose(audio, dry_audio)
+    np.testing.assert_array_equal(audio, audio_store.base_result.audio)
+
+
+def test_backend_applies_expression_and_reuses_cached_audio(audio_store, monkeypatch):
+    original = audio_store.base_result.audio.copy()
+    with TestClient(create_app(audio_store)) as client:
+        response = client.post("/api/apply-expression", json={"expression": "preview"})
+        assert response.status_code == 200
+        result = response.json()
+        assert result["duration_seconds"] == pytest.approx(4096 / 48000)
+        assert result["sample_rate"] == 48000
+        url = f"/api/cache/{result['filename']}.wav"
+        audio_response = client.get(url)
+        assert audio_response.status_code == 200
+        sample_rate, audio = wavfile.read(io.BytesIO(audio_response.content))
+        assert sample_rate == 48000
+        np.testing.assert_allclose(audio, original * 2, atol=1e-6)
+        np.testing.assert_array_equal(audio_store.base_result.audio, original)
+
+        def unexpected_evaluation(*args, **kwargs):
+            raise AssertionError("cached expressions must not be evaluated again")
+
+        monkeypatch.setattr("radio_drama.backend.app.eval_expression", unexpected_evaluation)
+        replay = client.post("/api/apply-expression", json={"expression": "preview"})
+        assert replay.status_code == 200
+        assert replay.json() == result
+        assert client.get(url).content == audio_response.content
+
+        partial = client.get(url, headers={"Range": "bytes=0-43"})
+        assert partial.status_code == 206
+        assert partial.content == audio_response.content[:44]
+
+
+@pytest.mark.parametrize("expression", ["unknown_preset", "gain(", "123"])
+def test_backend_rejects_invalid_expressions(audio_store, expression):
+    with TestClient(create_app(audio_store)) as client:
+        response = client.post("/api/apply-expression", json={"expression": expression})
+
+    assert response.status_code == 422
+    assert "Failed to apply expression" in response.json()["detail"]
+    assert sorted(path.name for path in audio_store.cache_dir.iterdir()) == ["_base.wav"]

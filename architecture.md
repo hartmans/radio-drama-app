@@ -373,11 +373,10 @@ The preset-preview backend is a thin diagnostic layer above the existing plannin
 Current backend contract:
 
 * `python -m radio_drama.backend <production_xml>` renders the production once at startup into an in-memory `RenderResult`; optional `--cut-before` and `--cut-after` mark bounds are applied to the shared production plan before that render
-* the backend keeps that base rendered output and prepares named preset variants on demand from the same base render
+* `GET /api/status` exposes the base audio filename, duration, sample rate, and available preset expressions; `POST /api/apply-expression` evaluates a preview expression against a copy of the base render and returns its cached audio key
 * the backend retains the production-scoped `EffectChainRegistry` after planning, so preview expressions use built-ins and `<preset-map>` additions or replacements from the production rather than a separate preset catalog
-* the preview backend also exposes a dry `none` option that returns slices from the unprocessed base render
-* preset preparation runs concurrently and reuses the same `EffectStage` interface as document-driven render-time presets
-* audio slice requests address a prepared preset plus a playback time, and the backend responds with a WAV stream starting at that point in the production
+* expression evaluation uses the same `EffectStage` interface as document-driven render-time presets; cached WAV identities include the base audio, sample rate, production presets, and expression
+* `/api/cache` serves the unprocessed `_base.wav` and complete expression WAVs with HTTP Range support; playback seeking is handled by the client, and the apply request’s `from_time` field is informational
 
 The backend exists to make preset evaluation easier. It should stay narrow and should not grow a second planning or rendering path separate from the main Python interfaces.
 
