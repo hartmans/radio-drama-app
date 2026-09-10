@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+import pytest
 import numpy as np
 import soundfile as sf
 from carthage.dependency_injection import InjectionKey
@@ -103,6 +104,64 @@ def test_vibevoice_resource_uses_shared_cache_manager_and_preserves_stem(
     payload = json.loads((cache_dir / f"{expected_stem}.meta").read_text(encoding="utf-8"))
     assert payload["frame_count"] == 2
     assert payload["sample_rate"] == 24000
+
+
+@pytest.mark.parametrize("cache_state", ["disabled", "missing", "valid", "invalid"])
+def test_registered_cache_misses_batch_when_rendered_sequentially(tmp_path, cache_state):
+    config = ProductionConfig(output_sample_rate=24000, output_channels=1, batch_size=4)
+    output_path = tmp_path / "render.wav" if cache_state != "disabled" else None
+    requests = [
+        request_from_normalized_script(f"Speaker 1: Line {index}.", ("anna.wav",))
+        for index in range(3)
+    ]
+    cached_timing = ScriptTiming((DialogueLineTiming(0.0, 2 / 24000),))
+    if cache_state in {"valid", "invalid"}:
+        collection = CacheCollection("vibevoice", Path(f"{output_path}.cache"))
+        key = collection.key_for(requests[1])
+        wav_path = collection.path_for_subtype(key, "wav")
+        wav_path.parent.mkdir(parents=True)
+        sf.write(wav_path, np.array([0.25, -0.25], dtype=np.float32), 24000)
+        collection.path_for_subtype(key, "meta").write_text(
+            json.dumps({
+                "sample_rate": 24000,
+                "alignment_key": "native:test",
+                "dialogue_line_spans": [[0.0, 2 / 24000]],
+            }) if cache_state == "valid" else "invalid metadata",
+            encoding="utf-8",
+        )
+
+    class BatchingResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.batches = []
+            self._sample_rate = 24000
+
+        def _render_batch_native_sync(self, batch):
+            self.batches.append([registration.request for registration in batch])
+            return [np.array([0.25, -0.25], dtype=np.float32) for _ in batch]
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, output_path=output_path)
+        try:
+            resource = await ainjector(BatchingResource)
+            registrations = [await resource.register_request(request) for request in requests]
+            assert resource.batches == []
+            first = await registrations[0].render()
+            expected = [requests[0], requests[2]] if cache_state == "valid" else requests
+            assert resource.batches == [expected]
+            results = [first] + [await registration.render() for registration in registrations[1:]]
+            assert resource.batches == [expected]
+            assert all(result.frame_count == 2 for result in results)
+            assert await registrations[0].render() is first
+            if cache_state == "valid":
+                assert results[1].timing == cached_timing
+                assert await registrations[1].ensure_timing(
+                    requests[1].dialogue_contents, results[1]
+                ) == cached_timing
+        finally:
+            injector.close()
+
+    asyncio.run(runner())
 
 
 def test_vibevoice_adopts_legacy_wav_without_rewriting_audio(monkeypatch, tmp_path: Path):

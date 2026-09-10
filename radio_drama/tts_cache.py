@@ -16,7 +16,9 @@ from .rendering import BackendTtsResult, DialogueLineTiming, ScriptRenderResult,
 
 
 if TYPE_CHECKING:
-    from .dialogue import ScriptEvent, ScriptRenderRequest, TtsResource
+    from .dialogue import (
+        BackendRegisteredTtsRequest, ScriptEvent, ScriptRenderRequest, TtsResource,
+    )
 
 
 _ALIGNMENT_VERSION = "script-timing-v4"
@@ -29,10 +31,27 @@ class CachedTtsRequest:
     resource: "TtsResource"
     request: "ScriptRenderRequest"
     _result_task: asyncio.Task[ScriptRenderResult] | None = None
+    _backend_registration: "BackendRegisteredTtsRequest | None" = None
     _backend_result: BackendTtsResult | None = None
     _wav_path: Path | None = None
     _meta_path: Path | None = None
     _alignment_key: str | None = None
+
+    @classmethod
+    async def register(
+        cls, resource: "TtsResource", request: "ScriptRenderRequest"
+    ) -> "CachedTtsRequest":
+        """Resolve cached audio/timing and queue misses before any render starts."""
+        registration = cls(resource=resource, request=request)
+        if request.dialogue_lines:
+            registration._backend_result = await asyncio.to_thread(
+                registration._load_cached
+            )
+            if registration._backend_result is None:
+                registration._backend_registration = await resource.register_backend_request(
+                    request
+                )
+        return registration
 
     async def render(self) -> ScriptRenderResult:
         if self._result_task is None:
@@ -72,17 +91,13 @@ class CachedTtsRequest:
             return ScriptRenderResult.empty(
                 channels=self.resource.config.resolved_output_channels
             )
-        cached = await asyncio.to_thread(self._load_cached)
-        if cached is None:
-            registration = await self.resource.register_backend_request(self.request)
-            backend_result = await registration.render()
-            self._backend_result = backend_result
+        if self._backend_result is None:
+            assert self._backend_registration is not None
+            self._backend_result = await self._backend_registration.render()
             await asyncio.to_thread(self._store_backend_result)
             persisted = await asyncio.to_thread(self._load_cached)
             if persisted is not None:
                 self._backend_result = persisted
-        else:
-            self._backend_result = cached
 
         backend_result = self._backend_result
         assert backend_result is not None

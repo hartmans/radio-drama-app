@@ -65,11 +65,11 @@ class TtsResource(AsyncInjectable, ABC):
         self,
         request: ScriptRenderRequest | None,
     ) -> RegisteredTtsRequest:
-        """Register one request through the backend-independent TTS cache."""
+        """Resolve cached audio and queue a miss for lazy, batched generation."""
 
         from .tts_cache import CachedTtsRequest
 
-        return CachedTtsRequest(
+        return await CachedTtsRequest.register(
             resource=self,
             request=request or ScriptRenderRequest(dialogue_lines=[]),
         )
