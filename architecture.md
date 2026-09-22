@@ -203,7 +203,7 @@ Current resource contract:
 * `ScriptTiming` contains an ordered start/end span for every synthesized `DialogueLine`; native and forced-alignment timing use this same representation, while marker frames remain the downstream slicing interface
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines, sharing a slot for the same resolved reference path and gain regardless of authored speaker name or output effects
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
-* all speech backends preprocess incoming reference voice audio through the shared voice-preprocess chain before handing it to the model; that chain is implementation-facing and currently corresponds to ffmpeg `loudnorm` defaults, followed by the speaker reference gain
+* all speech backends preprocess incoming reference voice audio through the shared internal voice-preprocess chain before handing it to the model, followed by the speaker reference gain
 * requests are registered during planning and may remain pending until some caller renders one of them
 * registration validates cached audio and loads available timing before returning; cache misses are queued with the backend immediately, so rendering any registered miss can batch all previously registered misses even when callers render sequentially
 * speech generation and forced alignment remain lazy; forced-alignment reuse is checked against the requested projection when timing is needed
@@ -342,7 +342,7 @@ Current effects contract:
   one branch from mutating another branch's source
 * effect-chain expressions return the `effect_chain` expression type, which accepts any `EffectStage`; presets remain named `EffectStage` instances rather than requiring a separate runtime wrapper
 * only factories explicitly decorated with `@effect_chain_function` enter `effect_chain_variables`; generic FFmpeg, numpy, scipy, and Pedalboard stage constructors are not document-visible
-* the fixed `master_loudnorm()` factory exposes the built-in mastering stage without accepting an authored FFmpeg graph; voice preprocessing remains internal
+* the built-in mastering factory is exposed to effect expressions without exposing an authored FFmpeg graph; voice preprocessing remains internal
 * the restricted expression grammar admits direct calls, named keyword arguments, strings, recursively validated tuples, `|`, and effect-stage `*` / `+`; it continues to reject attributes, subscripts, lambdas, argument unpacking, and arbitrary code
 * stages may be backed by plain Python/numpy, `scipy.signal`, Pedalboard, or FFmpeg
 * `control_array(value, frame_count)` is the shared implementation utility for frame-varying effect controls; it coerces numbers and `ArrayExpression` objects to a one-dimensional `float32` array with exactly one value per frame, and is deliberately not registered as a document-visible effect-chain function
@@ -355,7 +355,7 @@ Current effects contract:
 
 Current built-in presets:
 
-* `master`: the production-level mastering pass, currently just FFmpeg `loudnorm`
+* `master`: the production-level mastering stage
 * `narrator`, `thoughts`: inner-monologue or produced narration variants with center-focused stereo, stronger leveling, and abstract ambience
 * `narrator_nofocus`: the `narrator` voicing without the center-focusing mid/side stage, useful when later automation such as `pan` should control image placement
 * `outdoor1`: a lighter open-air variant with extra width and sparse reflections

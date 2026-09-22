@@ -190,6 +190,25 @@ pan(line(0 * s, -1, 1 * s, 1))
 
 ---
 
+## master_loudnorm
+
+Normalizes the complete input in two FFmpeg passes. The first pass measures the
+input; the second uses those measurements with `linear=true`. The keyword-only
+arguments are integrated loudness `i` (default `-16` LUFS), loudness range
+`lra` (default `11` LU), and true peak `tp` (default `-1.0` dBTP).
+
+The built-in `master` preset is `master_loudnorm()` and can be replaced through
+`<preset-map>`. A custom mastering target can be written as:
+
+```python
+master_loudnorm(i=-18, lra=7, tp=-2)
+```
+
+Reference-voice preprocessing uses a separate internal dynamic loudnorm pass
+with `I=-20`, `LRA=6`, and `TP=-2`; it is not exposed to effect expressions.
+
+---
+
 ## gain
 
 Applies decibel gain controlled by a number or array expression. Positive

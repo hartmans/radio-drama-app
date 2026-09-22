@@ -28,9 +28,11 @@ from radio_drama.effects import (
     effect_chain_variables,
     gain,
     load_preprocessed_voice_reference,
+    master_loudnorm,
     modulated_delay,
     numpy_stage,
     pan,
+    voice_loudnorm,
 )
 from radio_drama.errors import DocumentError
 from radio_drama.expressions import line
@@ -936,8 +938,20 @@ def test_effect_chain_variables_include_presets_and_aliases():
 
     assert variables["phone"] is registry["phone"]
     assert variables["narrator1"] is registry["narrator"]
+    assert variables["master_loudnorm"] is master_loudnorm
     assert "ffmpeg_filter_stage" not in variables
     assert "voice_loudnorm" not in variables
+
+    custom_master = registry.add_from_expression(
+        "custom_master",
+        "master_loudnorm(i=-18, lra=7, tp=-2.5)",
+    )
+    assert custom_master.i == -18
+    assert custom_master.lra == 7
+    assert custom_master.tp == -2.5
+    assert voice_loudnorm().filter_graph_factory() == (
+        "loudnorm=I=-20:LRA=6:TP=-2:linear=false"
+    )
 
 
 def test_effect_chain_registry_evaluates_replacements_in_order():
@@ -1075,9 +1089,14 @@ def test_master_effect_chain_preserves_output_format():
         pytest.skip("ffmpeg not available")
 
     chain = EffectChainRegistry()["master"]
-    audio = np.linspace(-0.2, 0.2, 1024, dtype=np.float32)
+    assert chain.i == -16
+    assert chain.lra == 11
+    assert chain.tp == -1.0
+    audio = np.sin(
+        2 * np.pi * 440 * np.arange(3 * 48000, dtype=np.float32) / 48000
+    ) * np.float32(0.2)
     stereo_audio = np.column_stack([audio, audio])
     chain.apply(stereo_audio, sample_rate=48000)
 
-    assert stereo_audio.shape == (1024, 2)
+    assert stereo_audio.shape == (audio.shape[0], 2)
     assert stereo_audio.dtype == np.float32

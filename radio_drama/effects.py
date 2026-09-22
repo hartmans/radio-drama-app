@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import subprocess
 import tempfile
@@ -20,7 +21,7 @@ from .expressions import ArrayExpression, coerce_array_exp, eval_expression
 from .planning import PlanningNode
 
 
-VOICE_PREPROCESS_VERSION = "loudnorm-v1"
+VOICE_PREPROCESS_VERSION = "loudnorm-v2"
 
 
 @runtime_checkable
@@ -223,6 +224,115 @@ class FFmpegFilterEffectStage(_ComposableEffectStage):
         if rendered_sample_rate != sample_rate:
             raise RuntimeError(
                 f"ffmpeg effect stage changed sample rate from {sample_rate} to {rendered_sample_rate}"
+            )
+        working[...] = normalize_audio_array(rendered)
+        _copy_back(audio, working)
+
+
+@dataclass(frozen=True, slots=True)
+class LoudnormEffectStage(_ComposableEffectStage):
+    """FFmpeg loudness normalization with a measured linear render pass."""
+
+    i: float
+    lra: float
+    tp: float
+
+    def _analysis_filter(self) -> str:
+        return f"loudnorm=I={self.i}:LRA={self.lra}:TP={self.tp}:print_format=json"
+
+    def _render_filter(self, measurements: Mapping[str, str]) -> str:
+        return (
+            f"loudnorm=I={self.i}:LRA={self.lra}:TP={self.tp}"
+            f":measured_I={measurements['input_i']}"
+            f":measured_LRA={measurements['input_lra']}"
+            f":measured_TP={measurements['input_tp']}"
+            f":measured_thresh={measurements['input_thresh']}"
+            f":offset={measurements['target_offset']}:linear=true"
+        )
+
+    @staticmethod
+    def _run_ffmpeg(
+        command: list[str],
+        *,
+        phase: str,
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("ffmpeg is required for loudness normalization") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.strip() or exc.stdout.strip()
+            raise RuntimeError(f"ffmpeg loudnorm {phase} failed: {stderr}") from exc
+
+    def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
+        from scipy.io import wavfile
+
+        if audio.shape[0] == 0:
+            return
+        working = normalize_audio_array(audio)
+        output_channels = 1 if working.ndim == 1 else working.shape[1]
+        with tempfile.TemporaryDirectory(prefix="radio-drama-loudnorm-") as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "input.wav"
+            output_path = temp_path / "output.wav"
+            wavfile.write(input_path, sample_rate, working)
+            analysis = self._run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "info",
+                    "-i",
+                    str(input_path),
+                    "-af",
+                    self._analysis_filter(),
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                phase="analysis",
+            )
+            try:
+                json_start = analysis.stderr.rindex("{")
+                json_end = analysis.stderr.index("}", json_start) + 1
+                measurements = json.loads(analysis.stderr[json_start:json_end])
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise RuntimeError(
+                    "ffmpeg loudnorm analysis did not return measurements"
+                ) from exc
+            self._run_ffmpeg(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-af",
+                    self._render_filter(measurements),
+                    "-ar",
+                    str(sample_rate),
+                    "-ac",
+                    str(output_channels),
+                    "-c:a",
+                    "pcm_f32le",
+                    str(output_path),
+                ],
+                phase="render",
+            )
+            rendered_sample_rate, rendered = wavfile.read(output_path)
+        if rendered_sample_rate != sample_rate:
+            raise RuntimeError(
+                "ffmpeg loudnorm changed sample rate "
+                f"from {sample_rate} to {rendered_sample_rate}"
             )
         working[...] = normalize_audio_array(rendered)
         _copy_back(audio, working)
@@ -792,16 +902,21 @@ def pan(pan_expression: ArrayExpression | Real) -> EffectStage:
 
 
 @effect_chain_function
-def master_loudnorm() -> EffectStage:
-    """Return the fixed production mastering stage exposed to expressions."""
+def master_loudnorm(
+    *,
+    i: float = -16,
+    lra: float = 11,
+    tp: float = -1.0,
+) -> EffectStage:
+    """Return a measured, linear loudness-normalization mastering stage."""
 
-    return ffmpeg_filter_stage(lambda: "loudnorm=I=-16:TP=-1.5:LRA=11")
+    return LoudnormEffectStage(i=i, lra=lra, tp=tp)
 
 
 def voice_loudnorm() -> EffectStage:
-    """Return the internal fixed reference-voice normalization stage."""
+    """Return the internal dynamic reference-voice normalization stage."""
 
-    return ffmpeg_filter_stage(lambda: "loudnorm")
+    return ffmpeg_filter_stage(lambda: "loudnorm=I=-20:LRA=6:TP=-2:linear=false")
 
 
 _PRESET_EXPRESSIONS: Mapping[str, str] = {
