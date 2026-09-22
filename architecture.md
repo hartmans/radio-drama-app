@@ -166,7 +166,6 @@ Planning rule for presets:
 * higher-level production planning therefore deals in `AudioPlan` rather than bare `ScriptPlan`
 * a script resolves its `SpeakerMapPlan` from the production injector at planning time and raises a document error if no speaker map has been planned
 * a script selects its speech backend by resolving `InjectionKey(TtsResource, tts=<name>)`; an explicit `<script tts="...">` wins, otherwise the script inherits `<production tts="...">`, whose backward-compatible default is `vibevoice`, while additional names may be supplied by application or proxy configuration
-* `<sound-script>` and `AudioScriptPlan` have been removed; all dialogue uses `<script>`, whose sources can be mixed line-by-line
 * the top-level production render is mastered through the named `master` preset after production trimming
 * `ComposeAudioPlan` lays out automatic-start children first, gathers their parent-scope marks, resolves each explicit child's `start`, and then lays out explicit-start children with those marks available as incoming scope
 
@@ -223,8 +222,6 @@ Current resource contract:
 * every new TTS engine must honor speaker gain and consume reference audio processed through the shared voice-preprocessing chain; proxy engines satisfy both requirements by consuming the host-prepared mounted reference WAVs
 * proxy engines receive all currently pending scripts together and may batch model-native work at either script or line granularity when their inference API permits it; an upstream batch-size-one decoder may instead serialize inference on one resident model while caching reusable speaker features
 * line-oriented proxy engines may use `radio_drama_tts_container` helpers to flatten dialogue across pending scripts, concatenate model-native WAV segments, and derive exact line spans while preserving script result boundaries
-* the Higgs proxy keeps the Transformers model resident and performs line-oriented voice cloning directly; its upstream decoder is single-item, while its audio tokenizer is an independent float32 component used for both reference encoding and waveform decoding
-* the F5-TTS proxy keeps the official v1 Base model and Vocos vocoder resident, uses the host-supplied reference transcript, and serializes its single-item high-level inference API; radio-drama remains responsible for multi-speaker ordering rather than using F5-TTS's concatenation-oriented multi-speaker syntax
 * `CacheManager` is the production-scoped mapping from cache type names such as `vibevoice` and `qwentts` to `CacheCollection` objects
 * `CacheManager` derives the shared cache root from the production `output_path`, while still allowing a direct `InjectionKey("cache_dir")` override for callers that need to place the cache elsewhere
 * output encoding is not part of cache identity: the shared helper normalizes `.wav`, `.flac`, `.mp3`, `.ogg`, and `.m4a` outputs to the sibling `<stem>.wav.cache`, and application, backend, and REPL injectors all reach that rule through `CacheManager`
