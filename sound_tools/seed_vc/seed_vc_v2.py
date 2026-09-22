@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Seed-VC inference in its isolated Podman container."""
+"""Run Seed-VC v2 inference in its isolated Podman container."""
 
 import argparse
 import os
@@ -14,14 +14,14 @@ def _existing_file(value):
     """Return an absolute input path or report a useful argparse error."""
     path = Path(value).expanduser().resolve()
     if not path.is_file():
-        raise argparse.ArgumentTypeError(f"audio file does not exist: {value}")
+        raise argparse.ArgumentTypeError(f"file does not exist: {value}")
     return path
 
 
 def parser():
-    """Describe the stable host wrapper and the upstream inference controls."""
+    """Describe the host wrapper and upstream v2 inference controls."""
     result = argparse.ArgumentParser(
-        description="Convert a source recording to a reference voice with Seed-VC."
+        description="Convert a source recording with the Seed-VC v2 model."
     )
     result.add_argument("--source", required=True, type=_existing_file)
     result.add_argument("--target", required=True, type=_existing_file,
@@ -30,19 +30,23 @@ def parser():
                         help="directory in which Seed-VC writes the converted WAV")
     result.add_argument("--diffusion-steps", type=int, default=30)
     result.add_argument("--length-adjust", type=float, default=1.0)
-    result.add_argument("--inference-cfg-rate", type=float, default=0.7)
-    result.add_argument("--f0-condition", choices=("True", "False"), default="False")
-    result.add_argument("--auto-f0-adjust", choices=("True", "False"), default="False")
-    result.add_argument("--semi-tone-shift", type=int, default=0)
-    result.add_argument("--fp16", choices=("True", "False"), default="True")
-    result.add_argument("--checkpoint", type=_existing_file)
-    result.add_argument("--config", type=_existing_file)
+    result.add_argument("--compile", action="store_true")
+    result.add_argument("--intelligibility-cfg-rate", type=float, default=0.7)
+    result.add_argument("--similarity-cfg-rate", type=float, default=0.7)
+    result.add_argument("--top-p", type=float, default=0.9)
+    result.add_argument("--temperature", type=float, default=1.0)
+    result.add_argument("--repetition-penalty", type=float, default=1.0)
+    result.add_argument("--convert-style", choices=("True", "False"), default="False")
+    result.add_argument("--anonymization-only", choices=("True", "False"),
+                        default="False")
+    result.add_argument("--ar-checkpoint-path", type=_existing_file)
+    result.add_argument("--cfm-checkpoint-path", type=_existing_file)
     result.add_argument("--image", default=os.environ.get("SEED_VC_IMAGE", DEFAULT_IMAGE))
     return result
 
 
 def podman_command(args):
-    """Translate host paths and inference options into the container contract."""
+    """Translate host paths and v2 options into the container contract."""
     output = args.output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_container = f"/input/source{args.source.suffix}"
@@ -56,32 +60,34 @@ def podman_command(args):
         "-v", f"{output}:/output:Z",
     ]
     inference_args = [
-        "/opt/seed-vc/inference.py",
+        "/opt/seed-vc/inference_v2.py",
         "--source", source_container,
         "--target", target_container,
         "--output", "/output",
         "--diffusion-steps", str(args.diffusion_steps),
         "--length-adjust", str(args.length_adjust),
-        "--inference-cfg-rate", str(args.inference_cfg_rate),
-        "--f0-condition", args.f0_condition,
-        "--auto-f0-adjust", args.auto_f0_adjust,
-        "--semi-tone-shift", str(args.semi_tone_shift),
-        "--fp16", args.fp16,
+        "--intelligibility-cfg-rate", str(args.intelligibility_cfg_rate),
+        "--similarity-cfg-rate", str(args.similarity_cfg_rate),
+        "--top-p", str(args.top_p),
+        "--temperature", str(args.temperature),
+        "--repetition-penalty", str(args.repetition_penalty),
+        "--convert-style", args.convert_style,
+        "--anonymization-only", args.anonymization_only,
     ]
-    if args.checkpoint is not None:
-        command.extend(("-v", f"{args.checkpoint}:/input/checkpoint.pth:ro,Z"))
-        inference_args.extend(("--checkpoint", "/input/checkpoint.pth"))
-    if args.config is not None:
-        command.extend(("-v", f"{args.config}:/input/config.yml:ro,Z"))
-        inference_args.extend(("--config", "/input/config.yml"))
+    if args.compile:
+        inference_args.extend(("--compile", "True"))
+    if args.ar_checkpoint_path is not None:
+        command.extend(("-v", f"{args.ar_checkpoint_path}:/input/ar.pth:ro,Z"))
+        inference_args.extend(("--ar-checkpoint-path", "/input/ar.pth"))
+    if args.cfm_checkpoint_path is not None:
+        command.extend(("-v", f"{args.cfm_checkpoint_path}:/input/cfm.pth:ro,Z"))
+        inference_args.extend(("--cfm-checkpoint-path", "/input/cfm.pth"))
     return command + ["--entrypoint", "python3", args.image] + inference_args
 
 
 def main():
     """Parse the host CLI and return Seed-VC's process status."""
     args = parser().parse_args()
-    if (args.checkpoint is None) != (args.config is None):
-        parser().error("--checkpoint and --config must be supplied together")
     return subprocess.run(podman_command(args), check=False).returncode
 
 

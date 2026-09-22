@@ -7,3 +7,7 @@ build:
 # just run --source source.wav --target reference.wav --output converted
 run *args:
     python3 seed_vc.py {{args}}
+
+# Run Seed-VC v2 with its accent/style and dual-CFG controls.
+run-v2 *args:
+    python3 seed_vc_v2.py {{args}}

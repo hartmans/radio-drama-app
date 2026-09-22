@@ -20,8 +20,8 @@ starts the REPL with `--network=none`, a GPU, the current tool directory as
 * `moss_voice_generator` uses MOSS-VoiceGenerator for text plus a free-form
   voice-description instruction.  It uses `/srv/ai/huggingface-cache`.
 * `seed_vc` converts the performance in a source recording to the voice in a
-  reference recording. Its models are staged into the image from a persistent
-  Podman build cache.
+  reference recording. Both v1 and v2 models are staged into the image from a
+  persistent Podman build cache.
 
 For example, after `just run`:
 
@@ -39,8 +39,11 @@ later image rebuilds. Pass the upstream inference controls through its wrapper:
 cd sound_tools/seed_vc
 just build
 just run --source source.wav --target reference.wav --output converted
+just run-v2 --source source.wav --target reference.wav --output converted-v2
 ```
 
 The source and reference are mounted read-only, the output directory is mounted
 writable, and inference runs without network access. Use `python3 seed_vc.py
 --help` for pitch conditioning, diffusion, and length controls.
+Use `python3 seed_vc_v2.py --help` for v2's intelligibility, similarity,
+sampling, style-conversion, and anonymization controls.

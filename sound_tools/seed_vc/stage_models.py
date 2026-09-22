@@ -1,4 +1,4 @@
-"""Download every model used by Seed-VC v1 inference into a reusable cache."""
+"""Download every model used by Seed-VC v1 and v2 into a reusable cache."""
 
 from pathlib import Path
 import os
@@ -16,6 +16,8 @@ for filename in (
     "config_dit_mel_seed_uvit_whisper_small_wavenet.yml",
     "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
     "config_dit_mel_seed_uvit_whisper_base_f0_44k.yml",
+    "v2/cfm_small.pth",
+    "v2/ar_base.pth",
 ):
     hf_hub_download("Plachta/Seed-VC", filename=filename, cache_dir=checkpoint_dir)
 
@@ -25,11 +27,16 @@ hf_hub_download(
 hf_hub_download(
     "lj1995/VoiceConversionWebUI", filename="rmvpe.pt", cache_dir=checkpoint_dir
 )
+for filename in ("bsq32/bsq32_light.pth", "bsq2048/bsq2048_light.pth"):
+    hf_hub_download(
+        "Plachta/ASTRAL-quantization", filename=filename, cache_dir=checkpoint_dir
+    )
 snapshot_download(
     "openai/whisper-small",
     cache_dir=hub_cache,
     allow_patterns=("*.json", "*.txt", "*.model", "model.safetensors"),
 )
+snapshot_download("facebook/hubert-large-ll60k", cache_dir=hub_cache)
 snapshot_download("nvidia/bigvgan_v2_22khz_80band_256x", cache_dir=hub_cache)
 snapshot_download("nvidia/bigvgan_v2_44khz_128band_512x", cache_dir=hub_cache)
 
