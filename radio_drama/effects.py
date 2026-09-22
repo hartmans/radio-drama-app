@@ -229,6 +229,19 @@ class FFmpegFilterEffectStage(_ComposableEffectStage):
         _copy_back(audio, working)
 
 
+def _output_loudnorm_diagnostic(message: str) -> None:
+    """Emit mastering guidance through one replaceable output boundary."""
+
+    print(message)
+
+
+@dataclass(frozen=True, slots=True)
+class _LoudnessCandidate:
+    render_seconds: float
+    severity: float
+    reasons: tuple[str, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class LoudnormEffectStage(_ComposableEffectStage):
     """FFmpeg loudness normalization with a measured linear render pass."""
@@ -247,8 +260,50 @@ class LoudnormEffectStage(_ComposableEffectStage):
             f":measured_LRA={measurements['input_lra']}"
             f":measured_TP={measurements['input_tp']}"
             f":measured_thresh={measurements['input_thresh']}"
-            f":offset={measurements['target_offset']}:linear=true"
+            f":offset={measurements['target_offset']}"
+            ":linear=true:print_format=json"
         )
+
+    @staticmethod
+    def _parse_measurements(stderr: str) -> Mapping[str, str]:
+        try:
+            json_start = stderr.rindex("{")
+            json_end = stderr.index("}", json_start) + 1
+            return json.loads(stderr[json_start:json_end])
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "ffmpeg loudnorm analysis did not return measurements"
+            ) from exc
+
+    @staticmethod
+    def _read_metadata(path: Path, key: str) -> dict[int, float]:
+        values: dict[int, float] = {}
+        render_seconds: float | None = None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("frame:"):
+                render_seconds = float(line.rsplit("pts_time:", 1)[1])
+            elif render_seconds is not None and line.startswith(f"{key}="):
+                values[round(render_seconds * 10)] = float(line.split("=", 1)[1])
+        return values
+
+    @staticmethod
+    def _select_candidates(
+        candidates: Sequence[_LoudnessCandidate],
+    ) -> list[_LoudnessCandidate]:
+        selected: list[_LoudnessCandidate] = []
+        for candidate in sorted(
+            candidates,
+            key=lambda item: item.severity,
+            reverse=True,
+        ):
+            if all(
+                abs(candidate.render_seconds - prior.render_seconds) >= 10.0
+                for prior in selected
+            ):
+                selected.append(candidate)
+                if len(selected) == 10:
+                    break
+        return selected
 
     @staticmethod
     def _run_ffmpeg(
@@ -268,6 +323,106 @@ class LoudnormEffectStage(_ComposableEffectStage):
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr.strip() or exc.stdout.strip()
             raise RuntimeError(f"ffmpeg loudnorm {phase} failed: {stderr}") from exc
+
+    def _diagnose_dynamic_mode(
+        self,
+        input_path: Path,
+        temp_path: Path,
+        measurements: Mapping[str, str],
+    ) -> None:
+        input_i = float(measurements["input_i"])
+        input_lra = float(measurements["input_lra"])
+        input_tp = float(measurements["input_tp"])
+        linear_gain = self.i - input_i
+        lra_failed = input_lra > self.lra
+        tp_failed = input_tp + linear_gain > self.tp
+        failed_constraints = [
+            name
+            for name, failed in (("LRA", lra_failed), ("TP", tp_failed))
+            if failed
+        ]
+        reason = " and ".join(failed_constraints) or "measurement eligibility"
+        _output_loudnorm_diagnostic(
+            f"master_loudnorm: FFmpeg used dynamic mode; linear {reason} constraint failed"
+        )
+        if not failed_constraints:
+            return
+
+        loudness_path = temp_path / "loudness-metadata.txt"
+        peaks_path = temp_path / "peak-metadata.txt"
+        filter_graph = (
+            "[0:a]ebur128=metadata=1,"
+            f"ametadata=mode=print:file={loudness_path}[loudness];"
+            "[0:a]aresample=192000,asetnsamples=n=19200,"
+            "astats=metadata=1:reset=1:measure_perchannel=none:"
+            "measure_overall=Peak_level,"
+            f"ametadata=mode=print:file={peaks_path}[peaks]"
+        )
+        self._run_ffmpeg(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(input_path),
+                "-filter_complex",
+                filter_graph,
+                "-map",
+                "[loudness]",
+                "-f",
+                "null",
+                str(temp_path / "loudness-null"),
+                "-map",
+                "[peaks]",
+                "-f",
+                "null",
+                str(temp_path / "peaks-null"),
+            ],
+            phase="diagnostics",
+        )
+        candidates: dict[int, _LoudnessCandidate] = {}
+        if lra_failed:
+            short_term = self._read_metadata(loudness_path, "lavfi.r128.S")
+            half_target_lra = self.lra / 2
+            threshold = float(measurements["input_thresh"])
+            for tick, loudness in short_term.items():
+                if loudness < threshold:
+                    continue
+                excess = abs(loudness - input_i) - half_target_lra
+                if excess > 0:
+                    direction = "loud" if loudness > input_i else "quiet"
+                    candidates[tick] = _LoudnessCandidate(
+                        render_seconds=tick / 10,
+                        severity=excess,
+                        reasons=(f"LRA {direction} by {excess:.1f} LU",),
+                    )
+        if tp_failed:
+            peaks = self._read_metadata(peaks_path, "lavfi.astats.Overall.Peak_level")
+            for tick, peak in peaks.items():
+                excess = peak + linear_gain - self.tp
+                if excess <= 0:
+                    continue
+                reason = f"TP over by {excess:.1f} dB"
+                existing = candidates.get(tick)
+                if existing is None:
+                    candidates[tick] = _LoudnessCandidate(
+                        render_seconds=tick / 10,
+                        severity=excess,
+                        reasons=(reason,),
+                    )
+                else:
+                    candidates[tick] = _LoudnessCandidate(
+                        render_seconds=existing.render_seconds,
+                        severity=max(existing.severity, excess),
+                        reasons=(*existing.reasons, reason),
+                    )
+        for candidate in self._select_candidates(tuple(candidates.values())):
+            _output_loudnorm_diagnostic(
+                f"master_loudnorm candidate render_seconds="
+                f"{candidate.render_seconds:.1f}: {', '.join(candidate.reasons)}"
+            )
 
     def apply(self, audio: np.ndarray, *, sample_rate: int) -> None:
         from scipy.io import wavfile
@@ -298,21 +453,14 @@ class LoudnormEffectStage(_ComposableEffectStage):
                 ],
                 phase="analysis",
             )
-            try:
-                json_start = analysis.stderr.rindex("{")
-                json_end = analysis.stderr.index("}", json_start) + 1
-                measurements = json.loads(analysis.stderr[json_start:json_end])
-            except (ValueError, json.JSONDecodeError) as exc:
-                raise RuntimeError(
-                    "ffmpeg loudnorm analysis did not return measurements"
-                ) from exc
-            self._run_ffmpeg(
+            measurements = self._parse_measurements(analysis.stderr)
+            render = self._run_ffmpeg(
                 [
                     "ffmpeg",
                     "-nostdin",
                     "-hide_banner",
                     "-loglevel",
-                    "error",
+                    "info",
                     "-y",
                     "-i",
                     str(input_path),
@@ -328,6 +476,9 @@ class LoudnormEffectStage(_ComposableEffectStage):
                 ],
                 phase="render",
             )
+            render_measurements = self._parse_measurements(render.stderr)
+            if render_measurements["normalization_type"] == "dynamic":
+                self._diagnose_dynamic_mode(input_path, temp_path, measurements)
             rendered_sample_rate, rendered = wavfile.read(output_path)
         if rendered_sample_rate != sample_rate:
             raise RuntimeError(

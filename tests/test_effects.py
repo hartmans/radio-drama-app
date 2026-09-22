@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -1100,3 +1101,62 @@ def test_master_effect_chain_preserves_output_format():
 
     assert stereo_audio.shape == (audio.shape[0], 2)
     assert stereo_audio.dtype == np.float32
+
+
+def test_master_loudnorm_reports_combined_spaced_candidates(monkeypatch, tmp_path):
+    stage = master_loudnorm()
+    messages = []
+
+    def fake_run_ffmpeg(command, *, phase):
+        del command
+        assert phase == "diagnostics"
+        (tmp_path / "loudness-metadata.txt").write_text(
+            """frame:0 pts:0 pts_time:5.0
+lavfi.r128.S=-4.0
+frame:1 pts:1 pts_time:11.0
+lavfi.r128.S=-5.0
+frame:2 pts:2 pts_time:22.0
+lavfi.r128.S=-31.0
+frame:3 pts:3 pts_time:33.0
+lavfi.r128.S=-30.0
+""",
+            encoding="utf-8",
+        )
+        (tmp_path / "peak-metadata.txt").write_text(
+            """frame:0 pts:0 pts_time:5.0
+lavfi.astats.Overall.Peak_level=-1.0
+frame:1 pts:1 pts_time:11.0
+lavfi.astats.Overall.Peak_level=-0.5
+frame:2 pts:2 pts_time:22.0
+lavfi.astats.Overall.Peak_level=-8.0
+frame:3 pts:3 pts_time:33.0
+lavfi.astats.Overall.Peak_level=-7.0
+""",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(
+        effects_module.LoudnormEffectStage,
+        "_run_ffmpeg",
+        staticmethod(fake_run_ffmpeg),
+    )
+    monkeypatch.setattr(effects_module, "_output_loudnorm_diagnostic", messages.append)
+
+    stage._diagnose_dynamic_mode(
+        tmp_path / "input.wav",
+        tmp_path,
+        {
+            "input_i": "-20.0",
+            "input_lra": "15.0",
+            "input_tp": "-1.0",
+            "input_thresh": "-40.0",
+        },
+    )
+
+    assert messages == [
+        "master_loudnorm: FFmpeg used dynamic mode; linear LRA and TP constraint failed",
+        "master_loudnorm candidate render_seconds=5.0: LRA loud by 10.5 LU, TP over by 4.0 dB",
+        "master_loudnorm candidate render_seconds=22.0: LRA quiet by 5.5 LU",
+        "master_loudnorm candidate render_seconds=33.0: LRA quiet by 4.5 LU",
+    ]
