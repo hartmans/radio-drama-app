@@ -8,7 +8,6 @@ import subprocess
 
 
 DEFAULT_IMAGE = "localhost/seed-vc:latest"
-DEFAULT_CACHE = Path("/srv/ai/models/seed-vc")
 
 
 def _existing_file(value):
@@ -39,17 +38,13 @@ def parser():
     result.add_argument("--checkpoint", type=_existing_file)
     result.add_argument("--config", type=_existing_file)
     result.add_argument("--image", default=os.environ.get("SEED_VC_IMAGE", DEFAULT_IMAGE))
-    result.add_argument("--cache", type=Path,
-                        default=Path(os.environ.get("SEED_VC_CACHE", DEFAULT_CACHE)))
     return result
 
 
 def podman_command(args):
     """Translate host paths and inference options into the container contract."""
     output = args.output.expanduser().resolve()
-    cache = args.cache.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
-    cache.mkdir(parents=True, exist_ok=True)
     source_container = f"/input/source{args.source.suffix}"
     target_container = f"/input/target{args.target.suffix}"
     command = [
@@ -59,7 +54,6 @@ def podman_command(args):
         "-v", f"{args.source}:{source_container}:ro,Z",
         "-v", f"{args.target}:{target_container}:ro,Z",
         "-v", f"{output}:/output:Z",
-        "-v", f"{cache}:/models/seed-vc:Z",
     ]
     inference_args = [
         "--source", source_container,

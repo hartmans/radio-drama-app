@@ -1,12 +1,7 @@
 image := "localhost/seed-vc:latest"
-cache := env_var_or_default("SEED_VC_CACHE", "/srv/ai/models/seed-vc")
 
 build:
     TMPDIR=/tmp podman build -f Containerfile -t {{image}} ..
-
-# Download speech and singing conversion assets into the persistent cache.
-download:
-    TMPDIR=/tmp podman run --rm --entrypoint python3 --device nvidia.com/gpu=all --network slirp4netns -v {{cache}}:/models/seed-vc:Z {{image}} /opt/download_models.py
 
 # Pass the same flags accepted by seed_vc.py, for example:
 # just run --source source.wav --target reference.wav --output converted
