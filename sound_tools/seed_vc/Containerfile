@@ -1,0 +1,32 @@
+FROM docker.io/debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/models/seed-vc/huggingface \
+    HF_HUB_CACHE=/models/seed-vc/huggingface/hub \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates ffmpeg git libsndfile1 python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch 2.8's CUDA 12.8 wheels include kernels for compute capability 12.0.
+RUN python3 -m pip install --break-system-packages --no-cache-dir --upgrade pip \
+    && python3 -m pip install --break-system-packages --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.8.0+cu128 torchaudio==2.8.0+cu128 torchvision==0.23.0+cu128
+
+RUN git clone https://github.com/Plachtaa/seed-vc.git /opt/seed-vc \
+    && git -C /opt/seed-vc checkout 51383efd921027683c89e5348211d93ff12ac2a8
+
+# inference.py needs only this subset of upstream's UI/training environment.
+RUN python3 -m pip install --break-system-packages --no-cache-dir \
+        scipy==1.13.1 librosa==0.10.2 "huggingface-hub>=0.28.1" \
+        munch==4.0.0 einops==0.8.0 descript-audio-codec==1.0.0 \
+        transformers==4.46.3 \
+        soundfile==0.12.1 hydra-core==1.3.2 pyyaml python-dotenv
+
+COPY seed_vc/download_models.py /opt/download_models.py
+
+VOLUME ["/models/seed-vc", "/output"]
+WORKDIR /models/seed-vc
+ENTRYPOINT ["python3", "/opt/seed-vc/inference.py"]

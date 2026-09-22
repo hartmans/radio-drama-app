@@ -19,6 +19,8 @@ starts the REPL with `--network=none`, a GPU, the current tool directory as
   supplied checkpoint generates native 16 kHz audio.
 * `moss_voice_generator` uses MOSS-VoiceGenerator for text plus a free-form
   voice-description instruction.  It uses `/srv/ai/huggingface-cache`.
+* `seed_vc` converts the performance in a source recording to the voice in a
+  reference recording. Its model cache is `/srv/ai/models/seed-vc`.
 
 For example, after `just run`:
 
@@ -27,3 +29,18 @@ generate("Rain tapping on a tent roof", "rain.wav", seconds=12)
 ```
 
 The GenAU model is intended for ambient sounds rather than speech or music.
+
+Seed-VC is a command-line tool rather than an interactive generator. Build and
+download its models once, then pass the upstream inference controls through its
+wrapper:
+
+```console
+cd sound_tools/seed_vc
+just build
+just download
+just run --source source.wav --target reference.wav --output converted
+```
+
+The source and reference are mounted read-only, the output directory is mounted
+writable, and inference runs without network access. Use `python3 seed_vc.py
+--help` for pitch conditioning, diffusion, and length controls.
