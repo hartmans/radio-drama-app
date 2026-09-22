@@ -205,13 +205,14 @@ master_loudnorm(i=-18, lra=7, tp=-2)
 ```
 
 Reference-voice preprocessing uses a separate internal dynamic loudnorm pass
-with `I=-20`, `LRA=6`, and `TP=-2`; it is not exposed to effect expressions.
+with `I=-24`, `LRA=6`, and `TP=-2`; it is not exposed to effect expressions.
 
 If FFmpeg cannot use linear mode because the source LRA exceeds `lra` or the
-required gain would exceed `tp`, the stage reports that it used dynamic mode.
-It then reports up to ten severity-ranked candidate locations in render
-seconds. Candidates combine short-term loudness-range and true-peak problems,
-with no two reported locations less than ten seconds apart.
+required gain would exceed `tp`, the stage reports that it used dynamic mode
+along with the measured integrated loudness, loudness range, and true peak. It
+then selects up to ten candidates by severity and reports them in ascending
+render-second order. Candidates combine short-term loudness-range and true-peak
+problems, with no two reported locations less than ten seconds apart.
 
 ---
 

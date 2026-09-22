@@ -951,7 +951,7 @@ def test_effect_chain_variables_include_presets_and_aliases():
     assert custom_master.lra == 7
     assert custom_master.tp == -2.5
     assert voice_loudnorm().filter_graph_factory() == (
-        "loudnorm=I=-20:LRA=6:TP=-2:linear=false"
+        "loudnorm=I=-24:LRA=6:TP=-2:linear=false"
     )
 
 
@@ -1118,7 +1118,7 @@ lavfi.r128.S=-5.0
 frame:2 pts:2 pts_time:22.0
 lavfi.r128.S=-31.0
 frame:3 pts:3 pts_time:33.0
-lavfi.r128.S=-30.0
+lavfi.r128.S=-36.0
 """,
             encoding="utf-8",
         )
@@ -1155,8 +1155,9 @@ lavfi.astats.Overall.Peak_level=-7.0
     )
 
     assert messages == [
-        "master_loudnorm: FFmpeg used dynamic mode; linear LRA and TP constraint failed",
+        "master_loudnorm: FFmpeg used dynamic mode; measured I=-20.0 LUFS, "
+        "LRA=15.0 LU, TP=-1.0 dBTP; linear LRA and TP constraint failed",
         "master_loudnorm candidate render_seconds=5.0: LRA loud by 10.5 LU, TP over by 4.0 dB",
         "master_loudnorm candidate render_seconds=22.0: LRA quiet by 5.5 LU",
-        "master_loudnorm candidate render_seconds=33.0: LRA quiet by 4.5 LU",
+        "master_loudnorm candidate render_seconds=33.0: LRA quiet by 10.5 LU",
     ]

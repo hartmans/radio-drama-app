@@ -303,7 +303,7 @@ class LoudnormEffectStage(_ComposableEffectStage):
                 selected.append(candidate)
                 if len(selected) == 10:
                     break
-        return selected
+        return sorted(selected, key=lambda item: item.render_seconds)
 
     @staticmethod
     def _run_ffmpeg(
@@ -343,7 +343,9 @@ class LoudnormEffectStage(_ComposableEffectStage):
         ]
         reason = " and ".join(failed_constraints) or "measurement eligibility"
         _output_loudnorm_diagnostic(
-            f"master_loudnorm: FFmpeg used dynamic mode; linear {reason} constraint failed"
+            "master_loudnorm: FFmpeg used dynamic mode; "
+            f"measured I={input_i:.1f} LUFS, LRA={input_lra:.1f} LU, "
+            f"TP={input_tp:.1f} dBTP; linear {reason} constraint failed"
         )
         if not failed_constraints:
             return
@@ -1067,7 +1069,7 @@ def master_loudnorm(
 def voice_loudnorm() -> EffectStage:
     """Return the internal dynamic reference-voice normalization stage."""
 
-    return ffmpeg_filter_stage(lambda: "loudnorm=I=-20:LRA=6:TP=-2:linear=false")
+    return ffmpeg_filter_stage(lambda: "loudnorm=I=-24:LRA=6:TP=-2:linear=false")
 
 
 _PRESET_EXPRESSIONS: Mapping[str, str] = {
