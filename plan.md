@@ -404,7 +404,9 @@ rate through the installed processor API. Never pass a 48 kHz numpy array and
 rely on the processor to guess its rate. Input IDs must remain integer tensors;
 use BatchFeature's supported device/dtype transfer rather than casting all values.
 
-For a complete transcript of at most 180 seconds, do not load/run ASR:
+For a complete transcript, do not load/run ASR, regardless of duration. The
+following is one bounded alignment call; longer input uses the complete-transcript
+window scheduler below:
 
 ```python
 inputs, word_lists = aligner_processor.prepare_forced_aligner_inputs(
@@ -459,32 +461,68 @@ in cache identity, not a limit copied from a short documentation example.
 
 ### Long audio policy (implement, do not silently truncate)
 
-Use a private Qwen audio-window helper for ASR/alignment. Each window is at most
-180 seconds. For longer input choose the cut at the lowest-RMS 20 ms frame in
-the final five seconds of the proposed window (ties choose the latest frame).
-Windows are contiguous, nonoverlapping, and cover the original sample range
-exactly. For the final short window use its actual length. This is a deterministic
-initial policy, not a claim that a quiet cut is always a sentence boundary.
+Support at least 30-minute complete VibeVoice output and 30-minute recordings.
+Neither model may silently truncate a long request. Use overlapping windows for
+both ASR and alignment, initially at most 180 seconds with 10 seconds of overlap
+(170-second stride). Include all source samples and retain window offsets. These
+are backend policy settings included in cache identity and may be tuned by live
+evidence. A quiet cut can help but is not a substitute for overlapping context.
+Keep feature/logit memory bounded to the configured batch; do not batch an entire
+30-minute request at once merely because its windows are ready.
 
-For partial input: transcribe and align each window independently, add its start
-offset to every returned time, concatenate words in window order, and join
-recognized texts with a newline. Do not fabricate clause spans at window edges.
-Standalone ASR uses the same window helper but does not load the aligner.
+#### Partial transcripts / recordings
 
-For complete input longer than 180 seconds: use the same ASR-then-alignment window
-path and finally match against the authored full transcript. Log that ASR was
-needed to associate text with windows. Do not split the supplied text in proportion
-to audio duration or send the entire transcript to each window. Thus bypassing ASR
-is an optimization for bounded complete requests, not an unconditional promise.
-The editor can create bounded ScriptPlans to obtain complete TTS chunks; it does
-not need to supply its own synthesized audio or call alignment directly. If later
-native TTS chunk boundaries are exposed, use those in a
-separate optimization.
+Transcribe each overlapping audio window, then align that window's recognized
+text to the same audio. Add window offsets before merging. Reconcile adjacent
+word sequences within the physical overlap using normalized text and agreement
+of absolute timestamps. Find a monotone matching run and choose a splice near
+the overlap center where both windows have context. Keep one window's word
+records on each side; do not average timestamps. Do not remove a genuine repeated
+phrase just because its text matches an earlier occurrence. Words outside the
+overlap cannot be deduplicated against each other.
 
-Chunk-edge recognition can change/miss a word; this is an explicit Qwen limitation
-to test with speech crossing a window. Do not hide it by substituting WhisperX
-or uniform estimated timing. If acceptance tests show unacceptable cuts, improve
-the Qwen window algorithm before making it the default.
+If there is no reliable matching run, retry with a seam-centered bridge window,
+up to 180 seconds, and reconcile its two sides with the neighboring windows.
+Keep neighboring results provisional until this succeeds. Limit seam repair to
+three attempts (vary bridge extent within the window limit); unresolved conflict
+raises a diagnostic alignment error containing the affected source interval.
+Do not silently concatenate conflicting overlap transcripts, drop their words,
+substitute WhisperX, or invent a uniform time distribution. Per-word model
+unknowns remain unknown; a failed seam reconciliation is a separate condition.
+
+Build the merged recognized source text and word records from the selected
+pieces, then run the shared authored-line/mark matcher over that whole-source
+sequence. Do not invent authoritative clause spans at window or splice boundaries.
+Standalone reference ASR also windows long inputs. It can merge unambiguous
+suffix/prefix transcript overlap without loading the aligner; ambiguous merges
+use the selected aligner for timestamp evidence and the same seam repair policy.
+Short reference transcription still loads only ASR.
+
+#### Complete transcripts and ASR limits are separate concerns
+
+For complete transcripts, align the supplied text directly without ASR. This
+applies to long complete TTS output as well as short requests. Do not use ASR
+merely because an alignment request needs multiple windows. Preserve the full
+supplied transcript and stable text positions when assembling overlapping
+alignment results, including the final tail and repeated passages.
+
+For recordings with partial authored transcripts, recover spoken text with ASR
+before alignment. ASR has its own input/output limits, so long recordings must
+also be windowed for ASR. Do not pass a 30-minute recording to one ASR call and
+assume that windowing only the subsequent alignment solves the length problem.
+The initial shared 180-second overlapping windows above keep both calls bounded;
+their window sizes may later be tuned independently.
+
+Mapping complete transcript spans to alignment windows remains an implementation
+issue to validate with long-form fixtures. Overlap supplies seam context; it does
+not itself identify the correct text span. Do not prescribe an unvalidated
+proportional-text split or forced-timestamp candidate-search algorithm here.
+Resolve this during the long-form alignment prototype and document the selected
+method before completing the backend. It must preserve text identity, avoid
+silent truncation, and meet the complete-transcript no-ASR contract. Native TTS
+chunk boundaries may help where available; 30-minute VibeVoice output must not
+require them. If the prototype cannot meet this contract, report the limitation
+rather than quietly enabling ASR.
 
 ## 7. Common script projection and preserved output
 
@@ -886,9 +924,16 @@ Provide a parameterized `alignment_backend` fixture:
     output separately, using the 5.17.0 processor contract. Smoke-test the patched
     local Qwen TTS under 5.17.0 as well; successful ASR imports alone do not verify
     TTS generation compatibility.
-6. Windows: complete audio coverage, deterministic cuts, no duplicated word
-   records, offset addition, a line spanning two windows, >180-second complete
-   request using ASR fallback, empty final window prevention, and short audio.
+6. Windows: overlapping audio coverage, offset addition, a line/word/mark crossing
+   a seam, genuine repetitions inside and outside the overlap, transcript disagreement,
+   bridge retries, and no duplicated or silently dropped word records. Test a
+   final short window and empty final window prevention. Test >180-second and
+   30-minute complete requests with an ASR stub that raises on any load/call;
+   exercise transcript/window assignment under rate changes, long silence, missing
+   spoken words, repeated paragraphs, and an unmatched final tail. Separately test
+   30-minute partial recordings with both ASR and alignment windowed. Assert bounded
+   repair retries, batch memory/work limits, explicit seam failures, and stable
+   global token identities. Mock scheduler tests do not replace the live gate.
 7. Native TTS spans survive mark enrichment unchanged. Existing no-mark line-only
    cache hits still work; marked requests cannot return a line-only cache hit.
    Completed unknown marks do not trigger repeated alignment. Backend/offset
@@ -1008,7 +1053,12 @@ boundaries within duration, nonempty expected words, the complete path's ASR
 bypass, and a recording containing omitted speech. Do not require Qwen to
 numerically match WhisperX or use the existing 0.9-second tolerance as proof that
 a cut does not clip a word. Use hand-audited boundary ranges for the cut cases.
-Include a >180-second case with speech near a window boundary. If model weights
+Include long-form complete TTS and partial recording cases around 30 minutes,
+with speech and requested marks crossing seams. Verify complete input never loads
+ASR, recording ASR is itself windowed, and neither path loses or duplicates seam
+words. Inspect seams with repeated phrases and changing speech rate, plus the
+final transcript tail; simple constant-rate synthetic evidence is insufficient.
+If model weights
 are unavailable, explicitly report the live gate as pending; do not claim the
 migration complete or switch the default on mocked evidence alone.
 
