@@ -317,9 +317,18 @@ cancel/resolve queued work on close; add focused lifecycle tests.
 Backend batching/concurrency stays internal. Keep WhisperX's bounded executor and
 lazy ASR/alignment loading initially. Serialize Qwen inference per resource with
 a threading lock shared by ASR, alignment, and synchronous voice-reference calls;
-run it off the event loop. Start Qwen model batch size at one, while preserving
-the neutral queue's ability to accept several requests. This bounds activation
-memory and does not require both model families in one process. Continue using
+run it off the event loop. Batch pending Qwen requests using
+`ProductionConfig.resolved_batch_size` (currently defaulting to 10), including
+compatible audio windows from different requests. Preserve request/window order
+when distributing results. Use the processors' batched audio, transcript, and
+language inputs; do not implement the queue as serial batch-size-one inference.
+There is 96 GB of GPU memory readily available on one device. Start on the
+configured single device and validate actual memory use with representative
+lengths; tune the configurable batch size based on measurements. Serializing
+inference calls still allows each call to process a full batch. Explicit placement
+across two devices can be a later optimization, not a prerequisite. Neither
+batching nor device placement requires loading WhisperX and Qwen together.
+Continue using
 `shared_model_load` for process-wide model-load serialization.
 
 Base `script_timing()` returns `ScriptTiming(())` immediately when there are no
@@ -861,7 +870,9 @@ Provide a parameterized `alignment_backend` fixture:
    even when the caller does not require them because Qwen naturally produces them.
 5. Native Qwen payload conversion: generated suffix decoding, parsed language,
    nested batch output, start/end units, processor word segmentation, unsupported
-   language, missing/invalid times, empty recognition, and token-limit failure.
+    language, missing/invalid times, empty recognition, and token-limit failure.
+    Include mixed-length batches larger than one, assert configured batch limits,
+    and verify each transcript/word result returns to the correct request/window.
 6. Windows: complete audio coverage, deterministic cuts, no duplicated word
    records, offset addition, a line spanning two windows, >180-second complete
    request using ASR fallback, empty final window prevention, and short audio.
@@ -1021,6 +1032,5 @@ paths; sparse/dense authored marks resolved by the common matcher and cached
 without regenerating speech; prepared ScriptPlan use with ScriptNode context;
 no optional-backend import during offline tests; and passing independent live
 gates. Migrating the editor to this TTS/timing interface, its forward filter-offset
-mapping, named mark plans, and effect automation are subsequent work. Leave this
-planning document untracked and uncommitted as requested; the implementation's
-commit instructions above apply when that work is undertaken.
+mapping, named mark plans, and effect automation are subsequent work. Maintain
+this plan on the `qwen_asr` branch, where the user requested it be committed.
