@@ -47,12 +47,14 @@ WhisperX default so output changes and structural changes can be checked separat
 
 | Environment | Python | Transformers | torch | torchaudio | WhisperX |
 | --- | --- | --- | --- | --- | --- |
-| `~/venv` | 3.14 | 5.14.1 | 2.13.0 | 2.11.0 | not needed for Qwen |
+| `~/venv` | 3.14 | 5.17.0 | 2.13.0 | 2.11.0 | not needed for Qwen |
 | `~/ai/vibevoice/.venv` | 3.13 | 4.57.3 | 2.8.0 | 2.8.0 | 3.8.6 |
 
 In `~/venv`, imports of `Qwen3ASRForConditionalGeneration`,
-`Qwen3ASRForTokenClassification`, and `Qwen3ASRProcessor` succeeded. Import of
-torchaudio also succeeded. **No Transformers upgrade is needed.** These checks
+`Qwen3ASRForTokenClassification`, and `Qwen3ASRProcessor` succeeded after the
+user upgraded to 5.17.0. Target this version's modern interface; do not add
+compatibility branches for 5.14.1. Import of torchaudio also succeeded in the
+earlier environment check. These checks
 did not download weights or establish successful GPU inference. The torch and
 torchaudio version mismatch is worth recording, but it did not prevent these
 imports; Qwen audio preparation can use the repository's scipy resampler.
@@ -78,7 +80,7 @@ WhisperX 3.8.6 was inspected in
   segments, aligned segments, and the shortcut decision. This remains a private
   WhisperX diagnostic/intermediate representation.
 
-Native Qwen APIs were checked against the installed Transformers 5.14.1 source,
+Native Qwen APIs were checked against the installed Transformers 5.17.0 source,
 especially `models/qwen3_asr/processing_qwen3_asr.py`:
 
 - ASR `generate()` returns token IDs. Decode only the generated suffix with
@@ -95,11 +97,14 @@ especially `models/qwen3_asr/processing_qwen3_asr.py`:
 - Use the processor's returned words as the source-word records; do not assume
   whitespace tokenization, punctuation preservation, or authored character offsets.
 
-References: [native Qwen documentation](https://huggingface.co/docs/transformers/v5.14.0/model_doc/qwen3_asr),
+References: [native Qwen documentation](https://huggingface.co/docs/transformers/v5.17.0/model_doc/qwen3_asr),
 [ASR checkpoint](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf),
 [aligner checkpoint](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B-hf).
-Installed source is authoritative for 5.14.1 call signatures; newer online
-examples already differ in prompt construction. Do not implement against the
+Installed source is authoritative for 5.17.0 call signatures.
+`apply_transcription_request(audio, language=None, prompt=None, **kwargs)` handles
+language forcing through assistant prefill and context/hotwords through a separate
+system prompt. Use this helper; do not reproduce the older language-as-system-
+message construction. Do not implement against the
 legacy wrapper's `ASRTranscription` or `ForcedAlignResult` classes.
 
 The upstream wrapper explicitly chunks audio and adds chunk offsets. Its current
@@ -441,8 +446,12 @@ spoken_text = parsed["transcription"]
 
 Then align `spoken_text`, not the partial authored transcript. Match authored
 lines against the resulting whole-source word stream in the common projection.
-ASR language output is metadata; use the explicitly requested alignment language
-and let unsupported-language errors be clear. An empty recognized transcript
+With forced language, the language prefix is part of the input prefill, so the
+generated suffix can contain only transcription text. Parsed output then has
+`language=None`; preserve the requested language as result metadata in that case.
+Do not require or strip a language prefix from plain generated text. Use the
+explicitly requested alignment language and let unsupported-language errors be
+clear. An empty recognized transcript
 returns an empty word sequence without calling the aligner. Detect token-budget
 exhaustion without EOS and raise an actionable inference error; never silently
 align a truncated transcript. The 8192 token budget is a policy constant included
@@ -786,7 +795,7 @@ In `pyproject.toml`, move `whisperx` and `qwen-tts` out of mandatory dependencie
 ```toml
 [project.optional-dependencies]
 alignment-whisperx = ["whisperx"]
-alignment-qwen = ["transformers>=5.14.1,<6", "torch", "accelerate"]
+alignment-qwen = ["transformers>=5.17.0,<6", "torch", "accelerate"]
 tts-qwen = ["qwen-tts"]
 ```
 
@@ -873,6 +882,10 @@ Provide a parameterized `alignment_backend` fixture:
     language, missing/invalid times, empty recognition, and token-limit failure.
     Include mixed-length batches larger than one, assert configured batch limits,
     and verify each transcript/word result returns to the correct request/window.
+    Cover forced-language plain-text suffixes and auto-detected language-prefixed
+    output separately, using the 5.17.0 processor contract. Smoke-test the patched
+    local Qwen TTS under 5.17.0 as well; successful ASR imports alone do not verify
+    TTS generation compatibility.
 6. Windows: complete audio coverage, deterministic cuts, no duplicated word
    records, offset addition, a line spanning two windows, >180-second complete
    request using ASR fallback, empty final window prevention, and short audio.
