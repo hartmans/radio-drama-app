@@ -22,8 +22,9 @@ tests. The full offline suite passes in both venvs.
 Implemented and validated: greedy long complete-transcript window assignment,
 bounded overlap recovery, synthetic 30-minute coverage and real 641-second input.
 Remaining gates: broader long-form seam/quality evaluation, performance
-measurement and new live WhisperX validation. Keep WhisperX as default until the
-long-form gates pass. No dependencies or external environments were changed by
+measurement and new live WhisperX validation. Qwen is now the default at the
+user’s explicit request; the broader long-form quality and performance gates
+remain outstanding. No dependencies or external environments were changed by
 the implementation; the user installed pedalboard in the modern venv.
 
 Greedy mapping implementation and experimental evidence are documented in

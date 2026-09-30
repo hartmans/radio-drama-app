@@ -83,6 +83,9 @@ The installed renderer is `radio_drama_app`; `radio_drama_app.py` is its source-
 ~/venv/bin/python radio_drama_app.py INPUT.xml [options]
 ```
 
+Forced alignment and reference-voice ASR default to Qwen. Select
+`--alignment-backend whisperx` to use WhisperX instead.
+
 Useful options:
 
 * `--voice-dir PATH`: directory containing reference voice files

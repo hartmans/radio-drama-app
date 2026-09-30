@@ -25,7 +25,7 @@ MODEL_NATIVE_SAMPLE_RATE = 24000
 
 @dataclass(slots=True)
 class ProductionConfig:
-    alignment_backend: str = "whisperx"
+    alignment_backend: str = "qwen"
     alignment_language: str = "en"
     qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B-hf"
     qwen_alignment_model: str = "Qwen/Qwen3-ForcedAligner-0.6B-hf"
