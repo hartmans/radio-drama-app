@@ -23,6 +23,7 @@ from typing import Any, Coroutine, TypeVar
 import yaml
 from carthage.dependency_injection import AsyncInjector
 
+from ..cache import CACHE_DIRECTORY_KEY
 from ..config import ProductionConfig
 from ..document import ProductionNode, parse_production_file, parse_production_string
 from ..effects import EffectStage, effect_chain_variables
@@ -47,11 +48,12 @@ class LoadedDocument:
 class ReplEventLoop:
     """Host one radio-drama injector and its event loop beside the console."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.injector = None
         self._retired_injectors = []
         self.config = ProductionConfig()
+        self.cache_dir = Path(cache_dir).expanduser().resolve() if cache_dir is not None else None
         self.started = threading.Event()
         self.thread = threading.Thread(
             target=self._run,
@@ -65,10 +67,7 @@ class ReplEventLoop:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self.loop = loop
-        self.injector = radio_drama_injector(
-            config=self.config,
-            event_loop=loop,
-        )
+        self.injector = self._make_injector()
         self.started.set()
         try:
             loop.run_forever()
@@ -92,11 +91,18 @@ class ReplEventLoop:
 
     async def _set_document_path(self, document_path: Path) -> None:
         self._retired_injectors.append(self.injector)
-        self.injector = radio_drama_injector(
+        self.injector = self._make_injector(document_path)
+
+    def _make_injector(self, document_path: Path | None = None):
+        """Keep a session cache override across document-specific injectors."""
+        injector = radio_drama_injector(
             config=self.config,
-            event_loop=asyncio.get_running_loop(),
+            event_loop=self.loop,
             document_path=document_path,
         )
+        if self.cache_dir is not None:
+            injector.add_provider(CACHE_DIRECTORY_KEY, self.cache_dir)
+        return injector
 
     def sound_plan(self, reference: str) -> AudioPlanWrapper:
         """Construct a sound plan on the injector's event loop without rendering it."""
@@ -208,8 +214,8 @@ class _ReplCompleter:
 class ReplSession:
     """Own the mutable locals and document state used by one interactive REPL."""
 
-    def __init__(self) -> None:
-        self.event_loop = ReplEventLoop()
+    def __init__(self, *, cache_dir: str | Path | None = None) -> None:
+        self.event_loop = ReplEventLoop(cache_dir=cache_dir)
         self.pulse_player = PulseAudioPlayer()
         self.player = AudioPlayer(
             self.event_loop.submit,

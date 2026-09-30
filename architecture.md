@@ -226,6 +226,7 @@ Current resource contract:
 * `CacheManager` is the production-scoped mapping from cache type names such as `vibevoice` and `qwentts` to `CacheCollection` objects
 * `CacheManager` derives the shared cache root from the production `output_path`, while still allowing a direct `InjectionKey("cache_dir")` override for callers that need to place the cache elsewhere
 * output encoding is not part of cache identity: the shared helper normalizes `.wav`, `.flac`, `.mp3`, `.ogg`, and `.m4a` outputs to the sibling `<stem>.wav.cache`, and application, backend, and REPL injectors all reach that rule through `CacheManager`
+* the REPL may explicitly select a session cache directory; that selection takes precedence over document-derived cache locations and persists across document loads
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
 * the backend-independent TTS cache persists model-native WAV output plus a flat adjacent `.meta` JSON object containing the sample rate, frame and channel counts, alignment key, and optional dialogue-line spans
 * the alignment key combines an alignment-format version, the cached audio file's identity, and the alignment projection; a projection change reruns forced alignment and rewrites only `.meta`, while an unchanged key reuses timing across sessions

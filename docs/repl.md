@@ -3,8 +3,19 @@
 Run the full Python REPL with an optional production document:
 
 ```console
-python -m radio_drama.repl [production.xml]
+python -m radio_drama.repl [--cache-dir DIRECTORY] [production.xml]
 ```
+
+Use `--cache-dir` to select an existing cache or a shared cache for the session:
+
+```console
+python -m radio_drama.repl --cache-dir /tmp/phones.wav.cache production.xml
+```
+
+The directory also applies to later `load()` calls, and the option works without
+a positional document. Without an override, each loaded production uses its
+sibling `<stem>.wav.cache` directory. Loading a document assigns its wrapper to
+`production` and its document information to `document` in the REPL namespace.
 
 The namespace contains ordinary Python builtins and locals, the functions and
 presets available in effect expressions, and the REPL helpers described below.

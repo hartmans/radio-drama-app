@@ -205,6 +205,22 @@ def _current_cache_root(session: ReplSession):
     return session.event_loop.submit(get_root()).result()
 
 
+def test_cache_override_survives_loading_multiple_productions(tmp_path) -> None:
+    cache_dir = tmp_path / 'shared.cache'
+    session = ReplSession(cache_dir=cache_dir)
+    try:
+        assert _current_cache_root(session) == cache_dir
+        for name in ('first', 'second'):
+            path = tmp_path / f'{name}.xml'
+            path.write_text('<production />', encoding='utf-8')
+            production = session.load(path)
+            assert _current_cache_root(session) == cache_dir
+            assert session.locals['production'] is production
+    finally:
+        session.stop()
+        session.event_loop.close()
+
+
 def test_wrapper_slice_addition_and_mix_are_repl_local_plans(tmp_path) -> None:
     production_path = tmp_path / "production.xml"
     production_path.write_text(

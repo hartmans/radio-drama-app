@@ -10,8 +10,9 @@ from .console import ReplSession
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("document", nargs="?", help="production XML to load before starting")
+    parser.add_argument("--cache-dir", help="cache directory shared by this session and subsequent load() calls")
     args = parser.parse_args(argv)
-    session = ReplSession()
+    session = ReplSession(cache_dir=args.cache_dir)
     if args.document:
         session.load(args.document)
     session.interact()
