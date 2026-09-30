@@ -60,6 +60,8 @@ def test_qwen_gpu_alignment_asr_and_batched_requests(tmp_path):
     audio, rate = sf.read(root / "tests/resources/girl1.wav", dtype="float32")
     segments = json.loads((root / "tests/resources/whisperx_cli/girl1.json").read_text())["segments"]
     transcript = " ".join(segment["text"].strip() for segment in segments)
+    # Same spoken words, with an unspaced dash that the native processor would join.
+    transcript = transcript.replace("seem really", "seem—really")
     speaker = SpeakerVoiceReference("Girl", "girl1.wav", root / "tests/resources/girl1.wav")
     lines = [DialogueLine(speaker, segment["text"].strip(), mark_offsets=(0,)) for segment in segments]
     async def run():
@@ -73,6 +75,8 @@ def test_qwen_gpu_alignment_asr_and_batched_requests(tmp_path):
             responses = await asyncio.gather(*(r.align() for r in registrations))
             assert resource._asr is None, "Complete transcripts must not load/run ASR"
             assert responses[0].words == responses[1].words
+            assert any(word.text.lower() == "seem" for word in responses[0].words)
+            assert any(word.text.lower() == "really" for word in responses[0].words)
             timing = script_timing_from_alignment(lines, responses[0])
             for span, expected in zip(timing.dialogue_lines, segments, strict=True):
                 assert abs(span.start - expected["start"]) < .9

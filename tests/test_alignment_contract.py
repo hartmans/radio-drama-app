@@ -493,3 +493,75 @@ def test_complete_overlap_tolerates_local_bad_word_but_rejects_broad_shift():
     shifted = tuple(WordTiming(word.text, word.start + 1., word.end + 1.) for word in previous)
     assert not QwenAlignmentResource._complete_overlap_agrees(previous, shifted, 0)
     assert not QwenAlignmentResource._complete_overlap_agrees(previous, previous[:1], 0)
+
+
+@pytest.mark.parametrize('separator', ['—', '–', '-', '---', '‑'])
+def test_qwen_prepares_dash_boundaries_for_short_and_long_alignment(separator, speaker):
+    """Both adapter entry points must preserve boundaries before tokenization."""
+    import re
+    import torch
+    from types import SimpleNamespace
+    text = f'Choose red{separator}blue for the cover.'
+    prepared = []
+    class Inputs(dict):
+        def to(self, *args):
+            return self
+    class Processor:
+        def prepare_forced_aligner_inputs(self, **kwargs):
+            prepared.extend(kwargs['transcript'])
+            # Mirror Qwen's removal of punctuation inside a whitespace word.
+            words = [re.sub(r'[^\w ]', '', value).split() for value in kwargs['transcript']]
+            return Inputs(input_ids=torch.ones((1, 1), dtype=torch.long)), words
+        def decode_forced_alignment(self, **kwargs):
+            return [[{'text': token, 'start_time': float(i), 'end_time': i + .5}
+                     for i, token in enumerate(row)] for row in kwargs['word_lists']]
+    class Model:
+        device, dtype = torch.device('cpu'), torch.float32
+        config = SimpleNamespace(timestamp_token_id=42)
+        def __call__(self, **kwargs):
+            return SimpleNamespace(logits=torch.zeros(1, 1, 1))
+    resource = QwenAlignmentResource(config=ProductionConfig(device='cpu'), injector=Injector())
+    resource._aligner_processor, resource._aligner = Processor(), Model()
+    try:
+        assert resource._alignment_units(text, 'en') == ('Choose', 'red', 'blue', 'for', 'the', 'cover')
+        items = resource._align_batch([np.zeros(16000)], [text], ['en'])[0]
+        result = AlignmentResult(decoded_words(items, 6.), (), source_text=text)
+        marked = DialogueLine(speaker, text, mark_offsets=(text.index('blue'),))
+        timing = script_timing_from_alignment([marked], result).dialogue_lines[0]
+        assert (timing.start, timing.end) == (0., 5.5)
+        assert timing.marks[0].previous_end == 1.5
+        assert timing.marks[0].next_start == 2.
+        assert all(separator not in value for value in prepared)
+        assert result.source_text == text
+    finally:
+        resource.close()
+
+
+@pytest.mark.parametrize('missing_index, missing_side', [(1, 'start'), (2, 'end')])
+def test_slice_layout_logs_unknown_boundary_without_crashing(speaker, caplog, missing_index, missing_side):
+    from radio_drama.forced_alignment.planning import AlignedScriptResult, ScriptSlice
+    from radio_drama.forced_alignment.projection import _marker_frames_from_contents
+    from radio_drama.rendering import ScriptTiming, DialogueLineTiming
+    from types import SimpleNamespace
+    async def run():
+        config = ProductionConfig(output_sample_rate=4, output_channels=1)
+        injector = radio_drama_injector(config=config, event_loop=asyncio.get_running_loop())
+        bounds = [0., 0., 1.]
+        bounds[missing_index] = float('nan')
+        lines = [DialogueLine(speaker, f'Boundary {i}', start_pos=value) for i, value in enumerate(bounds)]
+        result = AlignedScriptResult(RenderResult(audio=np.ones(4, dtype=np.float32)),
+                                     _marker_frames_from_contents(lines, frame_count=4, sample_rate=4),
+                                     tuple(lines), ScriptTiming(tuple(DialogueLineTiming(value, value) for value in bounds)))
+        async def render():
+            return result
+        source = SimpleNamespace(contents=lines, render=render)
+        try:
+            node = parse_production_string('<production><script>A: placeholder</script></production>').children[0]
+            plan = await injector(AsyncInjector)(ScriptSlice, node=node, aligned_script_source=source,
+                                                  start_marker=1, end_marker=2, name='regression', attrs={})
+            await plan.layout_node()
+            assert plan.advance == (1. if missing_side == 'start' else 0.)
+        finally:
+            injector.close()
+    asyncio.run(run())
+    assert f'NaN {missing_side} marker' in caplog.text

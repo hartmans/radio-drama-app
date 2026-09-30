@@ -23,6 +23,16 @@ _COMPLETE_PREFIX_ATTEMPTS = 4
 _COMPLETE_OVERLAPS = (10, 20, 30)
 
 
+def _alignment_text(text):
+    """Keep dash-separated words distinct in Qwen's punctuation-dropping tokenizer.
+
+    The processor removes punctuation without flushing its word buffer, so an
+    unspaced dash otherwise joins two words. Preserve apostrophes and the authored
+    text/mark offsets; this transformation only prepares alignment model inputs.
+    """
+    return text.translate(str.maketrans({char: " " for char in "-‐‑‒–—―"}))
+
+
 class AlignmentWindowError(RuntimeError):
     """A window seam cannot be reconciled without dropping source speech."""
 
@@ -147,7 +157,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
     @property
     def alignment_identity(self):
         return (f"qwen:{self.config.qwen_asr_model}:{self.config.qwen_alignment_model}:"
-                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:complete-greedy-v2")
+                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:complete-greedy-v2:dash-boundaries-v1")
 
     @property
     def transcription_identity(self):
@@ -201,7 +211,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
         import torch
         processor, model = self._ensure_aligner()
         inputs, word_lists = processor.prepare_forced_aligner_inputs(
-            audio=audios, transcript=transcripts, language=languages,
+            audio=audios, transcript=[_alignment_text(text) for text in transcripts], language=languages,
             processor_kwargs={"sampling_rate": _SAMPLE_RATE, "padding": True},
         )
         inputs = inputs.to(model.device, model.dtype)
@@ -224,7 +234,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
         """
         processor, _ = self._ensure_aligner()
         _, lists = processor.prepare_forced_aligner_inputs(
-            audio=[np.zeros(_SAMPLE_RATE, dtype=np.float32)], transcript=[transcript],
+            audio=[np.zeros(_SAMPLE_RATE, dtype=np.float32)], transcript=[_alignment_text(transcript)],
             language=[language], processor_kwargs={"sampling_rate": _SAMPLE_RATE, "padding": True})
         return tuple(lists[0])
 

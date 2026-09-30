@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+import logging
 import math
 from dataclasses import dataclass
 from typing import Sequence
@@ -19,6 +20,9 @@ from ..rendering import RenderResult, ScriptRenderResult, ScriptTiming
 from .base import ForcedAlignmentResource
 from .projection import (copy_dialogue_contents, fill_start_positions_from_timing,
     _debug_line_preview, _marker_frames_from_contents, _boundary_info_for_marker)
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class AlignedScriptResult:
