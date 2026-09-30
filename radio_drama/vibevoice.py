@@ -19,8 +19,9 @@ if TYPE_CHECKING:
 
 def _vibevoice_types():
     """Import Transformers model classes only when live synthesis needs them."""
-    from transformers import VibeVoiceForConditionalGeneration, VibeVoiceProcessor
-    return VibeVoiceProcessor, VibeVoiceForConditionalGeneration
+    from transformers import VibeVoiceProcessor
+    from .vibevoice_transformers import VibeVoiceWithBatchAudioFix
+    return VibeVoiceProcessor, VibeVoiceWithBatchAudioFix
 
 
 from .cache import CACHE_DIRECTORY_KEY, CacheManager
