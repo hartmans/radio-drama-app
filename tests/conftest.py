@@ -8,7 +8,7 @@ from radio_drama.testing import (
     CachedQwenTtsResource,
     CachedVibeVoiceDouble,
     CachedVibeVoiceResource,
-    CachedWhisperXResource,
+    CachedForcedAlignmentResource,
 )
 
 
@@ -171,7 +171,7 @@ def forced_alignment_cache_dir(pytestconfig):
 
 
 @pytest.fixture
-def cached_whisperx_resource_factory(
+def cached_alignment_resource_factory(
     forced_alignment_mode: str,
     forced_alignment_cache_dir: Path,
 ):
@@ -180,7 +180,7 @@ def cached_whisperx_resource_factory(
         *,
         mode: str | None = None,
         cache_dir: Path | None = None,
-        resource_type=CachedWhisperXResource,
+        resource_type=CachedForcedAlignmentResource,
         **kwargs,
     ):
         directory = cache_dir or forced_alignment_cache_dir

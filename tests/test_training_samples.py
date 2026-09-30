@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from phase1_helpers import start_position_fixture, TimingTtsDouble
+
 import asyncio
 import math
 from pathlib import Path
@@ -11,7 +13,7 @@ from carthage.dependency_injection import AsyncInjector, InjectionKey
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference, TtsResource
 from radio_drama.document import parse_production_string
-from radio_drama.forced_alignment import WhisperXResource
+from radio_drama.forced_alignment import ForcedAlignmentResource
 from radio_drama.init import radio_drama_injector
 from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.training_samples import chunk_training_intervals, export_training_samples_from_plan
@@ -78,7 +80,7 @@ def test_production_plan_all_plans_deduplicates_shared_aligned_source(tmp_path: 
             ProductionConfig(voice_directory=tmp_path),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, injector(ProductionConfig)), close=False)
         try:
             root = parse_production_string(
                 """
@@ -138,7 +140,7 @@ def test_export_training_samples_from_plan_writes_per_speaker_chunks(tmp_path: P
             ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTimedVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeTimedVibeVoice(), injector, injector(ProductionConfig)), close=False)
         try:
             root = parse_production_string(
                 """
@@ -208,7 +210,7 @@ def test_export_training_samples_from_plan_resamples_output(tmp_path: Path):
             ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTimedVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeTimedVibeVoice(), injector, injector(ProductionConfig)), close=False)
         try:
             root = parse_production_string(
                 """
@@ -268,7 +270,7 @@ def test_export_training_samples_from_plan_defaults_to_backend_sample_rate(tmp_p
             ProductionConfig(voice_directory=tmp_path, output_channels=1),
             document_path=xml_path,
         )
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeNativeRateVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeNativeRateVibeVoice(), injector, injector(ProductionConfig)), close=False)
         try:
             root = parse_production_string(
                 """
@@ -319,7 +321,9 @@ def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
             return [np.arange(8, dtype=np.float32) for _ in batch]
 
     class FakeWhisperX:
-        async def script_timing(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        async def script_timing(self, contents, result, **kwargs):
             return ScriptTiming(
                 (
                     DialogueLineTiming(0.0, 1.0),
@@ -327,24 +331,6 @@ def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
                 )
             )
 
-        async def fill_start_positions(self, contents, result):
-            updated = []
-            line_index = 0
-            for content in contents:
-                if isinstance(content, DialogueLine):
-                    updated.append(
-                        DialogueLine(
-                            speaker=content.speaker,
-                            spoken_text=content.spoken_text,
-                            handling=content.handling,
-                            node=content.node,
-                            start_pos=float(line_index),
-                        )
-                    )
-                    line_index += 1
-                else:
-                    updated.append(content)
-            return updated
 
     async def export_once():
         injector = radio_drama_injector(
@@ -357,7 +343,7 @@ def test_training_samples_reuses_vibevoice_cache(tmp_path: Path):
             ainjector = injector(AsyncInjector)
             resource = await ainjector(FakeCachedVibeVoiceResource)
             injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), resource, close=False)
-            injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+            injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
             root = parse_production_string(
                 """
                 <production>

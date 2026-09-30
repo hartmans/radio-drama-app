@@ -125,6 +125,8 @@ class DialogueLine(DialogueContent):
     handling: Literal["normal", "ignore", "special"] = "normal"
     source: Literal["tts", "recording"] = "tts"
     node: DocumentNode | None = None
+    # Python-string boundaries in spoken_text; order and duplicates are meaningful.
+    mark_offsets: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)
@@ -386,8 +388,10 @@ class SpeakerMapPlan(PlanningNode):
 class ScriptPlan(AudioPlan):
     """Plan for one script element and its eventual speech render request."""
 
-    def __init__(self, node: ScriptNode, **kwargs) -> None:
+    def __init__(self, node: ScriptNode, *, script_events=None, tts=None, **kwargs) -> None:
         super().__init__(node=node, **kwargs)
+        self._prepared_events = None if script_events is None else list(script_events)
+        self.tts = node.tts if tts is None else tts
         self.speaker_map_plan: SpeakerMapPlan | None = None
         self.script_events: list[ScriptEvent] = []
         self.ordered_speakers: list[SpeakerVoiceReference] = []
@@ -411,8 +415,15 @@ class ScriptPlan(AudioPlan):
     async def async_ready(self):
         """Normalize dialogue and prepare the base audio render path."""
 
-        self.speaker_map_plan = await self._require_speaker_map_plan()
-        self.script_events = await self._parse_script_events()
+        if self._prepared_events is None:
+            self.speaker_map_plan = await self._require_speaker_map_plan()
+            self.script_events = await self._parse_script_events()
+        else:
+            self.script_events = list(self._prepared_events)
+        from .forced_alignment.projection import validate_mark_offsets
+        for event in self.script_events:
+            if isinstance(event, DialogueLine):
+                validate_mark_offsets(event)
         if (
             any(
                 isinstance(event, DialogueLine) and event.source == "recording"
@@ -447,11 +458,11 @@ class ScriptPlan(AudioPlan):
     async def register_render_request(self) -> None:
         try:
             resource = await self.ainjector.get_instance_async(
-                InjectionKey(TtsResource, tts=self.node.tts)
+                InjectionKey(TtsResource, tts=self.tts)
             )
         except (InjectionFailed, KeyError):
             raise self.document_error(
-                f"No TTS resource is configured for {self.node.tts!r}"
+                f"No TTS resource is configured for {self.tts!r}"
             ) from None
         self._registered_request = await resource.register_request(self.render_request)
 
@@ -463,55 +474,7 @@ class ScriptPlan(AudioPlan):
     async def ensure_timing(self, contents, result):
         if self._registered_request is None:
             raise RuntimeError("An empty script has no timing request")
-        ensure_timing = getattr(self._registered_request, "ensure_timing", None)
-        if ensure_timing is not None:
-            return await ensure_timing(contents, result)
-        if isinstance(result, ScriptRenderResult) and result.timing is not None:
-            return result.timing
-
-        # A few external/test TTS doubles predate RegisteredTtsRequest.ensure_timing.
-        # Keep their alignment fallback outside the real backend implementations.
-        from .forced_alignment import WhisperXResource
-        from .rendering import DialogueLineTiming, ScriptTiming
-
-        resource = await self.ainjector.get_instance_async(WhisperXResource)
-        script_timing = getattr(resource, "script_timing", None)
-        if script_timing is not None:
-            return await script_timing(contents, result)
-        aligned = await resource.fill_start_positions(contents, result)
-        duration = result.frame_count / self.config.resolved_output_sample_rate
-        lines: list[DialogueLineTiming] = []
-        for event_index, event in enumerate(aligned):
-            if not isinstance(event, DialogueLine):
-                continue
-            following = aligned[event_index + 1 :]
-            boundary_index = next(
-                (
-                    index
-                    for index, later in enumerate(following)
-                    if isinstance(later, (DialogueLine, ScriptGap))
-                ),
-                None,
-            )
-            if boundary_index is None:
-                end = duration
-            else:
-                boundary = following[boundary_index]
-                inline_audio = next(
-                    (
-                        later
-                        for later in following[:boundary_index]
-                        if isinstance(later, DialogueAudio)
-                    ),
-                    None,
-                )
-                end = (
-                    2 * inline_audio.start_pos - boundary.start_pos
-                    if inline_audio is not None
-                    else boundary.start_pos
-                )
-            lines.append(DialogueLineTiming(start=event.start_pos, end=end))
-        return ScriptTiming(tuple(lines))
+        return await self._registered_request.ensure_timing(contents, result)
 
     async def render_node(self) -> RenderResult:
         return await self.render_base_audio()
@@ -538,27 +501,25 @@ class ScriptPlan(AudioPlan):
             attrs={} if node.element_children else None,
             **kwargs,
         )
-        audio_plan: AudioPlan = script_plan
+        if node.element_children or script_plan.needs_source_slicing():
+            return await script_plan.compose(attrs=type(script_plan).attrs_from_node(node))
+        return script_plan
 
-        if script_plan.needs_source_slicing():
-            audio_plan = await cls._build_aligned_audio_plan(
-                ainjector,
-                node,
-                script_plan,
-                attrs=type(script_plan).attrs_from_node(node),
+    async def compose(self, *, attrs: Mapping[str, AudioAttrValue]) -> AudioPlan:
+        """Build selected source slices, applying caller's outer attributes once.
+
+        Prepared callers construct the dry ScriptPlan with attrs={} and use this
+        method only when they need composition. Marks alone do not split speech.
+        """
+        if self.needs_source_slicing():
+            return await type(self)._build_aligned_audio_plan(
+                self.ainjector, self.node, self, attrs=attrs,
             )
-        elif node.element_children:
-            # A declaration is not rendered inline, but it still means the
-            # script plan was created without outer attributes so a later
-            # retained source could own them. Keep those attrs on one outer
-            # audio plan when the declaration is ultimately unused.
-            audio_plan = await ainjector(
-                ComposeAudioPlan,
-                node=node,
-                audio_plans=[script_plan],
-                attrs=type(script_plan).attrs_from_node(node),
+        if attrs:
+            return await self.ainjector(
+                ComposeAudioPlan, node=self.node, audio_plans=[self], attrs=attrs,
             )
-        return audio_plan
+        return self
 
     @classmethod
     async def _build_aligned_audio_plan(

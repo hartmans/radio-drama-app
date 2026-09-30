@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -12,7 +13,7 @@ from typing import TYPE_CHECKING, Sequence
 import soundfile as sf
 
 from .audio import convert_audio_format
-from .rendering import BackendTtsResult, DialogueLineTiming, ScriptRenderResult, ScriptTiming
+from .rendering import BackendTtsResult, DialogueLineTiming, ScriptRenderResult, ScriptTiming, DialogueMarkTiming
 
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     )
 
 
-_ALIGNMENT_VERSION = "script-timing-v4"
+_ALIGNMENT_VERSION = "script-timing-v5"
 
 
 @dataclass(slots=True)
@@ -36,6 +37,8 @@ class CachedTtsRequest:
     _wav_path: Path | None = None
     _meta_path: Path | None = None
     _alignment_key: str | None = None
+    _mark_alignment_key: str | None = None
+    _mark_offsets: tuple[tuple[int, ...], ...] = ()
 
     @classmethod
     async def register(
@@ -69,20 +72,41 @@ class CachedTtsRequest:
     ) -> ScriptTiming:
         await self.render()
         assert self._backend_result is not None
+        from .dialogue import DialogueLine
+        from .forced_alignment import ForcedAlignmentResource
+        lines = [event for event in contents if isinstance(event, DialogueLine)]
+        offsets = tuple(line.mark_offsets for line in lines)
         timing = self._backend_result.timing
-        if timing is not None and self._alignment_key is not None:
-            if self._alignment_key.startswith("native:"):
+        native = self._alignment_key is not None and self._alignment_key.startswith("native:")
+        if native and not any(offsets):
+            return ScriptTiming(tuple(replace(span, marks=()) for span in timing.dialogue_lines))
+        alignment = await self.resource.ainjector.get_instance_async(ForcedAlignmentResource)
+        requested_key = self._forced_alignment_key(contents, alignment.alignment_identity)
+        if timing is not None:
+            if not native and self._alignment_key == requested_key:
                 return timing
-            requested_key = self._forced_alignment_key(contents)
-            if self._alignment_key == requested_key:
+            if native and self._mark_offsets == offsets and self._mark_alignment_key == requested_key:
                 return timing
-
-        from .forced_alignment import WhisperXResource
-
-        whisperx = await self.resource.ainjector.get_instance_async(WhisperXResource)
-        timing = await whisperx.script_timing(contents, result)
+        aligned = await alignment.script_timing(
+            contents, result,
+            sample_rate=self.resource.config.resolved_output_sample_rate,
+            transcript_kind="complete",
+        )
+        if native:
+            enriched = []
+            for line, existing, measured in zip(lines, timing.dialogue_lines, aligned.dialogue_lines, strict=True):
+                marks = tuple(DialogueMarkTiming(
+                    existing.end if offset == len(line.spoken_text) else mark.previous_end,
+                    existing.start if offset == 0 else mark.next_start,
+                ) for offset, mark in zip(line.mark_offsets, measured.marks, strict=True))
+                enriched.append(replace(existing, marks=marks))
+            timing = ScriptTiming(tuple(enriched))
+            self._mark_alignment_key = requested_key
+        else:
+            timing = aligned
+            self._alignment_key = requested_key
         self._backend_result.timing = timing
-        self._alignment_key = self._forced_alignment_key(contents)
+        self._mark_offsets = offsets
         await asyncio.to_thread(self._write_metadata)
         return timing
 
@@ -140,6 +164,8 @@ class CachedTtsRequest:
         if int(actual_rate) != sample_rate:
             return None
         self._alignment_key = payload.get("alignment_key") if timing is not None else None
+        self._mark_alignment_key = payload.get("mark_alignment_key")
+        self._mark_offsets = tuple(tuple(values) for values in payload.get("dialogue_mark_offsets", ()))
         return BackendTtsResult(audio=audio, sample_rate=sample_rate, timing=timing)
 
     def _store_backend_result(self) -> None:
@@ -174,6 +200,14 @@ class CachedTtsRequest:
             "frame_count": self._backend_result.frame_count,
             "channels": self._backend_result.channel_count,
             "alignment_key": self._alignment_key,
+            "timing_format_version": 2,
+            "mark_alignment_key": self._mark_alignment_key,
+            "dialogue_mark_offsets": self._mark_offsets,
+            "dialogue_mark_timings": (
+                [[{"previous_end": mark.previous_end, "next_start": mark.next_start}
+                  for mark in span.marks] for span in self._backend_result.timing.dialogue_lines]
+                if self._backend_result.timing is not None else None
+            ),
             "dialogue_line_spans": (
                 [
                     [line.start, line.end]
@@ -197,7 +231,7 @@ class CachedTtsRequest:
         stat = self._wav_path.stat()
         return f"{stat.st_mtime_ns}:{stat.st_size}"
 
-    def _forced_alignment_key(self, contents: Sequence["ScriptEvent"]) -> str:
+    def _forced_alignment_key(self, contents: Sequence["ScriptEvent"], backend_identity: str = "") -> str:
         from .dialogue import DialogueLine, ScriptGap
 
         projection = []
@@ -209,13 +243,16 @@ class CachedTtsRequest:
                         "text": content.spoken_text,
                         "source": content.source,
                         "handling": content.handling,
+                        "mark_offsets": content.mark_offsets,
                     }
                 )
             elif isinstance(content, ScriptGap):
                 projection.append(
                     {"type": "gap", "label": content.label, "mode": content.mode}
                 )
-        encoded = json.dumps(projection, sort_keys=True, ensure_ascii=True)
+        encoded = json.dumps({"projection": projection, "backend": backend_identity,
+                              "language": self.resource.config.alignment_language,
+                              "transcript_kind": "complete"}, sort_keys=True, ensure_ascii=True)
         projection_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         return f"{_ALIGNMENT_VERSION}:{self._audio_identity()}:{projection_hash}"
 
@@ -236,6 +273,17 @@ def _timing_from_payload(payload: dict, expected_lines: int) -> ScriptTiming | N
         return None
     if len(lines) != expected_lines:
         return None
+    marks = payload.get("dialogue_mark_timings")
+    if marks is not None:
+        if len(marks) != expected_lines:
+            return None
+        try:
+            lines = tuple(replace(span, marks=tuple(DialogueMarkTiming(
+                None if mark["previous_end"] is None else float(mark["previous_end"]),
+                None if mark["next_start"] is None else float(mark["next_start"]),
+            ) for mark in items)) for span, items in zip(lines, marks, strict=True))
+        except (TypeError, ValueError, KeyError):
+            return None
     return ScriptTiming(dialogue_lines=lines)
 
 

@@ -8,22 +8,27 @@ import weakref
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import soundfile as sf
 import torch
 from carthage.dependency_injection import inject
-# An uninstalled checkout uses the VibeVoice submodule. Wheels include that same
-# package at top level, without installing VibeVoice's conflicting metadata.
-_vibevoice_source = Path(__file__).resolve().parents[1] / "vibevoice"
-if (_vibevoice_source / "vibevoice" / "__init__.py").is_file():
-    sys.path.insert(0, str(_vibevoice_source))
+if TYPE_CHECKING:
+    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
-from vibevoice.modular.modeling_vibevoice_inference import (
-    VibeVoiceForConditionalGenerationInference,
-)
-from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+
+def _vibevoice_types():
+    """Import the optional backend only when live synthesis needs it."""
+    # Checkouts can supply the vendored package without installing its metadata.
+    source = Path(__file__).resolve().parents[1] / "vibevoice"
+    if (source / "vibevoice" / "__init__.py").is_file() and str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
+    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    return VibeVoiceProcessor, VibeVoiceForConditionalGenerationInference
+
 
 from .cache import CACHE_DIRECTORY_KEY, CacheManager
 from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
@@ -245,6 +250,7 @@ class VibeVoiceResource(TtsResource):
             if self._processor is not None and self._model is not None:
                 return self._processor, self._model
 
+            VibeVoiceProcessor, _ = _vibevoice_types()
             processor = VibeVoiceProcessor.from_pretrained(self.config.resolved_model_name)
             self._sample_rate = getattr(
                 processor.audio_processor,
@@ -349,6 +355,7 @@ class VibeVoiceResource(TtsResource):
         load_dtype: torch.dtype,
         attn_implementation: str,
     ) -> VibeVoiceForConditionalGenerationInference:
+        _, VibeVoiceForConditionalGenerationInference = _vibevoice_types()
         if device == "mps":
             model = VibeVoiceForConditionalGenerationInference.from_pretrained(
                 model_name,

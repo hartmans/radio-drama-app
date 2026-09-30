@@ -10,7 +10,7 @@ from carthage.dependency_injection import InjectionKey, Injector
 
 from .cache import CACHE_OUTPUT_PATH_KEY, CacheManager
 from .config import ProductionConfig
-from .forced_alignment import WhisperXResource
+from .forced_alignment import ForcedAlignmentResource
 from .qwen_tts import QwenTtsResource
 from .dialogue import TtsResource
 from .proxy import configured_proxy_resource, load_proxy_tts_configs
@@ -56,6 +56,8 @@ def radio_drama_injector(
     injector = Injector(parent_injector=base_injector)
     if config is not None:
         injector.add_provider(config)
+    elif injector.injector_containing(ProductionConfig) is None:
+        injector.add_provider(ProductionConfig())
     if document_path is not None:
         injector.replace_provider(
             InjectionKey(ProductionDocumentPath),
@@ -93,8 +95,17 @@ def radio_drama_injector(
         proxy_key = InjectionKey(TtsResource, tts=name)
         if injector.injector_containing(proxy_key) is None:
             injector.add_provider(proxy_key, configured_proxy_resource(proxy_config))
-    if injector.injector_containing(WhisperXResource) is None:
-        injector.add_provider(WhisperXResource)
+    if injector.injector_containing(ForcedAlignmentResource) is None:
+        selected_config = injector.get_instance(ProductionConfig)
+        if selected_config.alignment_backend == "whisperx":
+            from .forced_alignment.whisperx import WhisperXResource
+            alignment_type = WhisperXResource
+        elif selected_config.alignment_backend == "qwen":
+            from .forced_alignment.qwen import QwenAlignmentResource
+            alignment_type = QwenAlignmentResource
+        else:
+            raise ValueError(f"Unknown alignment backend {selected_config.alignment_backend!r}")
+        injector.add_provider(InjectionKey(ForcedAlignmentResource), alignment_type)
     if injector.injector_containing(VoiceReferenceTranscriptionResource) is None:
         injector.add_provider(VoiceReferenceTranscriptionResource)
     if injector.injector_containing(NormalizedSoundCache) is None:

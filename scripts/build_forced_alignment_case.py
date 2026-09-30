@@ -10,9 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from radio_drama.forced_alignment.whisperx import WhisperXResponse, _alignment_result_from_whisperx_response
 from radio_drama.forced_alignment import (
-    WhisperXResponse,
-    _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
 )
 from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference

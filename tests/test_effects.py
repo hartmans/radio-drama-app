@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from phase1_helpers import TimingTtsDouble
+
 import asyncio
 import shutil
 from pathlib import Path
@@ -658,7 +660,7 @@ def test_preset_bus_preserves_script_timeline_length(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -695,7 +697,7 @@ def test_nested_script_presets_keep_outer_compose_scope(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -788,7 +790,7 @@ def test_script_preset_wraps_script_plan_and_applies_effects(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -836,7 +838,7 @@ def test_unknown_preset_raises_document_error(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """

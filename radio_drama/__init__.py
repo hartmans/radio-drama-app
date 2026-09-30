@@ -101,7 +101,7 @@ from .forced_alignment import (
     AlignedScriptResult,
     AlignedScriptSource,
     ScriptSlice,
-    WhisperXResource,
+    ForcedAlignmentResource,
 )
 from .init import radio_drama_injector
 from .planning import PlanningNode
@@ -110,7 +110,7 @@ from .frontmatter import write_podcast_sidecar
 from .production import ProductionPlan, render_from_input, write_production
 from .proxy import ProxyMount, ProxyTtsConfig, ProxyTtsResource
 from .qwen_tts import QwenTtsResource
-from .rendering import DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
+from .rendering import DialogueMarkTiming, DialogueLineTiming, ProductionResult, RenderResult, ScriptTiming
 from .sound import (
     NormalizedSoundCache,
     ProductionDocumentPath,
@@ -141,6 +141,7 @@ __all__ = [
     "convert_channel_count",
     "DialogueLine",
     "DialogueLineTiming",
+    "DialogueMarkTiming",
     "RegisteredTtsRequest",
     "DocumentError",
     "DocumentNode",
@@ -228,7 +229,7 @@ __all__ = [
     "validate_expression",
     "VibeVoiceResource",
     "VoiceReferenceTranscriptionResource",
-    "WhisperXResource",
+    "ForcedAlignmentResource",
     "numpy_stage",
     "normalize_effect_chain_name",
     "normalize_text_punctuation",

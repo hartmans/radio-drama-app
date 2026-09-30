@@ -17,7 +17,7 @@ from .dialogue import (
     ScriptGap,
     ScriptRenderRequest,
 )
-from .forced_alignment import WhisperXResource, copy_dialogue_contents
+from .forced_alignment import ForcedAlignmentResource, copy_dialogue_contents, AlignmentResult, WordTiming, AlignedClause
 from .qwen_tts import QwenTtsResource
 from .rendering import (
     BackendTtsResult,
@@ -46,18 +46,7 @@ class CachedRenderMetadata:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class CachedForcedAlignmentMetadata:
-    """Persisted structural metadata for one forced-alignment request."""
-
-    start_positions: tuple[float, ...]
-
-
 class MissingCachedRenderMetadata(RuntimeError):
-    pass
-
-
-class MissingCachedForcedAlignmentMetadata(RuntimeError):
     pass
 
 
@@ -397,109 +386,63 @@ class CachedQwenTtsResource(QwenTtsResource):
         return request.cache_hash()
 
 
-class CachedWhisperXResource(WhisperXResource):
-    """Cache-aware ``WhisperXResource`` substitute for pytest."""
-    _CACHE_FORMAT_VERSION = 2
+class CachedForcedAlignmentResource(ForcedAlignmentResource):
+    """Replay neutral evidence so real line/mark projection runs in either mode."""
+    _CACHE_FORMAT_VERSION = 3
 
-    def __init__(
-        self,
-        cache_directory: str | Path,
-        *,
-        mode: str = "cache",
-        **kwargs,
-    ) -> None:
+    def __init__(self, cache_directory, *, mode="cache", **kwargs):
         if mode not in {"cache", "live"}:
             raise ValueError("mode must be 'cache' or 'live'")
         super().__init__(**kwargs)
         self.cache_directory = Path(cache_directory)
         self.mode = mode
+        self._live_backend = None
 
-    async def fill_start_positions(
-        self,
-        contents: Sequence[ScriptEvent],
-        result: RenderResult,
-    ) -> list[ScriptEvent]:
-        metadata = self._load_cached_metadata(contents, result)
-        if metadata is None:
-            if self.mode == "cache":
-                import pytest
+    @property
+    def alignment_identity(self):
+        return f"replay:{self.config.alignment_backend}:v3"
 
-                pytest.skip(f"No cached forced-alignment metadata for request {self._cache_key(contents, result)}")
-            aligned_contents = await self._live_fill_start_positions(contents, result)
-            metadata = CachedForcedAlignmentMetadata(
-                start_positions=tuple(float(content.start_pos) for content in aligned_contents),
-            )
-            self._store_cached_metadata(contents, result, metadata)
-            return aligned_contents
-        return self._apply_cached_metadata(contents, metadata)
+    @property
+    def transcription_identity(self):
+        return self.alignment_identity
 
-    async def _live_fill_start_positions(
-        self,
-        contents: Sequence[ScriptEvent],
-        result: RenderResult,
-    ) -> list[ScriptEvent]:
-        return await super().fill_start_positions(contents, result)
+    async def _live_align(self, request):
+        if self._live_backend is None:
+            if self.config.alignment_backend == "qwen":
+                from .forced_alignment.qwen import QwenAlignmentResource
+                backend = QwenAlignmentResource
+            else:
+                from .forced_alignment.whisperx import WhisperXResource
+                backend = WhisperXResource
+            self._live_backend = await self.ainjector(backend)
+        return await (await self._live_backend.register_request(request)).align()
 
-    def _apply_cached_metadata(
-        self,
-        contents: Sequence[ScriptEvent],
-        metadata: CachedForcedAlignmentMetadata,
-    ) -> list[ScriptEvent]:
-        copied = copy_dialogue_contents(contents)
-        if len(copied) != len(metadata.start_positions):
-            raise MissingCachedForcedAlignmentMetadata(
-                "Cached forced-alignment metadata length does not match contents"
-            )
-        for content, start_pos in zip(copied, metadata.start_positions, strict=True):
-            content.start_pos = float(start_pos)
-        return copied
-
-    def _load_cached_metadata(
-        self,
-        contents: Sequence[ScriptEvent],
-        result: RenderResult,
-    ) -> CachedForcedAlignmentMetadata | None:
-        cache_path = self.cache_directory / f"{self._cache_key(contents, result)}.json"
-        if not cache_path.is_file():
-            return None
-        payload = json.loads(cache_path.read_text(encoding="utf-8"))
-        return CachedForcedAlignmentMetadata(
-            start_positions=tuple(payload["start_positions"]),
-        )
-
-    def _store_cached_metadata(
-        self,
-        contents: Sequence[ScriptEvent],
-        result: RenderResult,
-        metadata: CachedForcedAlignmentMetadata,
-    ) -> None:
-        cache_path = self.cache_directory / f"{self._cache_key(contents, result)}.json"
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(
-            json.dumps(asdict(metadata), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-
-    def _cache_key(
-        self,
-        contents: Sequence[ScriptEvent],
-        result: RenderResult,
-    ) -> str:
-        payload = json.dumps(
-            {
-                "contents": [_serialize_dialogue_content(content) for content in contents],
-                "audio_sha256": hashlib.sha256(
-                    np.ascontiguousarray(result.audio, dtype=np.float32).tobytes()
-                ).hexdigest(),
-                "frame_count": int(result.frame_count),
-                "channel_count": int(result.channel_count),
-                "sample_rate": int(self.config.resolved_output_sample_rate),
-                "cache_format_version": self._CACHE_FORMAT_VERSION,
-            },
-            sort_keys=True,
-            ensure_ascii=True,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    async def _process_batch(self, requests):
+        results = []
+        for request in requests:
+            digest = hashlib.sha256(np.ascontiguousarray(request.audio, dtype=np.float32).tobytes()).hexdigest()
+            key = json.dumps({"audio": digest, "sample_rate": request.sample_rate,
+                              "transcript": request.transcript, "kind": request.transcript_kind,
+                              "words": request.require_word_alignment, "language": request.language,
+                              "identity": self.alignment_identity}, sort_keys=True)
+            path = self.cache_directory / (hashlib.sha256(key.encode()).hexdigest() + ".json")
+            if path.is_file():
+                payload = json.loads(path.read_text())
+                result = AlignmentResult(
+                    None if payload["words"] is None else tuple(WordTiming(**w) for w in payload["words"]),
+                    tuple(AlignedClause(**c) for c in payload["clauses"]),
+                    tuple(AlignedClause(**c) for c in payload["preferred_clauses"]),
+                    payload["source_text"], payload["language"], payload["estimated"],
+                )
+            else:
+                if self.mode == "cache":
+                    import pytest
+                    pytest.skip(f"No neutral forced-alignment replay for {path.name}")
+                result = await self._live_align(request)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(asdict(result), indent=2) + "\n")
+            results.append(result)
+        return results
 
 
 def _serialize_dialogue_content(content: ScriptEvent) -> dict[str, object]:

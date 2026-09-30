@@ -1,0 +1,99 @@
+{
+  "words": [
+    {
+      "text": "Dawn",
+      "start": 0.0,
+      "end": 0.48
+    },
+    {
+      "text": "you",
+      "start": 0.8,
+      "end": 1.04
+    },
+    {
+      "text": "seem",
+      "start": 1.04,
+      "end": 1.36
+    },
+    {
+      "text": "really",
+      "start": 1.36,
+      "end": 1.6
+    },
+    {
+      "text": "tense",
+      "start": 1.6,
+      "end": 2.08
+    },
+    {
+      "text": "tonight",
+      "start": 2.08,
+      "end": 2.56
+    },
+    {
+      "text": "Is",
+      "start": 3.04,
+      "end": 3.2
+    },
+    {
+      "text": "there",
+      "start": 3.2,
+      "end": 3.28
+    },
+    {
+      "text": "something",
+      "start": 3.36,
+      "end": 3.76
+    },
+    {
+      "text": "going",
+      "start": 3.76,
+      "end": 4.0
+    },
+    {
+      "text": "on",
+      "start": 4.0,
+      "end": 4.32
+    },
+    {
+      "text": "You",
+      "start": 4.8,
+      "end": 4.96
+    },
+    {
+      "text": "know",
+      "start": 4.96,
+      "end": 5.2
+    },
+    {
+      "text": "you",
+      "start": 5.2,
+      "end": 5.36
+    },
+    {
+      "text": "can",
+      "start": 5.36,
+      "end": 5.52
+    },
+    {
+      "text": "tell",
+      "start": 5.52,
+      "end": 5.76
+    },
+    {
+      "text": "me",
+      "start": 5.76,
+      "end": 5.92
+    },
+    {
+      "text": "anything",
+      "start": 5.92,
+      "end": 6.4
+    }
+  ],
+  "clauses": [],
+  "preferred_clauses": [],
+  "source_text": "Dawn, you seem really tense tonight. Is there something going on? You know you can tell me anything.",
+  "language": "en",
+  "estimated": false
+}

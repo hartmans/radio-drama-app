@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from phase1_helpers import start_position_fixture, TimingTtsDouble
+
 import asyncio
 import json
 import math
@@ -17,17 +19,17 @@ from radio_drama.document import parse_production_string
 from radio_drama.forced_alignment import (
     AlignedScriptSource,
     AlignedClause,
-    AlignedWord,
+    WordTiming,
+    ForcedAlignmentResource,
     AlignmentResult,
     ForcedAlignmentRequest,
-    WhisperXResponse,
-    WhisperXResource,
-    _alignment_result_from_whisperx_response,
     fill_start_positions_from_alignment,
     fill_start_positions_from_timing,
-    _normalized_tokens,
-    _aligned_word_tokens,
 )
+from radio_drama.forced_alignment.whisperx import (
+    WhisperXResource, WhisperXResponse, _alignment_result_from_whisperx_response,
+)
+from radio_drama.forced_alignment.projection import _normalized_tokens, _aligned_word_tokens
 from radio_drama.init import radio_drama_injector
 from radio_drama.dialogue import (
     DialogueAudio,
@@ -135,7 +137,10 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated = []
             next_line_start = 0.0
             for content in contents:
@@ -154,8 +159,8 @@ def test_forced_alignment_debug_logs_line_positions(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -214,12 +219,15 @@ def test_aligned_script_source_prefers_native_script_timing(tmp_path: Path):
                 )
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             raise AssertionError("native script timing should bypass WhisperX")
 
     async def runner():
         injector, ainjector = await _make_async_injector(config)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             aligned_source = await ainjector(
                 AlignedScriptSource,
@@ -283,8 +291,8 @@ def test_forced_alignment_prefers_exact_clause_start_when_first_word_is_missing(
     ]
     alignment = AlignmentResult(
         words=(
-            AlignedWord(text="Alpha", start=1.0, end=2.0),
-            AlignedWord(text="Charlie", start=2.5, end=3.0),
+            WordTiming(text="Alpha", start=1.0, end=2.0),
+            WordTiming(text="Charlie", start=2.5, end=3.0),
         ),
         clauses=(
             AlignedClause(text="Alpha.", start=1.0, end=2.0),
@@ -309,14 +317,14 @@ def test_forced_alignment_normalizes_typographic_apostrophes():
     ]
     alignment = AlignmentResult(
         words=(
-            AlignedWord(text="That's", start=1.0, end=1.2),
-            AlignedWord(text="disgusting.", start=1.2, end=1.8),
-            AlignedWord(text="We", start=2.0, end=2.1),
-            AlignedWord(text="don't", start=2.1, end=2.3),
-            AlignedWord(text="hang", start=2.3, end=2.5),
-            AlignedWord(text="people", start=2.5, end=2.7),
-            AlignedWord(text="any", start=2.7, end=2.8),
-            AlignedWord(text="more.", start=2.8, end=3.0),
+            WordTiming(text="That's", start=1.0, end=1.2),
+            WordTiming(text="disgusting.", start=1.2, end=1.8),
+            WordTiming(text="We", start=2.0, end=2.1),
+            WordTiming(text="don't", start=2.1, end=2.3),
+            WordTiming(text="hang", start=2.3, end=2.5),
+            WordTiming(text="people", start=2.5, end=2.7),
+            WordTiming(text="any", start=2.7, end=2.8),
+            WordTiming(text="more.", start=2.8, end=3.0),
         ),
         clauses=(
             AlignedClause(text="That's disgusting.", start=1.0, end=1.8),
@@ -341,9 +349,9 @@ def test_forced_alignment_does_not_infer_line_start_from_clause_end_boundary():
     ]
     alignment = AlignmentResult(
         words=(
-            AlignedWord(text="Alpha", start=10.0, end=10.4),
-            AlignedWord(text="Bravo", start=10.4, end=10.8),
-            AlignedWord(text="Delta", start=11.5, end=12.0),
+            WordTiming(text="Alpha", start=10.0, end=10.4),
+            WordTiming(text="Bravo", start=10.4, end=10.8),
+            WordTiming(text="Delta", start=11.5, end=12.0),
         ),
         clauses=(
             AlignedClause(text="Alpha.", start=10.0, end=10.4),
@@ -444,7 +452,7 @@ def test_whisperx_resource_prefers_exact_aligned_segments_over_coarse_transcript
 
     alignment = asyncio.run(runner())
 
-    assert alignment.words == ()
+    assert alignment.words is None
     assert [(clause.start, clause.end, clause.text) for clause in alignment.clauses] == [
         (19.425, 20.605, "That is not true at all."),
         (31.449, 33.409, "I don't see you rushing to give up your soul."),
@@ -465,10 +473,10 @@ def test_forced_alignment_word_matcher_can_resynchronize_after_missed_line():
     ]
     alignment = AlignmentResult(
         words=(
-            AlignedWord(text="Charlie", start=2.0, end=2.3),
-            AlignedWord(text="Delta", start=2.3, end=2.6),
-            AlignedWord(text="Echo", start=3.0, end=3.3),
-            AlignedWord(text="Foxtrot", start=3.3, end=3.7),
+            WordTiming(text="Charlie", start=2.0, end=2.3),
+            WordTiming(text="Delta", start=2.3, end=2.6),
+            WordTiming(text="Echo", start=3.0, end=3.3),
+            WordTiming(text="Foxtrot", start=3.3, end=3.7),
         ),
         clauses=(
             AlignedClause(text="Charlie Delta Echo Foxtrot.", start=2.0, end=3.7),
@@ -495,12 +503,12 @@ def test_forced_alignment_script_gap_marks_omitted_interval():
     ]
     alignment = AlignmentResult(
         words=(
-            AlignedWord(text="Alpha", start=1.0, end=1.3),
-            AlignedWord(text="Bravo", start=1.3, end=1.6),
-            AlignedWord(text="Charlie", start=2.0, end=2.3),
-            AlignedWord(text="Delta", start=2.3, end=2.6),
-            AlignedWord(text="Echo", start=3.0, end=3.3),
-            AlignedWord(text="Foxtrot", start=3.3, end=3.6),
+            WordTiming(text="Alpha", start=1.0, end=1.3),
+            WordTiming(text="Bravo", start=1.3, end=1.6),
+            WordTiming(text="Charlie", start=2.0, end=2.3),
+            WordTiming(text="Delta", start=2.3, end=2.6),
+            WordTiming(text="Echo", start=3.0, end=3.3),
+            WordTiming(text="Foxtrot", start=3.3, end=3.6),
         ),
         clauses=(),
     )
@@ -512,7 +520,7 @@ def test_forced_alignment_script_gap_marks_omitted_interval():
     assert filled[2].start_pos == 3.0
 
 
-@pytest.mark.parametrize("timing_method", ["fill_start_positions", "script_timing"])
+@pytest.mark.parametrize("timing_method", ["script_timing"])
 def test_gap_alignment_keeps_words_even_when_clauses_match(timing_method):
     config = ProductionConfig(output_sample_rate=16000, output_channels=1)
     segments = [
@@ -649,12 +657,13 @@ def test_whisperx_resource_batches_registered_requests_and_skips_align_when_not_
         def _prepare_batch_sync(self, batch):
             self.batch_sizes.append(len(batch))
             return [
-                self._prepare_request_sync(pending.registration.request)
-                for pending in batch
+                self._prepare_request_sync(request)
+                for request in batch
             ]
 
         def _prepare_request_sync(self, request):
-            return type(super()._prepare_request_sync(request))(
+            from radio_drama.forced_alignment.whisperx import _PreparedForcedAlignment
+            return _PreparedForcedAlignment(
                 request=request,
                 mono_audio=np.zeros(16000, dtype=np.float32),
                 transcription_segments=(
@@ -701,10 +710,8 @@ def test_whisperx_resource_batches_registered_requests_and_skips_align_when_not_
     batch_sizes, align_model_requests, responses = asyncio.run(runner())
     assert batch_sizes == [2]
     assert align_model_requests == 0
-    assert [response.decision for response in responses] == [
-        "transcription_exact_clause_match",
-        "transcription_exact_clause_match",
-    ]
+    assert all(response.words is None for response in responses)
+    assert all(len(response.clauses) == 2 for response in responses)
 
 
 @pytest.mark.parametrize("text", [
@@ -720,7 +727,7 @@ def test_callsign_digit_tokens(text):
 
 
 def test_numeric_word_expansion_keeps_original_timestamps():
-    assert _aligned_word_tokens([AlignedWord("132.45.", 2.673, 3.053)]) == [
+    assert _aligned_word_tokens([WordTiming("132.45.", 2.673, 3.053)]) == [
         (token, 2.673, 3.053) for token in ("1", "3", "2", ".", "4", "5")
     ]
     assert _normalized_tokens("Hello. Zero-nine!") == ("hello", "0", "9")
@@ -746,8 +753,10 @@ def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundar
     class SavedWhisperX(WhisperXResource):
         async def register_request(self, request):
             async def align():
-                return response
-            return SimpleNamespace(align=align)
+                return _alignment_result_from_whisperx_response(
+                    request.transcript, response,
+                    duration_seconds=request.audio.shape[0] / request.sample_rate)
+            return SimpleNamespace(align=lambda: align())
 
     async def runner():
         config = ProductionConfig(output_sample_rate=24000, output_channels=1)
@@ -755,7 +764,9 @@ def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundar
         try:
             resource = await ainjector(SavedWhisperX)
             audio = RenderResult(audio=np.zeros(953600, dtype=np.float32))
-            direct = await resource.fill_start_positions(contents, audio)
+            direct = fill_start_positions_from_alignment(contents, _alignment_result_from_whisperx_response(
+                "\n".join(x.spoken_text for x in contents if isinstance(x, DialogueLine)), response,
+                duration_seconds=audio.frame_count / config.resolved_output_sample_rate))
             timing = await resource.script_timing(contents, audio)
             projected = fill_start_positions_from_timing(contents, timing)
             return direct, timing, projected
@@ -797,16 +808,16 @@ def test_extended_recording_prefers_original_segment_over_compressed_alignment()
 
 
 def test_clause_matches_are_per_line_ordered_and_use_actual_text():
-    from radio_drama.forced_alignment import _line_spans_from_exact_clauses
+    from radio_drama.forced_alignment.projection import _line_spans_from_exact_clauses
     assert _line_spans_from_exact_clauses(["Wrong words."], [AlignedClause("Other text.", 1., 2.)]) is None
     speaker = SpeakerVoiceReference(authored_name="ATC", voice_name="atc.wav", resolved_path=Path("atc.wav"))
     contents = [ScriptGap()]
     for text in ("Alpha bravo.", "Charlie delta.", "Echo foxtrot.", "Alpha bravo.", "Missing entirely."):
         contents.append(DialogueLine(speaker=speaker, spoken_text=text))
     alignment = AlignmentResult(
-        transcription_clauses=(AlignedClause("Alpha bravo.", 1., 3.), AlignedClause("Alpha bravo.", 9., 10.)),
+        preferred_clauses=(AlignedClause("Alpha bravo.", 1., 3.), AlignedClause("Alpha bravo.", 9., 10.)),
         clauses=(AlignedClause("Charlie", 4., 4.5), AlignedClause("delta.", 4.5, 5.)),
-        words=(AlignedWord("Echo", 6., 6.5), AlignedWord("foxtrot", 6.5, 7.)),
+        words=(WordTiming("Echo", 6., 6.5), WordTiming("foxtrot", 6.5, 7.)),
     )
     result = fill_start_positions_from_alignment(contents, alignment)
     assert [line.start_pos for line in result[1:-1]] == [1., 4., 6., 9.]

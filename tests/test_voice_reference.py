@@ -8,7 +8,7 @@ from carthage.dependency_injection import AsyncInjector, InjectionKey
 
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import SpeakerVoiceReference
-from radio_drama.forced_alignment import WhisperXResource
+from radio_drama.forced_alignment import ForcedAlignmentResource
 from radio_drama.init import radio_drama_injector
 from radio_drama.voice_reference import VoiceReferenceTranscriptionResource
 
@@ -20,6 +20,8 @@ def test_voice_reference_transcription_is_cached_and_enriches_in_place(tmp_path:
     calls = []
 
     class FakeWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
         def transcribe_audio_sample_sync(self, audio, sample_rate):
             calls.append((np.array(audio), sample_rate))
             return "Reference words."
@@ -30,7 +32,7 @@ def test_voice_reference_transcription_is_cached_and_enriches_in_place(tmp_path:
             event_loop=asyncio.get_running_loop(),
         )
         injector.replace_provider(
-            InjectionKey(WhisperXResource), FakeWhisperX(), close=False
+            InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False
         )
         try:
             resource = await injector(AsyncInjector)(VoiceReferenceTranscriptionResource)

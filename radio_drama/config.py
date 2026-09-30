@@ -9,6 +9,7 @@ SUPPORTED_DEBUG_CATEGORIES = (
     "forced_alignment",
     "vibevoice_output",
     "whisperx",
+    "qwen_alignment",
 )
 DEFAULT_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
@@ -25,6 +26,10 @@ MODEL_NATIVE_SAMPLE_RATE = 24000
 
 @dataclass(slots=True)
 class ProductionConfig:
+    alignment_backend: str = "whisperx"
+    alignment_language: str = "en"
+    qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B-hf"
+    qwen_alignment_model: str = "Qwen/Qwen3-ForcedAligner-0.6B-hf"
     voice_directory: Path | None = None
     sounds_directory: Path | None = None
     debug_log_path: Path | None = None

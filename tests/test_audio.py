@@ -14,7 +14,7 @@ from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptRenderReques
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectPipeline
 from radio_drama.errors import DocumentError
-from radio_drama.forced_alignment import WhisperXResource
+from radio_drama.forced_alignment import ForcedAlignmentResource
 from radio_drama.rendering import RenderResult
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
 from radio_drama.vibevoice import VibeVoiceResource

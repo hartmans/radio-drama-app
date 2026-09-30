@@ -200,7 +200,7 @@ Current resource contract:
 * `ScriptRenderRequest` is also the shared speech-cache identity: it owns the stable semantic hash and the human-readable first-words label used in filenames
 * that script-render cache is intentionally production-facing rather than purely implementation-facing: once the director accepts how a production sounds, the cached `ScriptRenderRequest` artifacts may effectively become part of the accepted production assets, so cache-key stability is allowed to be higher there than in purely derived global caches
 * backend registrations return `BackendTtsResult`: model-native audio, its sample rate, and optional model-independent `ScriptTiming`; the shared registration converts cached native audio to the production format before returning `ScriptRenderResult`
-* `ScriptTiming` contains an ordered start/end span for every synthesized `DialogueLine`; native and forced-alignment timing use this same representation, while marker frames remain the downstream slicing interface
+* `ScriptTiming` in `rendering.py` contains an ordered `DialogueLineTiming` span for each dialogue line, plus `DialogueMarkTiming(previous_end, next_start)` entries parallel to its `mark_offsets`. Unknown sides are `None`. Native and forced-alignment timing share these types; marker frames remain the downstream slicing interface
 * `VibeVoiceResource` derives its speaker-numbered normalized script and ordered voice-sample list internally from those dialogue lines, sharing a slot for the same resolved reference path and gain regardless of authored speaker name or output effects
 * `QwenTtsResource` accepts the same `ScriptRenderRequest` objects and renders scripts by cloning each `DialogueLine` speaker voice line-by-line before concatenating one script result
 * all speech backends preprocess incoming reference voice audio through the shared internal voice-preprocess chain before handing it to the model, followed by the speaker reference gain
@@ -228,16 +228,21 @@ Current resource contract:
 * `CacheCollection` keeps the existing filename scheme abstractly: each artifact stem is `{collection_name}_{sanitized_first_words}_{semantic_hash}`, so VibeVoice cache filenames stay stable while Qwen uses the same contract with a different collection prefix
 * the backend-independent TTS cache persists model-native WAV output plus a flat adjacent `.meta` JSON object containing the sample rate, frame and channel counts, alignment key, and optional dialogue-line spans
 * the alignment key combines an alignment-format version, the cached audio file's identity, and the alignment projection; a projection change reruns forced alignment and rewrites only `.meta`, while an unchanged key reuses timing across sessions
-* a backend may provide native line spans; otherwise `ensure_timing()` asks `WhisperXResource` for spans and stores them in the same metadata format. Recorded-source forced alignment remains uncached
+* a backend may provide native line spans; otherwise `ensure_timing()` asks the injected `ForcedAlignmentResource` for spans and stores them in the same metadata format. Recorded-source forced alignment remains uncached
 * old VibeVoice `{wav,json}` pairs retain their existing stems: the VibeVoice backend can read them once, after which the shared layer adds `.meta` without rewriting the WAV. Other old backend-specific JSON metadata is not part of the new cache contract
 * cache lookup may run a validator over the discovered subtype-to-path mapping; validation failures delete the stale files before the miss path repopulates the cache
-* `VoiceReferenceTranscriptionResource` owns WhisperX transcription and a preprocessing-versioned global text cache for reference voices; Qwen uses it while constructing prompt features, and proxy resources use it only when requested by container capabilities
+* `VoiceReferenceTranscriptionResource` uses the selected alignment resource for transcription and owns a backend-identity/preprocessing-versioned global text cache for reference voices; Qwen uses it while constructing prompt features, and proxy resources use it only when requested by container capabilities
 * Qwen also keeps a separate global prompt-feature cache for reference voices; unlike the production script-render cache, that prompt cache is implementation-facing and therefore includes the current reference-voice preprocessing version in its cache key
-* `WhisperXResource` accepts forced-alignment requests at render time and drains them through one shared ASR model plus a bounded alignment executor
-* WhisperX ASR and alignment models are loaded lazily and only when a request path actually needs them
-* heavyweight lazy model loads are serialized process-wide across resource types; generation and alignment work may still run concurrently after startup
-* `WhisperXResource` also exposes direct single-sample ASR so other resources can derive metadata such as Qwen voice-clone prompt transcripts from reference voice files
-* WhisperX-specific raw responses stay at the resource boundary; conversion into model-independent `AlignmentResult` objects happens in pure helper logic outside the resource
+* injector initialization selects `WhisperXResource` or `QwenAlignmentResource` under the unqualified `ForcedAlignmentResource` key using `ProductionConfig.alignment_backend`; consumers and tests inject this interface. WhisperX remains the default pending Qwen inference validation
+* `forced_alignment.base` defines queued requests and neutral `AlignmentResult`, `WordTiming`, `AlignedClause`, and `TranscriptionResult` contracts. Backend payloads stay in adapters. Seconds refer to input audio; word order follows the transcript; missing boundaries remain unknown
+* `forced_alignment.projection` matches intact authored lines and refines character offsets from the accepted full-line word correspondence. Internal failures cannot change line bounds or search cursors. Exact original WhisperX clauses retain priority
+* recordings use `script_timing()` and the same timing-to-slice projection as TTS. Script gaps and internal marks require word alignment. Native TTS line bounds remain authoritative when forced alignment enriches marks
+* offsets change the derived timing cache key, which also includes backend identity and language, without changing the synthesized audio cache identity
+* prepared `ScriptPlan(node=..., script_events=..., tts=...)` supports callers with resolved dialogue lines, retaining document/error context
+* Qwen uses native Transformers APIs, independently lazy ASR/alignment models, and configurable batches of overlapping 180-second windows (10-second overlap). Recording windows use text and absolute timestamp correspondence for seams, with bounded bridge retries
+* complete Qwen transcripts up to 180 seconds align without ASR. Longer complete transcripts currently raise explicitly: validated text/window assignment remains an implementation gate, with no implicit ASR fallback
+* VibeVoice implementation imports occur only when live synthesis loads its processor/model. Imports, injector setup and cache replay do not require VibeVoice installed
+* heavyweight model loads are serialized process-wide; inference can run concurrently after startup
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 * `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation
@@ -401,14 +406,14 @@ Current cache-backed resources follow the same broad pattern:
   it persists enough metadata to replay the production-facing render contract without rerunning the speech model
 * `CachedQwenTtsResource` sits at the `QwenTtsResource` boundary
   it persists enough metadata to replay the production-facing render contract without rerunning the Qwen speech model
-* `CachedWhisperXResource` sits at the `WhisperXResource` boundary
-  it persists enough metadata to replay filled `ScriptEvent.start_pos` values without rerunning forced alignment
+* `CachedForcedAlignmentResource` sits at the neutral resource boundary
+  it persists alignment evidence so replay exercises real line and mark projection
 
 For the current implementation, cached metadata is resource-specific:
 
 * VibeVoice cache metadata includes model-native sample rate and frame count
 * Qwen TTS cache metadata includes model-native sample rate and frame count
-* WhisperX cache metadata includes the ordered `start_pos` values written onto `ScriptEvent` entries
+* alignment replay metadata includes words, clauses, original preferred clauses, source text, language and estimated status; keys include audio, transcript kind, word requirements and backend identity
 
 This keeps tests focused on structural behavior such as batching, ordering, output-format conversion, and alignment cut points rather than exact waveform reproduction.
 

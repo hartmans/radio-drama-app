@@ -108,6 +108,10 @@ def initialize_arg_parser(
         default=[],
         help="Enable one debug log category. May be supplied more than once.",
     )
+    parser.add_argument("--alignment-backend", choices=("whisperx", "qwen"), default="whisperx")
+    parser.add_argument("--alignment-language", default="en")
+    parser.add_argument("--qwen-asr-model", default="Qwen/Qwen3-ASR-1.7B-hf")
+    parser.add_argument("--qwen-alignment-model", default="Qwen/Qwen3-ForcedAligner-0.6B-hf")
     return parser
 
 
@@ -132,6 +136,10 @@ def build_config_from_namespace(
     debug_categories = tuple(getattr(args, "debug", ()))
     debug_log_path = Path(f"{output_path}.log") if debug_categories else None
     return ProductionConfig(
+        alignment_backend=getattr(args, "alignment_backend", "whisperx"),
+        alignment_language=getattr(args, "alignment_language", "en"),
+        qwen_asr_model=getattr(args, "qwen_asr_model", "Qwen/Qwen3-ASR-1.7B-hf"),
+        qwen_alignment_model=getattr(args, "qwen_alignment_model", "Qwen/Qwen3-ForcedAligner-0.6B-hf"),
         voice_directory=Path(args.voice_dir) if args.voice_dir is not None else None,
         sounds_directory=Path(args.sounds_dir) if args.sounds_dir is not None else None,
         debug_log_path=debug_log_path,

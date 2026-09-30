@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from phase1_helpers import start_position_fixture, TimingTtsDouble
+
 import asyncio
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptP
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
-from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, WhisperXResource
+from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, ForcedAlignmentResource
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
@@ -94,7 +96,7 @@ def test_speaker_map_mapping_applies_effect_in_special_script_slice(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -136,7 +138,7 @@ def test_script_plan_allows_stanzas_and_paragraph_fill(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -192,7 +194,7 @@ def test_script_plan_routes_qwen_scripts_to_qwen_resource(tmp_path: Path):
     async def runner():
         injector, ainjector = await make_async_injector(config)
         fake_qwen = FakeQwen()
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         injector.replace_provider(InjectionKey(TtsResource, tts="qwen"), fake_qwen, close=False)
         try:
             root = parse_production_string(
@@ -290,7 +292,7 @@ def test_script_plan_allows_empty_script(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -412,7 +414,10 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             return contents
 
     class FakeSoundCache:
@@ -424,8 +429,8 @@ def test_script_with_sound_builds_script_slices_from_aligned_source(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -515,13 +520,16 @@ def test_recording_script_renders_without_tts_registration(tmp_path: Path):
             return asyncio.create_task(asyncio.sleep(0, result=base_audio))
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             raise AssertionError("a whole recording slice should bypass alignment")
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -567,7 +575,10 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
             raise AssertionError("recording-only script should not register a speech render request")
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             assert result.audio.tolist() == pytest.approx(base_audio.tolist())
             assert [type(content).__name__ for content in contents] == [
                 "DialogueLine",
@@ -597,8 +608,8 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -665,7 +676,10 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated = []
             for content in contents:
                 if isinstance(content, DialogueLine):
@@ -703,8 +717,8 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -753,7 +767,10 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated = []
             for content in contents:
                 if isinstance(content, DialogueLine):
@@ -780,8 +797,8 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -832,7 +849,10 @@ def test_leading_recording_gap_excludes_lead_in(tmp_path: Path, tts_intro: str):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             assert [type(content) for content in contents] == [ScriptGap, DialogueLine]
             alignment_calls.append(True)
             return fill_recording_timing(contents)
@@ -848,8 +868,8 @@ def test_leading_recording_gap_excludes_lead_in(tmp_path: Path, tts_intro: str):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeTts(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeTts(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -890,7 +910,7 @@ def test_recording_projection_tracks_current_dialogue_source(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
         try:
             root = parse_production_string(
                 """
@@ -958,7 +978,10 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated: list[DialogueAudio | DialogueLine] = []
             for index, content in enumerate(contents):
                 if isinstance(content, DialogueLine):
@@ -976,8 +999,8 @@ def test_script_with_ignore_discards_guidance_audio(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -1022,7 +1045,10 @@ def test_script_line_without_audio_attrs_does_not_create_extra_script_slice(tmp_
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             return contents
 
     class FakeSoundCache:
@@ -1034,8 +1060,8 @@ def test_script_line_without_audio_attrs_does_not_create_extra_script_slice(tmp_
 
     async def runner():
         injector, ainjector = await make_async_injector(config, document_path=xml_path)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
         try:
             root = parse_production_string(
@@ -1080,7 +1106,10 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated: list[DialogueAudio | DialogueLine] = []
             for index, content in enumerate(contents):
                 if isinstance(content, DialogueLine):
@@ -1099,8 +1128,8 @@ def test_script_line_audio_attrs_create_special_script_slice(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -1147,7 +1176,10 @@ def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Pa
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated: list[DialogueAudio | DialogueLine] = []
             line_index = 0
             for content in contents:
@@ -1168,8 +1200,8 @@ def test_script_line_boundary_marks_create_special_slice_and_bubble(tmp_path: Pa
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """
@@ -1212,7 +1244,10 @@ def test_script_group_attrs_create_special_script_slices(tmp_path: Path):
             return Registered()
 
     class FakeWhisperX:
-        async def fill_start_positions(self, contents, result):
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
             updated: list[DialogueAudio | DialogueLine] = []
             for index, content in enumerate(contents):
                 if isinstance(content, DialogueLine):
@@ -1231,8 +1266,8 @@ def test_script_group_attrs_create_special_script_slices(tmp_path: Path):
 
     async def runner():
         injector, ainjector = await make_async_injector(config)
-        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), FakeVibeVoice(), close=False)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             root = parse_production_string(
                 """

@@ -22,7 +22,8 @@ from radio_drama.rendering import (
 )
 from radio_drama.testing import CachedQwenTtsResource
 from radio_drama.testing import CachedVibeVoiceResource
-from radio_drama.testing import CachedWhisperXResource
+from radio_drama.testing import CachedForcedAlignmentResource
+from radio_drama.forced_alignment import AlignmentResult, AlignedClause, fill_start_positions_from_timing
 
 from phase1_helpers import PlaceholderAudioPlan
 from phase1_helpers import make_async_injector as shared_make_async_injector
@@ -52,6 +53,8 @@ def _request_from_normalized_script(
 
 
 class FakeCachedVibeVoiceResource(CachedVibeVoiceResource):
+    sample_rate = 24000
+
     def __init__(self, native_frame_count: int = 1200, **kwargs) -> None:
         super().__init__(**kwargs)
         self.native_frame_count = native_frame_count
@@ -66,6 +69,8 @@ class FakeCachedVibeVoiceResource(CachedVibeVoiceResource):
 
 
 class FakeCachedQwenTtsResource(CachedQwenTtsResource):
+    sample_rate = 24000
+
     def __init__(self, native_frame_count: int = 1200, **kwargs) -> None:
         super().__init__(**kwargs)
         self.native_frame_count = native_frame_count
@@ -80,6 +85,8 @@ class FakeCachedQwenTtsResource(CachedQwenTtsResource):
 
 
 class FakeCachedQwenTimedTtsResource(CachedQwenTtsResource):
+    sample_rate = 24000
+
     def __init__(self, native_frame_count: int = 1200, **kwargs) -> None:
         super().__init__(**kwargs)
         self.native_frame_count = native_frame_count
@@ -114,17 +121,17 @@ class FakeCachedQwenTimedTtsResource(CachedQwenTtsResource):
         return results
 
 
-class FakeCachedWhisperXResource(CachedWhisperXResource):
+class FakeCachedForcedAlignmentResource(CachedForcedAlignmentResource):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.live_call_count = 0
 
-    async def _live_fill_start_positions(self, contents, result):
+    async def _live_align(self, request):
         self.live_call_count += 1
-        updated = copy_dialogue_contents(contents)
-        for index, content in enumerate(updated):
-            content.start_pos = index * 0.25
-        return updated
+        return AlignmentResult(None, tuple(
+            AlignedClause(text, index * .5, index * .5)
+            for index, text in enumerate(request.transcript.splitlines())
+        ))
 
 
 def test_cached_vibevoice_resource_replays_cached_metadata(
@@ -312,8 +319,8 @@ def test_cached_qwen_resource_replays_native_timing_metadata(
     assert cache_result.timing == live_result.timing
 
 
-def test_cached_whisperx_resource_replays_cached_metadata(
-    cached_whisperx_resource_factory,
+def test_cached_alignment_resource_replays_cached_metadata(
+    cached_alignment_resource_factory,
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
@@ -333,21 +340,21 @@ def test_cached_whisperx_resource_replays_cached_metadata(
     async def runner():
         injector, ainjector = await _make_async_injector(config)
         try:
-            live_resource = await cached_whisperx_resource_factory(
+            live_resource = await cached_alignment_resource_factory(
                 ainjector,
                 mode="live",
                 cache_dir=cache_dir,
-                resource_type=FakeCachedWhisperXResource,
+                resource_type=FakeCachedForcedAlignmentResource,
             )
-            live_contents = await live_resource.fill_start_positions(contents, result)
+            live_contents = fill_start_positions_from_timing(contents, await live_resource.script_timing(contents, result))
 
-            cache_resource = await cached_whisperx_resource_factory(
+            cache_resource = await cached_alignment_resource_factory(
                 ainjector,
                 mode="cache",
                 cache_dir=cache_dir,
-                resource_type=FakeCachedWhisperXResource,
+                resource_type=FakeCachedForcedAlignmentResource,
             )
-            cache_contents = await cache_resource.fill_start_positions(contents, result)
+            cache_contents = fill_start_positions_from_timing(contents, await cache_resource.script_timing(contents, result))
             return live_resource, live_contents, cache_resource, cache_contents
         finally:
             injector.close()
@@ -359,8 +366,8 @@ def test_cached_whisperx_resource_replays_cached_metadata(
     assert [content.start_pos for content in cache_contents] == [0.0, 0.25, 0.5]
 
 
-def test_cached_whisperx_resource_skips_when_cache_is_missing(
-    cached_whisperx_resource_factory,
+def test_cached_alignment_resource_skips_when_cache_is_missing(
+    cached_alignment_resource_factory,
     tmp_path: Path,
 ):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
@@ -375,13 +382,13 @@ def test_cached_whisperx_resource_skips_when_cache_is_missing(
     async def runner():
         injector, ainjector = await _make_async_injector(config)
         try:
-            resource = await cached_whisperx_resource_factory(
+            resource = await cached_alignment_resource_factory(
                 ainjector,
                 mode="cache",
                 cache_dir=tmp_path / "forced-alignment-cache",
-                resource_type=FakeCachedWhisperXResource,
+                resource_type=FakeCachedForcedAlignmentResource,
             )
-            await resource.fill_start_positions(contents, result)
+            await resource.script_timing(contents, result)
         finally:
             injector.close()
 

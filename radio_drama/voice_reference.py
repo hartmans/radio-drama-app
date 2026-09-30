@@ -11,7 +11,7 @@ from carthage.dependency_injection import AsyncInjectable, inject
 from .config import ProductionConfig
 from .dialogue import SpeakerVoiceReference
 from .effects import VOICE_PREPROCESS_VERSION, load_preprocessed_voice_reference
-from .forced_alignment import WhisperXResource
+from .forced_alignment import ForcedAlignmentResource
 
 
 _TRANSCRIPT_CACHE_DIRECTORY = Path(
@@ -19,7 +19,7 @@ _TRANSCRIPT_CACHE_DIRECTORY = Path(
 ).expanduser()
 
 
-@inject(config=ProductionConfig, whisperx_resource=WhisperXResource)
+@inject(config=ProductionConfig, alignment_resource=ForcedAlignmentResource)
 class VoiceReferenceTranscriptionResource(AsyncInjectable):
     """Transcribe and cache reusable speaker voice references.
 
@@ -27,9 +27,9 @@ class VoiceReferenceTranscriptionResource(AsyncInjectable):
     successful resolution enriches the reference in place for all consumers.
     """
 
-    def __init__(self, whisperx_resource: WhisperXResource, **kwargs) -> None:
+    def __init__(self, alignment_resource: ForcedAlignmentResource, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.whisperx_resource = whisperx_resource
+        self.alignment_resource = alignment_resource
         self._lock = Lock()
 
     async def transcribe(self, reference: SpeakerVoiceReference) -> str:
@@ -58,7 +58,7 @@ class VoiceReferenceTranscriptionResource(AsyncInjectable):
                     audio, sample_rate = load_preprocessed_voice_reference(path)
                 if sample_rate is None:
                     raise ValueError("sample_rate is required with prepared reference audio")
-                transcript = self.whisperx_resource.transcribe_audio_sample_sync(
+                transcript = self.alignment_resource.transcribe_audio_sample_sync(
                     audio, sample_rate
                 ).strip()
                 if not transcript:
@@ -78,7 +78,8 @@ class VoiceReferenceTranscriptionResource(AsyncInjectable):
             )
         except ValueError:
             relative = Path("external") / voice_path.relative_to(voice_path.anchor)
-        versioned_relative = Path(VOICE_PREPROCESS_VERSION) / relative
+        identity = self.alignment_resource.transcription_identity.replace("/", "_").replace(":", "_")
+        versioned_relative = Path(identity) / VOICE_PREPROCESS_VERSION / relative
         return _TRANSCRIPT_CACHE_DIRECTORY / versioned_relative.with_suffix(
             f"{relative.suffix}.txt"
         )

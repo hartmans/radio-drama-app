@@ -65,11 +65,25 @@ class ProductionResult(RenderResult):
 
 
 @dataclass(frozen=True, slots=True)
+class DialogueMarkTiming:
+    """Adjacent speech end/start in input-audio seconds; None means unknown.
+
+    The two sides need not coincide: pauses can lie between adjacent words.
+    """
+    previous_end: float | None
+    next_start: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class DialogueLineTiming:
-    """Start and end seconds for one rendered dialogue line; NaN means unknown."""
+    """Line bounds in input-audio seconds; NaN means unknown.
+
+    marks is parallel to that line's requested mark_offsets, preserving duplicates.
+    """
 
     start: float
     end: float
+    marks: tuple[DialogueMarkTiming, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

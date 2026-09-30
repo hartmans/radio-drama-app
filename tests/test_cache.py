@@ -14,7 +14,7 @@ from radio_drama.cache import CacheCollection
 from radio_drama.config import ProductionConfig
 from radio_drama.dialogue import DialogueLine, ScriptGap, SpeakerVoiceReference
 from radio_drama.effects import VOICE_PREPROCESS_VERSION
-from radio_drama.forced_alignment import WhisperXResource
+from radio_drama.forced_alignment import ForcedAlignmentResource
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import BackendTtsResult, DialogueLineTiming, ScriptTiming
 from radio_drama.vibevoice import VibeVoiceResource
@@ -227,10 +227,12 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
             return [np.array([0.25, -0.25], dtype=np.float32) for _ in batch]
 
     class FakeWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
         calls = 0
         missing = False
 
-        async def script_timing(self, contents, result):
+        async def script_timing(self, contents, result, **kwargs):
             type(self).calls += 1
             if self.missing:
                 return ScriptTiming((DialogueLineTiming(math.nan, math.nan),))
@@ -243,7 +245,7 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
 
     async def render_and_align(contents):
         injector, ainjector = await make_async_injector(config, output_path=output_path)
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             resource = await ainjector(UntimedVibeVoiceResource)
             registration = await resource.register_request(request)
@@ -393,6 +395,8 @@ def test_qwentts_resource_preprocesses_reference_voice_before_prompt_build(
     seen: dict[str, object] = {}
 
     class FakeWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
         def transcribe_audio_sample_sync(self, audio, sample_rate=None):
             seen["transcribe_audio"] = np.array(audio, copy=True)
             seen["transcribe_sample_rate"] = sample_rate
@@ -417,7 +421,7 @@ def test_qwentts_resource_preprocesses_reference_voice_before_prompt_build(
         injector, ainjector = await make_async_injector(
             ProductionConfig(voice_directory=voice_directory),
         )
-        injector.replace_provider(InjectionKey(WhisperXResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
         try:
             resource = await ainjector(FakeQwenTtsResource)
             resource.transcription_resource.cache_path = (

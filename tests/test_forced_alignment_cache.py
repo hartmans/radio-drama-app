@@ -12,6 +12,7 @@ from radio_drama.config import ProductionConfig
 from radio_drama.init import radio_drama_injector
 from radio_drama.dialogue import DialogueAudio, DialogueLine, SpeakerVoiceReference
 from radio_drama.rendering import RenderResult
+from radio_drama.forced_alignment import fill_start_positions_from_timing
 
 from phase1_helpers import PlaceholderAudioPlan
 
@@ -79,7 +80,7 @@ def _build_fixture_request() -> tuple[list, RenderResult, list[float], int]:
     return contents, RenderResult(audio=combined_audio), expected_starts, girl_sample_rate
 
 
-async def _run_cached_alignment(cached_whisperx_resource_factory, *, mode: str):
+async def _run_cached_alignment(cached_alignment_resource_factory, *, mode: str):
     contents, result, expected_starts, sample_rate = _build_fixture_request()
     config = ProductionConfig(
         output_sample_rate=sample_rate,
@@ -89,12 +90,12 @@ async def _run_cached_alignment(cached_whisperx_resource_factory, *, mode: str):
 
     injector, ainjector = await _make_async_injector(config)
     try:
-        resource = await cached_whisperx_resource_factory(
+        resource = await cached_alignment_resource_factory(
             ainjector,
             mode=mode,
             cache_dir=FORCED_ALIGNMENT_CACHE_DIR,
         )
-        aligned_contents = await resource.fill_start_positions(contents, result)
+        aligned_contents = fill_start_positions_from_timing(contents, await resource.script_timing(contents, result))
         return aligned_contents, expected_starts
     finally:
         injector.close()
@@ -109,22 +110,22 @@ def _assert_plausible_alignment(aligned_contents, expected_starts: list[float]) 
 
 
 @pytest.mark.live
-def test_cached_whisperx_resource_aligns_fixture_dialogue_live(
-    cached_whisperx_resource_factory,
+def test_cached_alignment_resource_aligns_fixture_dialogue_live(
+    cached_alignment_resource_factory,
 ):
     aligned_contents, expected_starts = asyncio.run(
-        _run_cached_alignment(cached_whisperx_resource_factory, mode="live")
+        _run_cached_alignment(cached_alignment_resource_factory, mode="live")
     )
 
     _assert_plausible_alignment(aligned_contents, expected_starts)
     assert any(FORCED_ALIGNMENT_CACHE_DIR.glob("*.json"))
 
 
-def test_cached_whisperx_resource_aligns_fixture_dialogue_from_cache(
-    cached_whisperx_resource_factory,
+def test_cached_alignment_resource_aligns_fixture_dialogue_from_cache(
+    cached_alignment_resource_factory,
 ):
     aligned_contents, expected_starts = asyncio.run(
-        _run_cached_alignment(cached_whisperx_resource_factory, mode="cache")
+        _run_cached_alignment(cached_alignment_resource_factory, mode="cache")
     )
 
     _assert_plausible_alignment(aligned_contents, expected_starts)

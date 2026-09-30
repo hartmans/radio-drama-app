@@ -1,7 +1,27 @@
 # Forced alignment backends and shared timing
 
-Implementation plan, researched 2026-09-29. This document specifies future work;
-the implementation has not been changed. Follow the repository's AGENTS.md.
+Implementation plan, researched 2026-09-29. This document specifies the target design. Follow the repository's AGENTS.md.
+
+## Implementation checkpoint
+
+Implemented in the qwen_asr worktree: neutral resource registration/injection,
+WhisperX adapter, native Transformers Qwen adapter, batched overlapping recording
+windows and seam repair, intact-line mark refinement, common recording timing,
+prepared ScriptPlan construction, cache identities/mark metadata and neutral
+replay fixtures. VibeVoice implementation imports are lazy, allowing the modern
+venv to initialize the library without installing VibeVoice.
+
+Validated in ~/venv with native Transformers processors and GPU inference:
+complete-transcript alignment batched without ASR, partial recording ASR/alignment,
+and real overlapping recording windows with timestamps compared to whole-recording
+alignment. Saved Qwen evidence now participates in backend-independent projection
+tests. The full offline suite passes in both venvs.
+
+Remaining gates: long complete-transcript window assignment (currently explicitly
+rejected without ASR fallback), long-form seam/quality evaluation, performance
+measurement and new live WhisperX validation. Keep WhisperX as default until the
+long-form gates pass. No dependencies or external environments were changed by
+the implementation; the user installed pedalboard in the modern venv.
 
 ## 1. Decisions and scope
 
