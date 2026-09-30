@@ -660,25 +660,31 @@ def test_production_plan_installs_shared_qwen_resource(tmp_path: Path):
 def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):
     class FakeProcessor:
         def __init__(self):
-            self.audio_processor = type("AudioProcessor", (), {"sampling_rate": 24000})()
+            self.feature_extractor = type("AudioProcessor", (), {"sampling_rate": 24000})()
             self.tokenizer = object()
 
-        def __call__(self, **kwargs):
-            return {"input_ids": np.array([1])}
+        def apply_chat_template(self, conversations, **kwargs):
+            import torch
+            return {"input_ids": torch.tensor([[1]]),
+                    "input_values": torch.ones((1, 1, 240))}
 
     class FakeModel:
+        import torch
+        dtype = torch.bfloat16
+        config = type("Config", (), {"text_config": type("TextConfig", (), {"max_position_embeddings": 32768})()})()
+
         def eval(self):
             return None
 
-        def set_ddpm_inference_steps(self, num_steps: int):
-            return None
-
         def generate(self, **kwargs):
-            return type(
-                "Outputs",
-                (),
-                {"speech_outputs": [np.ones(2400, dtype=np.float32)]},
-            )()
+            import torch
+            assert kwargs["input_ids"].dtype == torch.int64
+            assert kwargs["input_values"].dtype == torch.bfloat16
+            assert kwargs["guidance_scale"] == 1.2
+            assert kwargs["num_diffusion_steps"] == 8
+            assert kwargs["do_sample"] is False
+            assert kwargs["max_length"] == 32768
+            return [np.ones(2400, dtype=np.float32)]
 
     class FakeResource(VibeVoiceResource):
         def _ensure_loaded(self):
@@ -714,7 +720,7 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
     assert np.allclose(result.audio[:, 0], result.audio[:, 1])
 
 
-def test_vibevoice_resource_prefixes_each_dialogue_paragraph_with_speaker(
+def test_vibevoice_resource_preserves_paragraphs_and_first_turn_reference(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -726,27 +732,26 @@ def test_vibevoice_resource_prefixes_each_dialogue_paragraph_with_speaker(
 
     class FakeProcessor:
         def __init__(self):
-            self.audio_processor = type("AudioProcessor", (), {"sampling_rate": 24000})()
+            self.feature_extractor = type("AudioProcessor", (), {"sampling_rate": 24000})()
             self.tokenizer = object()
             self.calls: list[dict[str, object]] = []
 
-        def __call__(self, **kwargs):
-            self.calls.append(kwargs)
+        def apply_chat_template(self, conversations, **kwargs):
+            self.calls.append({"conversations": conversations, **kwargs})
             return {"input_ids": np.array([1])}
 
     class FakeModel:
+        config = type("Config", (), {"text_config": type("TextConfig", (), {"max_position_embeddings": 32768})()})()
+
         def eval(self):
             return None
 
-        def set_ddpm_inference_steps(self, num_steps: int):
-            return None
-
         def generate(self, **kwargs):
-            return type(
-                "Outputs",
-                (),
-                {"speech_outputs": [np.ones(2400, dtype=np.float32)]},
-            )()
+            assert kwargs["guidance_scale"] == 1.2
+            assert kwargs["num_diffusion_steps"] == 8
+            assert kwargs["do_sample"] is False
+            assert kwargs["max_length"] == 32768
+            return [np.ones(2400, dtype=np.float32)]
 
     class FakeResource(VibeVoiceResource):
         def __init__(self, **kwargs):
@@ -789,15 +794,19 @@ def test_vibevoice_resource_prefixes_each_dialogue_paragraph_with_speaker(
                 )
             )
             await registration.render()
-            return resource.fake_processor.calls[0]["text"]
+            return resource.fake_processor.calls[0]["conversations"]
         finally:
             injector.close()
 
-    text_inputs = asyncio.run(runner())
-    assert text_inputs == [
-        "Speaker 1: First paragraph line one. Continuation.\n"
-        "Speaker 1: Second paragraph."
+    conversations = asyncio.run(runner())
+    assert len(conversations) == 1
+    turns = conversations[0]
+    assert [turn["role"] for turn in turns] == ["0", "0"]
+    assert [turn["content"][0]["text"] for turn in turns] == [
+        "First paragraph line one. Continuation.", "Second paragraph.",
     ]
+    assert turns[0]["content"][1]["type"] == "audio"
+    assert len(turns[1]["content"]) == 1
 
 
 def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Path):

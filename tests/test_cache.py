@@ -483,21 +483,21 @@ def test_vibevoice_resource_preprocesses_unique_reference_voices_per_request(
         )
         try:
             resource = await ainjector(FakeVibeVoiceResource)
-            return resource._normalized_script_and_voice_samples(
+            return resource._conversation(
                 request,
                 voice_sample_rate=16000,
             )
         finally:
             injector.close()
 
-    normalized_script, voice_samples = asyncio.run(runner())
-    assert normalized_script == (
-        "Speaker 1: Hello there.\n"
-        "Speaker 1: Welcome back.\n"
-        "Speaker 2: General Kenobi.\n"
-        "Speaker 1: Same reference.\n"
-        "Speaker 3: Different gain."
-    )
+    conversation = asyncio.run(runner())
+    assert [turn["role"] for turn in conversation] == ["0", "0", "1", "0", "2"]
+    assert [turn["content"][0]["text"] for turn in conversation] == [
+        "Hello there.", "Welcome back.", "General Kenobi.",
+        "Same reference.", "Different gain.",
+    ]
+    voice_samples = [block["audio"] for turn in conversation
+                     for block in turn["content"] if block["type"] == "audio"]
     assert seen_paths == [
         (voice_path.expanduser().resolve(), 16000),
         (other_voice_path.expanduser().resolve(), 16000),

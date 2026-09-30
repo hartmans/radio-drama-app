@@ -11,7 +11,7 @@ SUPPORTED_DEBUG_CATEGORIES = (
     "whisperx",
     "qwen_alignment",
 )
-DEFAULT_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
+DEFAULT_MODEL_PATH = "bezzam/VibeVoice-7B-hf"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
 DEFAULT_SOUNDS_DIRECTORY = Path("./sounds")
 DEFAULT_OUTPUT_SAMPLE_RATE = 48000
@@ -19,7 +19,6 @@ DEFAULT_OUTPUT_CHANNELS = 2
 DEFAULT_BATCH_SIZE = 10
 DEFAULT_DEVICE = "cuda"
 DEFAULT_CFG_SCALE = 1.2
-DEFAULT_DISABLE_PREFILL = False
 DEFAULT_DDPM_INFERENCE_STEPS = 8
 MODEL_NATIVE_SAMPLE_RATE = 24000
 
@@ -40,7 +39,6 @@ class ProductionConfig:
     batch_size: int | None = None
     device: str | None = None
     cfg_scale: float | None = None
-    disable_prefill: bool | None = None
     ddpm_inference_steps: int | None = None
 
     def __post_init__(self) -> None:
@@ -86,14 +84,6 @@ class ProductionConfig:
     @property
     def resolved_cfg_scale(self) -> float:
         return self.cfg_scale if self.cfg_scale is not None else DEFAULT_CFG_SCALE
-
-    @property
-    def resolved_disable_prefill(self) -> bool:
-        return (
-            self.disable_prefill
-            if self.disable_prefill is not None
-            else DEFAULT_DISABLE_PREFILL
-        )
 
     @property
     def resolved_ddpm_inference_steps(self) -> int:

@@ -42,7 +42,7 @@ def initialize_arg_parser(
         help="Directory containing sound files for relative <sound> references.",
     )
     parser.add_argument(
-        "--model-file", default=None, help="Path to the VibeVoice model directory."
+        "--model-file", default=None, help="VibeVoice Hugging Face model ID or directory."
     )
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
@@ -87,13 +87,6 @@ def initialize_arg_parser(
     )
     parser.add_argument(
         "--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override."
-    )
-    parser.add_argument(
-        "--disable-prefill",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Disable VibeVoice prefill.",
     )
     parser.add_argument(
         "--ddpm-inference-steps",
@@ -150,7 +143,6 @@ def build_config_from_namespace(
         batch_size=args.batch_size,
         device=args.device,
         cfg_scale=args.cfg_scale,
-        disable_prefill=args.disable_prefill,
         ddpm_inference_steps=args.ddpm_inference_steps,
     )
 

@@ -304,20 +304,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
     parser.add_argument("--voice-dir", default=None, help="Directory containing reference voice files.")
     parser.add_argument("--sounds-dir", default=None, help="Directory containing sound files for relative <sound> references.")
-    parser.add_argument("--model-file", default=None, help="Path to the VibeVoice model directory.")
+    parser.add_argument("--model-file", default=None, help="VibeVoice Hugging Face model ID or directory.")
     parser.add_argument("--output-sample-rate", type=int, default=None, help="Output sample rate override.")
     parser.add_argument("--batch-size", type=int, default=None, help="Maximum VibeVoice batch size override.")
     parser.add_argument("--cut-before", default=None, help="Drop all production audio before the named <mark>.")
     parser.add_argument("--cut-after", default=None, help="Drop all production audio after the named <mark>.")
     parser.add_argument("--device", default=None, help="Preferred torch device override.")
     parser.add_argument("--cfg-scale", type=float, default=None, help="VibeVoice cfg_scale override.")
-    parser.add_argument(
-        "--disable-prefill",
-        action="store_const",
-        const=True,
-        default=None,
-        help="Disable VibeVoice prefill.",
-    )
     parser.add_argument(
         "--ddpm-inference-steps",
         type=int,
@@ -338,7 +331,6 @@ def build_config(args: argparse.Namespace) -> ProductionConfig:
         batch_size=args.batch_size,
         device=args.device,
         cfg_scale=args.cfg_scale,
-        disable_prefill=args.disable_prefill,
         ddpm_inference_steps=args.ddpm_inference_steps,
     )
 

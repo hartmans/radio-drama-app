@@ -7,7 +7,6 @@ name = "radio-drama-app"
 version = "0.1.0"
 description = "Render XML radio dramas with generated speech and audio effects"
 readme = "README.md"
-license-files = ["vibevoice/LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.135,<1",
@@ -16,6 +15,7 @@ dependencies = [
     "whisperx",
     "carthage",
     "qwen-tts",
+    "transformers>=5.17,<6",
     "pedalboard>=0.9,<1",
     "PyYAML>=6,<7",
     "Pillow>=11,<12",
@@ -27,12 +27,8 @@ radio_drama_app = "radio_drama.cli:main"
 
 [tool.setuptools.package-dir]
 "" = "."
-vibevoice = "vibevoice/vibevoice"
 
 [tool.setuptools.packages.find]
-where = [".", "vibevoice"]
-include = ["radio_drama", "radio_drama.*", "radio_drama_tts_container", "radio_drama_tts_container.*", "vibevoice", "vibevoice.*"]
+where = ["."]
+include = ["radio_drama", "radio_drama.*", "radio_drama_tts_container", "radio_drama_tts_container.*"]
 namespaces = false
-
-[tool.setuptools.package-data]
-vibevoice = ["configs/*.json"]

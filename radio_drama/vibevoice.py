@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
-import sys
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,24 +12,19 @@ import numpy as np
 import soundfile as sf
 import torch
 from carthage.dependency_injection import inject
+
 if TYPE_CHECKING:
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
+    from transformers import VibeVoiceForConditionalGeneration, VibeVoiceProcessor
 
 
 def _vibevoice_types():
-    """Import the optional backend only when live synthesis needs it."""
-    # Checkouts can supply the vendored package without installing its metadata.
-    source = Path(__file__).resolve().parents[1] / "vibevoice"
-    if (source / "vibevoice" / "__init__.py").is_file() and str(source) not in sys.path:
-        sys.path.insert(0, str(source))
-    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
-    from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
-    return VibeVoiceProcessor, VibeVoiceForConditionalGenerationInference
+    """Import Transformers model classes only when live synthesis needs them."""
+    from transformers import VibeVoiceForConditionalGeneration, VibeVoiceProcessor
+    return VibeVoiceProcessor, VibeVoiceForConditionalGeneration
 
 
 from .cache import CACHE_DIRECTORY_KEY, CacheManager
-from .config import MODEL_NATIVE_SAMPLE_RATE, ProductionConfig
+from .config import ProductionConfig
 from .debug import write_debug_message, write_debug_wav
 from .effects import load_preprocessed_voice_reference
 from .model_loading import shared_model_load
@@ -72,7 +65,7 @@ class VibeVoiceResource(TtsResource):
         super().__init__(**kwargs)
         self.device = self._normalize_device(self.config.resolved_device)
         self._processor: VibeVoiceProcessor | None = None
-        self._model: VibeVoiceForConditionalGenerationInference | None = None
+        self._model: VibeVoiceForConditionalGeneration | None = None
         self._sample_rate: int | None = None
         self._pending: list[_PendingRender] = []
         self._pending_lock = asyncio.Lock()
@@ -202,37 +195,38 @@ class VibeVoiceResource(TtsResource):
         """Return model-native mono audio for one batch before format conversion."""
         requests = [registration.request for registration in batch]
         processor, model = self._ensure_loaded()
-        normalized_requests = [
-            self._normalized_script_and_voice_samples(
-                request,
-                voice_sample_rate=int(processor.audio_processor.sampling_rate),
-            )
+        conversations = [
+            self._conversation(request, voice_sample_rate=int(processor.feature_extractor.sampling_rate))
             for request in requests
         ]
-        inputs = processor(
-            text=[normalized_script for normalized_script, _ in normalized_requests],
-            voice_samples=[voice_samples for _, voice_samples in normalized_requests],
-            padding=True,
-            return_tensors="pt",
-            return_attention_mask=True,
+        inputs = processor.apply_chat_template(
+            conversations,
+            tokenize=True,
+            return_dict=True,
+            add_generation_prompt=True,
+            processor_kwargs={"padding": True, "return_tensors": "pt"},
         )
 
         for key, value in inputs.items():
             if torch.is_tensor(value):
-                inputs[key] = value.to(self.device)
+                inputs[key] = value.to(
+                    device=self.device,
+                    dtype=model.dtype if value.is_floating_point() else value.dtype,
+                )
 
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
+                # This checkpoint has no generation_config.json; avoid the
+                # generic short default while allowing EOS to end each script.
                 max_new_tokens=None,
-                cfg_scale=self.config.resolved_cfg_scale,
-                tokenizer=processor.tokenizer,
-                generation_config={"do_sample": False},
-                verbose=False,
-                is_prefill=not self.config.resolved_disable_prefill,
+                max_length=model.config.text_config.max_position_embeddings,
+                guidance_scale=self.config.resolved_cfg_scale,
+                num_diffusion_steps=self.config.resolved_ddpm_inference_steps,
+                do_sample=False,
             )
 
-        generated = list(outputs.speech_outputs or [])
+        generated = outputs
         if len(generated) != len(batch):
             raise RuntimeError(
                 f"Model generation returned {len(generated)} clips for {len(batch)} requests"
@@ -241,7 +235,7 @@ class VibeVoiceResource(TtsResource):
 
     def _ensure_loaded(
         self,
-    ) -> tuple[VibeVoiceProcessor, VibeVoiceForConditionalGenerationInference]:
+    ) -> tuple[VibeVoiceProcessor, VibeVoiceForConditionalGeneration]:
         """Load and cache the processor/model pair on first use."""
         if self._processor is not None and self._model is not None:
             return self._processor, self._model
@@ -252,11 +246,7 @@ class VibeVoiceResource(TtsResource):
 
             VibeVoiceProcessor, _ = _vibevoice_types()
             processor = VibeVoiceProcessor.from_pretrained(self.config.resolved_model_name)
-            self._sample_rate = getattr(
-                processor.audio_processor,
-                "sampling_rate",
-                MODEL_NATIVE_SAMPLE_RATE,
-            )
+            self._sample_rate = int(processor.feature_extractor.sampling_rate)
 
             load_dtype, attn_implementation = self._load_settings_for_device(self.device)
             try:
@@ -277,76 +267,10 @@ class VibeVoiceResource(TtsResource):
                 )
 
             model.eval()
-            model.set_ddpm_inference_steps(
-                num_steps=self.config.resolved_ddpm_inference_steps
-            )
-            self._patch_model_config_api(model)
-            self._patch_generation_cache_api(model)
 
             self._processor = processor
             self._model = model
             return processor, model
-
-    def _patch_model_config_api(
-        self,
-        model: VibeVoiceForConditionalGenerationInference,
-    ) -> None:
-        config = model.config
-        decoder_config = getattr(config, "decoder_config", None)
-        if decoder_config is None:
-            return
-        for field_name in (
-            "num_hidden_layers",
-            "num_attention_heads",
-            "num_key_value_heads",
-            "hidden_size",
-            "head_dim",
-            "vocab_size",
-        ):
-            if hasattr(config, field_name):
-                continue
-            if hasattr(decoder_config, field_name):
-                setattr(config, field_name, getattr(decoder_config, field_name))
-
-    def _patch_generation_cache_api(
-        self,
-        model: VibeVoiceForConditionalGenerationInference,
-    ) -> None:
-        self._patch_dynamic_cache_api()
-        original = model._prepare_cache_for_generation
-        parameter_count = len(inspect.signature(original).parameters)
-        if parameter_count != 5:
-            return
-
-        def compat_prepare_cache_for_generation(
-            generation_config,
-            model_kwargs,
-            generation_mode,
-            batch_size,
-            max_cache_length,
-            device=None,
-        ):
-            return original(
-                generation_config,
-                model_kwargs,
-                generation_mode,
-                batch_size,
-                max_cache_length,
-            )
-
-        model._prepare_cache_for_generation = compat_prepare_cache_for_generation
-
-    def _patch_dynamic_cache_api(self) -> None:
-        from transformers.cache_utils import DynamicCache
-
-        if not hasattr(DynamicCache, "key_cache"):
-            DynamicCache.key_cache = property(
-                lambda self: [getattr(layer, "keys", None) for layer in self.layers]
-            )
-        if not hasattr(DynamicCache, "value_cache"):
-            DynamicCache.value_cache = property(
-                lambda self: [getattr(layer, "values", None) for layer in self.layers]
-            )
 
     def _load_model(
         self,
@@ -354,24 +278,29 @@ class VibeVoiceResource(TtsResource):
         device: str,
         load_dtype: torch.dtype,
         attn_implementation: str,
-    ) -> VibeVoiceForConditionalGenerationInference:
-        _, VibeVoiceForConditionalGenerationInference = _vibevoice_types()
+    ) -> VibeVoiceForConditionalGeneration:
+        """Use optimized text attention while audio tokenizers stay on eager.
+
+        A single attention setting propagates into all nested Transformers
+        configs, but the acoustic tokenizer does not implement SDPA.
+        """
+        _, VibeVoiceForConditionalGeneration = _vibevoice_types()
         if device == "mps":
-            model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+            model = VibeVoiceForConditionalGeneration.from_pretrained(
                 model_name,
-                torch_dtype=load_dtype,
-                attn_implementation=attn_implementation,
+                dtype=load_dtype,
+                attn_implementation={"": "eager", "text_config": attn_implementation},
                 device_map=None,
             )
             model.to("mps")
             return model
 
         device_map = "cuda" if device == "cuda" else "cpu"
-        return VibeVoiceForConditionalGenerationInference.from_pretrained(
+        return VibeVoiceForConditionalGeneration.from_pretrained(
             model_name,
-            torch_dtype=load_dtype,
+            dtype=load_dtype,
             device_map=device_map,
-            attn_implementation=attn_implementation,
+            attn_implementation={"": "eager", "text_config": attn_implementation},
         )
 
     def _detect_device(self) -> str:
@@ -482,42 +411,45 @@ class VibeVoiceResource(TtsResource):
         normalized = self._normalize_audio_array(audio)
         return normalized, int(sample_rate), wav_path
 
-    def _normalized_script_and_voice_samples(
+    def _conversation(
         self,
         request: ScriptRenderRequest,
         *,
         voice_sample_rate: int,
-    ) -> tuple[str, list[np.ndarray]]:
-        speaker_numbers: dict[tuple[Path, float], int] = {}
-        voice_samples: list[np.ndarray] = []
-        normalized_lines: list[str] = []
+    ) -> list[dict]:
+        """Attach a preprocessed reference only at each voice's first paragraph.
 
+        Role IDs are zero-based and shared by resolved path and reference gain,
+        independently of authored names and output effects. Keeping each paragraph
+        as a turn preserves the previous script normalization.
+        """
+        speaker_numbers: dict[tuple[Path, float], int] = {}
+        conversation: list[dict] = []
         for line in request.dialogue_lines:
+            paragraphs = self._normalized_script_paragraphs(line.spoken_text)
+            if not paragraphs:
+                continue
             speaker_key = (
                 Path(line.speaker.resolved_path).expanduser().resolve(),
                 line.speaker.gain,
             )
             speaker_number = speaker_numbers.get(speaker_key)
+            voice_sample = None
             if speaker_number is None:
-                speaker_number = len(voice_samples) + 1
+                speaker_number = len(speaker_numbers)
                 speaker_numbers[speaker_key] = speaker_number
                 resolved_path, gain = speaker_key
-                if gain:
-                    voice_sample = self._preprocessed_voice_sample_sync(
-                        resolved_path,
-                        output_sample_rate=voice_sample_rate,
-                        gain_db=gain,
-                    )
-                else:
-                    voice_sample = self._preprocessed_voice_sample_sync(
-                        resolved_path,
-                        output_sample_rate=voice_sample_rate,
-                    )
-                voice_samples.append(voice_sample)
-            for paragraph in self._normalized_script_paragraphs(line.spoken_text):
-                normalized_lines.append(f"Speaker {speaker_number}: {paragraph}")
-
-        return "\n".join(normalized_lines).replace("’", "'"), voice_samples
+                kwargs = {"gain_db": gain} if gain else {}
+                voice_sample = self._preprocessed_voice_sample_sync(
+                    resolved_path, output_sample_rate=voice_sample_rate, **kwargs,
+                )
+            for paragraph in paragraphs:
+                content = [{"type": "text", "text": paragraph.replace("’", "'")}]
+                if voice_sample is not None:
+                    content.append({"type": "audio", "audio": voice_sample})
+                    voice_sample = None
+                conversation.append({"role": str(speaker_number), "content": content})
+        return conversation
 
     def _preprocessed_voice_sample_sync(
         self,

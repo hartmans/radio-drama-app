@@ -13,14 +13,10 @@ import soundfile as sf
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = REPO_ROOT / "radio_drama_app.py"
 VOICE_DIR = REPO_ROOT / "voices"
-VIBEVOICE_ROOT = Path("/home/hartmans/ai/vibevoice")
-VENV_SITE_PACKAGES = Path(
-    "/home/hartmans/ai/vibevoice/.venv/lib/python3.13/site-packages"
-)
 
 
 def _pythonpath_for_subprocess() -> str:
-    entries = [str(REPO_ROOT), str(VIBEVOICE_ROOT), str(VENV_SITE_PACKAGES)]
+    entries = [str(REPO_ROOT)]
     inherited = os.environ.get("PYTHONPATH")
     if inherited:
         entries.append(inherited)
@@ -202,3 +198,53 @@ def test_live_end_to_end_mixed_tts_scripts(tmp_path: Path):
     assert audio.ndim == 2
     assert audio.shape[1] == 2
     assert audio.shape[0] > 0
+
+
+@pytest.mark.live
+def test_live_vibevoice_native_batch(tmp_path: Path):
+    """Render scripts with different speaker counts through native Transformers."""
+    import asyncio
+    import numpy as np
+
+    from phase1_helpers import make_async_injector
+    from radio_drama.config import ProductionConfig
+    from radio_drama.dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference
+    from radio_drama.vibevoice import VibeVoiceResource
+
+    async def render():
+        injector, ainjector = await make_async_injector(
+            ProductionConfig(device="cuda", batch_size=2),
+        )
+        try:
+            resource = await ainjector(VibeVoiceResource)
+            voices = [
+                SpeakerVoiceReference(
+                    authored_name=name,
+                    voice_name=name,
+                    resolved_path=REPO_ROOT / "example_voices" / name,
+                )
+                for name in ("lawyer1.wav", "lawyer2.wav")
+            ]
+            requests = [
+                ScriptRenderRequest(dialogue_lines=[
+                    DialogueLine(speaker=voices[0], spoken_text="Good morning. Are we ready to begin?"),
+                    DialogueLine(speaker=voices[1], spoken_text="Yes, let us begin."),
+                ]),
+                ScriptRenderRequest(dialogue_lines=[
+                    DialogueLine(speaker=voices[1], spoken_text="This is a second script in the same batch."),
+                ]),
+            ]
+            registrations = [await resource.register_backend_request(request) for request in requests]
+            return await asyncio.gather(*(registration.render() for registration in registrations))
+        finally:
+            injector.close()
+
+    results = asyncio.run(render())
+    assert len(results) == 2
+    for index, result in enumerate(results):
+        assert result.sample_rate == 24000
+        assert result.audio.ndim == 1
+        assert result.audio.size > result.sample_rate
+        assert np.isfinite(result.audio).all()
+        assert np.max(np.abs(result.audio)) > 0.01
+        sf.write(tmp_path / f"script-{index}.wav", result.audio, result.sample_rate)

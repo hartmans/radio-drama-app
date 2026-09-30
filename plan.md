@@ -8,8 +8,10 @@ Implemented in the qwen_asr worktree: neutral resource registration/injection,
 WhisperX adapter, native Transformers Qwen adapter, batched overlapping recording
 windows and seam repair, intact-line mark refinement, common recording timing,
 prepared ScriptPlan construction, cache identities/mark metadata and neutral
-replay fixtures. VibeVoice implementation imports are lazy, allowing the modern
-venv to initialize the library without installing VibeVoice.
+replay fixtures. VibeVoice now uses native Transformers 5.17+ with `bezzam/VibeVoice-7B-hf`.
+Model imports remain lazy; the vendored VibeVoice package and prefill switch
+have been removed. Modern-environment offline tests and a live GPU batch of
+two scripts with different speaker counts passed.
 
 Validated in ~/venv with native Transformers processors and GPU inference:
 complete-transcript alignment batched without ASR, partial recording ASR/alignment,
