@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     )
 
 
-_ALIGNMENT_VERSION = "script-timing-v5"
+_ALIGNMENT_VERSION = "script-timing-v6"
 
 
 @dataclass(slots=True)

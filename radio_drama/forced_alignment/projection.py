@@ -19,6 +19,11 @@ _NUMBER_TOKENS = dict(zip(
     ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "point"),
     (*"0123456789", "."),
 ))
+_CARDINALS = dict(zip(
+    ('ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+     'sixteen', 'seventeen', 'eighteen', 'nineteen'), range(10, 20)))
+_TENS = dict(zip(('twenty', 'thirty', 'forty', 'fifty', 'sixty',
+                 'seventy', 'eighty', 'ninety'), range(20, 100, 10)))
 logger = logging.getLogger(__name__)
 
 
@@ -455,14 +460,12 @@ def _line_spans_from_exact_clauses(
 def _aligned_word_tokens(
     words: Sequence[WordTiming],
 ) -> list[tuple[str, float | None, float | None]]:
-    aligned_tokens: list[tuple[str, float | None, float | None]] = []
+    raw_tokens = []
     for word in words:
-        normalized_tokens = _normalized_tokens(word.text)
-        if not normalized_tokens:
-            continue
-        for token in normalized_tokens:
-            aligned_tokens.append((token, word.start, word.end))
-    return aligned_tokens
+        for token in _TOKEN_RE.findall(normalize_text_punctuation(word.text)):
+            raw_tokens.append((token.lower(), word.start, word.end))
+    return [(token, raw_tokens[first][1], raw_tokens[last][2])
+            for token, first, last in _number_normalized_tokens([item[0] for item in raw_tokens])]
 
 
 def _aligned_token_positions_by_text(
@@ -723,8 +726,9 @@ def _candidate_start_indexes(
                     candidate_starts.add(candidate_index - delta)
                 if candidate_index + delta < len(aligned_tokens):
                     candidate_starts.add(candidate_index + delta)
-        if len(candidate_starts) > 1:
-            break
+        # A rare anchor may occur only in a later repetition when ASR misheard
+        # it in the intended line. Other anchors must still propose candidates
+        # there; rarity is an optimization, not grounds to exclude better spans.
 
     return sorted(candidate_starts)
 
@@ -791,10 +795,59 @@ def _normalized_tokens(text: str) -> tuple[str, ...]:
     sentence punctuation separate tokens. Expanded ASR tokens keep their
     source word's timestamps in ``_aligned_word_tokens``.
     """
-    return tuple(
-        _NUMBER_TOKENS.get(token.lower(), token.lower())
-        for token in _TOKEN_RE.findall(normalize_text_punctuation(text))
-    )
+    return tuple(token for token, _, _ in _number_normalized_tokens(
+        [token.lower() for token in _TOKEN_RE.findall(normalize_text_punctuation(text))]))
+
+
+def _number_normalized_tokens(tokens):
+    """Expand cardinal groups into digits, retaining their source token range.
+
+    Callsigns may mix groups (eleven seventy three) and individual digits.
+    Tens consume a following unit; scales consume their cardinal prefix.
+    Separate individual digit words remain separate, as in two nine zero nine.
+    """
+    def cardinal(index):
+        token = tokens[index]
+        if token in _TENS:
+            value = _TENS[token]
+            end = index + 1
+            if end < len(tokens) and tokens[end] in _NUMBER_TOKENS and tokens[end] != 'point':
+                value += int(_NUMBER_TOKENS[tokens[end]])
+                end += 1
+            return value, end
+        if token in _CARDINALS:
+            return _CARDINALS[token], index + 1
+        if token in _NUMBER_TOKENS and token != 'point':
+            return int(_NUMBER_TOKENS[token]), index + 1
+        return None, index + 1
+
+    index = 0
+    while index < len(tokens):
+        first = index
+        value, end = cardinal(index)
+        if value is None:
+            yield _NUMBER_TOKENS.get(tokens[index], tokens[index]), index, index
+            index += 1
+            continue
+        if end < len(tokens) and tokens[end] == 'hundred':
+            value *= 100
+            end += 1
+            if end < len(tokens):
+                remainder, after = cardinal(end)
+                if remainder is not None:
+                    value += remainder
+                    end = after
+        if end < len(tokens) and tokens[end] == 'thousand':
+            value *= 1000
+            end += 1
+        if tokens[first] in _TENS and end == first + 2 and tokens[first + 1] in _NUMBER_TOKENS:
+            # Keep the two actual word boundaries available for inner marks.
+            yield str(value)[0], first, first
+            yield str(value)[1], first + 1, first + 1
+        else:
+            for digit in str(value):
+                yield digit, first, end - 1
+        index = end
 
 
 def _transcript_lines(transcript: str) -> list[str]:
@@ -871,9 +924,10 @@ def _tokens_with_character_spans(text):
         normalized.append(replacement)
         origins.extend([index] * len(replacement))
     joined = "".join(normalized)
-    return [(_NUMBER_TOKENS.get(match.group().lower(), match.group().lower()),
-             origins[match.start()], origins[match.end() - 1] + 1)
-            for match in _TOKEN_RE.finditer(joined)]
+    matches = list(_TOKEN_RE.finditer(joined))
+    return [(token, origins[matches[first].start()], origins[matches[last].end() - 1] + 1)
+            for token, first, last in _number_normalized_tokens(
+                [match.group().lower() for match in matches])]
 
 
 def script_timing_from_alignment(contents, alignment):

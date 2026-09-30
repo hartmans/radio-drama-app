@@ -15,7 +15,7 @@ from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptP
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
-from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, ForcedAlignmentResource
+from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, ForcedAlignmentResource, AlignmentResult, WordTiming
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
@@ -743,6 +743,68 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
 
     render_result = asyncio.run(runner())
     assert render_result.audio.tolist() == pytest.approx([1.0, 2.0, 3.0, 11.0, 12.0, 4.0, 5.0])
+
+
+def test_recording_callsign_match_keeps_tts_response_before_later_traffic(tmp_path: Path):
+    (tmp_path / 'anna.wav').write_bytes(b'fake')
+    sound_file = tmp_path / 'sounds' / 'recording.wav'
+    sound_file.parent.mkdir()
+    sound_file.write_bytes(b'fake')
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=1, output_channels=1)
+    recording_audio = np.arange(220, dtype=np.float32)
+    early = 'Brave plus eleven seventy three Washington Control'.split()
+    late = 'Bravo 1173 Say again'.split()
+    evidence = AlignmentResult(
+        tuple(WordTiming(word, 10 + i, 11 + i) for i, word in enumerate(early))
+        + (WordTiming('Final', 60, 61), WordTiming('transmission', 61, 62))
+        + tuple(WordTiming(word, 190 + i, 191 + i) for i, word in enumerate(late)), ())
+
+    class AlignmentDouble(ForcedAlignmentResource):
+        async def _process_batch(self, requests):
+            assert all(request.transcript_kind == 'partial' for request in requests)
+            return [evidence for _ in requests]
+
+    class TtsDouble:
+        async def register_request(self, request):
+            assert len(request.dialogue_lines) == 3
+
+            class Registered:
+                async def render(self):
+                    return ScriptRenderResult(
+                        audio=np.array([10, 20, 30], dtype=np.float32),
+                        timing=ScriptTiming(tuple(DialogueLineTiming(i, i + 1) for i in range(3))))
+
+            return Registered()
+
+    class SoundDouble:
+        async def preload(self, path):
+            assert path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=recording_audio))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=tmp_path / 'production.xml')
+        injector.replace_provider(InjectionKey(TtsResource, tts='vibevoice'),
+                                 TimingTtsDouble(TtsDouble(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), AlignmentDouble)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), SoundDouble(), close=False)
+        try:
+            root = parse_production_string('''
+                <production><speaker-map>Anna: anna.wav</speaker-map>
+                  <script><recording ref="recording" /><script-gap />
+                    ~Anna: Bravo 1173, Washington Control.
+                    Anna: TTS response.
+                    <script-gap />
+                    ~Anna: Final transmission.
+                    <script-gap />
+                  </script>
+                </production>''', source_name=str(tmp_path / 'production.xml'))
+            plan = await root.plan(ainjector)
+            return await plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.tolist() == [11, 12, 13, 14, 15, 16, 20, 60, 61]
 
 
 def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):

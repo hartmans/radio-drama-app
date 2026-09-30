@@ -721,7 +721,7 @@ def test_radio_frequency_tokens(text):
     assert _normalized_tokens(text) == ("1", "3", "2", ".", "4", "5")
 
 
-@pytest.mark.parametrize("text", ["1173", "1-1-73", "one one seven three"])
+@pytest.mark.parametrize("text", ["1173", "1-1-73", "one one seven three", "eleven seventy three"])
 def test_callsign_digit_tokens(text):
     assert _normalized_tokens(text) == ("1", "1", "7", "3")
 
@@ -731,6 +731,29 @@ def test_numeric_word_expansion_keeps_original_timestamps():
         (token, 2.673, 3.053) for token in ("1", "3", "2", ".", "4", "5")
     ]
     assert _normalized_tokens("Hello. Zero-nine!") == ("hello", "0", "9")
+
+
+def test_cardinal_groups_share_timestamps_and_character_mark_boundaries():
+    from radio_drama.forced_alignment.projection import _tokens_with_character_spans
+    assert _normalized_tokens('fourteen thousand, two hundred seventy') == tuple('14000270')
+    words = [WordTiming('eleven', 1, 2), WordTiming('seventy', 2, 3), WordTiming('three', 3, 4)]
+    assert _aligned_word_tokens(words) == [('1', 1, 2), ('1', 1, 2), ('7', 2, 3), ('3', 3, 4)]
+    assert _tokens_with_character_spans('eleven seventy three') == [
+        ('1', 0, 6), ('1', 0, 6), ('7', 7, 14), ('3', 15, 20)]
+
+
+@pytest.mark.parametrize('callsign', ['1173', 'eleven seventy three'])
+def test_misheard_rare_anchor_does_not_hide_better_early_callsign_match(callsign):
+    from radio_drama.forced_alignment.projection import _line_spans_from_alignment
+    early = f'Brave plus {callsign} Washington Control'.split()
+    late = 'Bravo 1173 Say again'.split()
+    alignment = AlignmentResult(
+        tuple(WordTiming(word, 10 + i, 11 + i) for i, word in enumerate(early))
+        + tuple(WordTiming(word, 190 + i, 191 + i) for i, word in enumerate(late)), ())
+    line = SimpleNamespace(spoken_text='Bravo 1173, Washington Control.')
+    start, end = _line_spans_from_alignment([line], alignment)[0]
+    assert start < 20
+    assert end == 10 + len(early)
 
 
 def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundaries():
