@@ -185,6 +185,9 @@ class FixtureQwen(QwenAlignmentResource):
         self.transcribed = []
         self.aligned = []
 
+    def _alignment_units(self, transcript, language):
+        return tuple(transcript.split())
+
     def _transcribe_batch(self, audios, languages):
         from radio_drama.forced_alignment import TranscriptionResult
         self.transcribed.append((tuple(len(a) for a in audios), tuple(languages)))
@@ -209,9 +212,9 @@ def test_qwen_complete_transcripts_batch_without_asr_or_model_loading():
         assert all(result.source_text == "hello there" for result in results)
         assert all(result.words[1].start == 1. for result in results)
         assert resource._asr is resource._aligner is None
-        with pytest.raises(AlignmentWindowError, match="ASR fallback is disabled"):
-            resource._process_batch_sync([ForcedAlignmentRequest(
-                np.zeros(181 * 16000), 16000, "hello there", "complete")])
+        result = resource._process_batch_sync([ForcedAlignmentRequest(
+            np.zeros(181 * 16000), 16000, "hello there", "complete")])[0]
+        assert len(result.words) == 2  # A complete transcript may have trailing silence.
         assert resource.transcribed == []
     finally:
         resource.close()
@@ -358,3 +361,135 @@ def test_saved_backend_evidence_preserves_line_spans_when_marks_added(speaker, s
         assert abs(measured.end - expected["end"]) < .9
         assert measured.marks[0].next_start == measured.start
         assert all(mark.next_start is not None for mark in measured.marks)
+
+
+class TimedCompleteFixture(FixtureQwen):
+    """Audio's first sample encodes the absolute start of each bounded window."""
+    def _align_batch(self, audios, transcripts, languages):
+        self.aligned.append((tuple(len(a) for a in audios), tuple(transcripts)))
+        return [[{"text": token, "start_time": int(token[1:]) * 2. - float(audio[0]),
+                  "end_time": int(token[1:]) * 2. + .4 - float(audio[0])}
+                 for token in text.split()] for audio, text in zip(audios, transcripts, strict=True)]
+
+
+def test_complete_thirty_minutes_preserves_units_and_offsets():
+    resource = TimedCompleteFixture(config=ProductionConfig(device="cpu"), injector=Injector())
+    try:
+        audio = np.arange(1800 * 16000, dtype=np.float32) / 16000
+        transcript = " ".join(f"w{i}" for i in range(900))
+        result = resource._process_batch_sync([ForcedAlignmentRequest(audio, 16000, transcript, "complete")])[0]
+        assert resource.transcribed == []
+        assert len(resource.aligned) > 10
+        assert all(size <= 180 * 16000 for sizes, _ in resource.aligned for size in sizes)
+        assert result.source_text == transcript
+        assert [word.text for word in result.words] == transcript.split()
+        for i, word in enumerate(result.words):
+            assert word.start == pytest.approx(i * 2., abs=.001)
+            assert word.end == pytest.approx(i * 2. + .4, abs=.001)
+    finally:
+        resource.close()
+
+
+def test_complete_overlap_conflict_is_bounded_and_never_runs_asr():
+    class Conflicting(TimedCompleteFixture):
+        def _align_batch(self, audios, transcripts, languages):
+            results = super()._align_batch(audios, transcripts, languages)
+            if len(self.aligned) > 1:
+                for row in results:
+                    for word in row:
+                        word["start_time"] += 3.
+                        word["end_time"] += 3.
+            return results
+    resource = Conflicting(config=ProductionConfig(device="cpu"), injector=Injector())
+    try:
+        audio = np.arange(360 * 16000, dtype=np.float32) / 16000
+        transcript = " ".join(f"w{i}" for i in range(180))
+        with pytest.raises(AlignmentWindowError, match="Conflicting complete-transcript overlap"):
+            resource._process_batch_sync([ForcedAlignmentRequest(audio, 16000, transcript, "complete")])
+        assert len(resource.aligned) == 4
+        assert resource.transcribed == []
+    finally:
+        resource.close()
+
+
+def test_complete_short_final_window_keeps_unknown_tail_without_losing_units():
+    class InvalidTail(TimedCompleteFixture):
+        def _align_batch(self, audios, transcripts, languages):
+            results = super()._align_batch(audios, transcripts, languages)
+            if len(self.aligned) > 1:
+                results[-1][-1]["start_time"] = results[-1][-1]["end_time"] = float("nan")
+            return results
+    resource = InvalidTail(config=ProductionConfig(device="cpu"), injector=Injector())
+    try:
+        audio = np.arange(200 * 16000, dtype=np.float32) / 16000
+        transcript = " ".join(f"w{i}" for i in range(100))
+        result = resource._process_batch_sync([ForcedAlignmentRequest(audio, 16000, transcript, "complete")])[0]
+        assert len(result.words) == 100
+        assert result.words[-1] == WordTiming("w99", None, None)
+        assert resource.transcribed == []
+    finally:
+        resource.close()
+
+
+@pytest.mark.parametrize('variant, modified_line', [(1, 0), (2, 1), (3, 2), (4, 0)])
+def test_real_qwen_bad_transcript_preserves_other_lines_and_exposes_false_word_timings(speaker, variant, modified_line):
+    """Forced alignment can misattribute speech to supplied words: preserve the evidence."""
+    import json
+    root = Path(__file__).resolve().parent / 'resources/qwen_alignment'
+    variants = json.loads((root / 'girl1_wrong_words.json').read_text())['variants']
+    def project(case):
+        evidence = AlignmentResult(decoded_words([
+            {'text': word['text'], 'start_time': word['start'], 'end_time': word['end']}
+            for word in case['words']], 6.64), ())
+        lines = [DialogueLine(speaker, text,
+                              mark_offsets=(text.index('purple'),) if 'purple' in text else ())
+                 for text in case['lines']]
+        return script_timing_from_alignment(lines, evidence), evidence
+    baseline, _ = project(variants[0])
+    measured, evidence = project(variants[variant])
+    for i, (expected, actual) in enumerate(zip(baseline.dialogue_lines, measured.dialogue_lines, strict=True)):
+        if i != modified_line:
+            assert (actual.start, actual.end) == (expected.start, expected.end)
+    assert measured.dialogue_lines[modified_line].start == baseline.dialogue_lines[modified_line].start
+    if variant != 3:
+        assert measured.dialogue_lines[modified_line].end == baseline.dialogue_lines[modified_line].end
+        # The real backend emitted plausible intervals for words not in the audio.
+        # Do not invent an acoustic rejection signal based merely on text spelling.
+        assert any(word.text == 'purple' and word.end > word.start for word in evidence.words)
+    else:
+        assert np.isnan(measured.dialogue_lines[modified_line].end)
+        assert evidence.words[-1].end is None
+
+
+def test_complete_repeated_passages_use_identity_and_bounded_prefix_retries():
+    class Repeated(FixtureQwen):
+        def _align_batch(self, audios, transcripts, languages):
+            self.aligned.append((tuple(len(a) for a in audios), tuple(transcripts)))
+            output = []
+            for audio, text in zip(audios, transcripts, strict=True):
+                offset = float(audio[0])
+                first = int(np.ceil(offset / 2.))
+                output.append([{'text': token, 'start_time': (first + i) * 2. - offset,
+                                'end_time': (first + i) * 2. + .4 - offset}
+                               for i, token in enumerate(text.split())])
+            return output
+    resource = Repeated(config=ProductionConfig(device='cpu'), injector=Injector())
+    try:
+        transcript = ' '.join(['again', 'now'] * 120)
+        audio = np.arange(480 * 16000, dtype=np.float32) / 16000
+        result = resource._process_batch_sync([ForcedAlignmentRequest(audio, 16000, transcript, 'complete')])[0]
+        assert [word.text for word in result.words] == transcript.split()
+        assert result.words[-1].start == pytest.approx(478., abs=.001)
+        assert resource.transcribed == []
+    finally:
+        resource.close()
+
+
+def test_complete_overlap_tolerates_local_bad_word_but_rejects_broad_shift():
+    previous = tuple(WordTiming(f'w{i}', float(i), i + .4) for i in range(10))
+    localized = list(previous)
+    localized[4] = WordTiming('w4', 4.8, 5.2)
+    assert QwenAlignmentResource._complete_overlap_agrees(previous, localized, 0)
+    shifted = tuple(WordTiming(word.text, word.start + 1., word.end + 1.) for word in previous)
+    assert not QwenAlignmentResource._complete_overlap_agrees(previous, shifted, 0)
+    assert not QwenAlignmentResource._complete_overlap_agrees(previous, previous[:1], 0)

@@ -240,7 +240,7 @@ Current resource contract:
 * offsets change the derived timing cache key, which also includes backend identity and language, without changing the synthesized audio cache identity
 * prepared `ScriptPlan(node=..., script_events=..., tts=...)` supports callers with resolved dialogue lines, retaining document/error context
 * Qwen uses native Transformers APIs, independently lazy ASR/alignment models, and configurable batches of overlapping 180-second windows (10-second overlap). Recording windows use text and absolute timestamp correspondence for seams, with bounded bridge retries
-* complete Qwen transcripts up to 180 seconds align without ASR. Longer complete transcripts currently raise explicitly: validated text/window assignment remains an implementation gate, with no implicit ASR fallback
+* complete Qwen transcripts align without ASR at any duration. Long inputs advance through overlapping bounded windows using stable supplied word identities and validated overlap; ambiguous placement raises explicitly rather than truncating text or falling back to ASR. Unknown word boundaries remain represented. Forced alignment can assign plausible times to incorrect supplied words; projection cannot guarantee their acoustic correctness
 * importing the package must not load models or import model backend implementation classes. Resources defer those imports and model loading until inference requires them, so selecting a backend or replaying cached results does not require unrelated model packages
 * heavyweight model loads are serialized process-wide; inference can run concurrently after startup
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path

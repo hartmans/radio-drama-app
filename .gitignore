@@ -10,3 +10,4 @@ dist/
 
 .worktrees/
 .model-cache/
+.alignment-experiments/

@@ -15,14 +15,13 @@ def test_native_qwen_processor_inputs_and_decoding(aligner):
     from radio_drama.config import ProductionConfig
     config = ProductionConfig()
     model_id = config.qwen_alignment_model if aligner else config.qwen_asr_model
-    cache_dir = Path(__file__).resolve().parents[1] / ".model-cache"
-    processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
+    processor = AutoProcessor.from_pretrained(model_id)
     audio = [np.zeros(16000, dtype=np.float32), np.zeros(24000, dtype=np.float32)]
     if aligner:
         inputs, words = processor.prepare_forced_aligner_inputs(
             audio=audio, transcript=["Hello there.", "Hello again."],
             language=["en", "en"], processor_kwargs={"sampling_rate": 16000, "padding": True})
-        model_config = AutoConfig.from_pretrained(model_id, cache_dir=cache_dir)
+        model_config = AutoConfig.from_pretrained(model_id)
         timestamp = model_config.timestamp_token_id
         # CPU synthetic logits exercise the real processor's timestamp decoder.
         logits = torch.zeros((*inputs["input_ids"].shape, 3))
@@ -134,6 +133,87 @@ def test_qwen_gpu_overlapping_recording_windows(monkeypatch, tmp_path):
             for measured, reference in zip(result.words, full.words, strict=True):
                 if measured.start is not None and reference.start is not None:
                     assert abs(measured.start - reference.start) < .8
+        finally:
+            injector.close()
+    asyncio.run(run())
+
+
+@pytest.mark.live
+def test_qwen_gpu_complete_windows_preserve_lines_without_asr(monkeypatch, tmp_path):
+    import asyncio
+    import json
+    import soundfile as sf
+    from carthage.dependency_injection import AsyncInjector
+    from radio_drama.config import ProductionConfig
+    from radio_drama.forced_alignment import ForcedAlignmentRequest, ForcedAlignmentResource
+    from radio_drama.forced_alignment import qwen
+    from radio_drama.forced_alignment.projection import script_timing_from_alignment
+    from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference
+    from radio_drama.init import radio_drama_injector
+    root = Path(__file__).resolve().parent / 'resources'
+    girl, rate = sf.read(root / 'girl1.wav', dtype='float32')
+    lawyer, other_rate = sf.read(root / 'lawyer1.wav', dtype='float32')
+    assert rate == other_rate
+    audio = np.concatenate([girl, lawyer])
+    first = json.loads((root / 'whisperx_cli/girl1.json').read_text())['segments']
+    second = json.loads((root / 'whisperx_cli/lawyer1.json').read_text())['segments']
+    texts = [segment['text'].strip() for segment in first + second]
+    expected = [(segment['start'], segment['end']) for segment in first]
+    expected += [(segment['start'] + len(girl) / rate, segment['end'] + len(girl) / rate) for segment in second]
+    monkeypatch.setattr(qwen, '_WINDOW_SECONDS', 10)
+    monkeypatch.setattr(qwen, '_OVERLAP_SECONDS', 2)
+    monkeypatch.setattr(qwen, '_COMPLETE_OVERLAPS', (2, 3, 4))
+    async def run():
+        injector = radio_drama_injector(config=ProductionConfig(alignment_backend='qwen', device='cuda'),
+                                       event_loop=asyncio.get_running_loop(), output_path=tmp_path / 'out.wav')
+        try:
+            resource = await injector(AsyncInjector).get_instance_async(ForcedAlignmentResource)
+            result = await (await resource.register_request(ForcedAlignmentRequest(
+                audio, rate, ' '.join(texts), 'complete'))).align()
+            assert resource._asr is None
+            speaker = SpeakerVoiceReference('fixture', 'unused', Path('unused'))
+            timing = script_timing_from_alignment([DialogueLine(speaker, text) for text in texts], result)
+            for actual, reference in zip(timing.dialogue_lines, expected, strict=True):
+                assert abs(actual.start - reference[0]) < .9
+                assert abs(actual.end - reference[1]) < .9
+            assert result.words[-1].end <= len(audio) / rate
+        finally:
+            injector.close()
+    asyncio.run(run())
+
+
+@pytest.mark.live
+def test_qwen_gpu_incorrect_transcript_keeps_neighboring_lines(tmp_path):
+    import asyncio
+    import json
+    import soundfile as sf
+    from carthage.dependency_injection import AsyncInjector
+    from radio_drama.config import ProductionConfig
+    from radio_drama.forced_alignment import ForcedAlignmentRequest, ForcedAlignmentResource
+    from radio_drama.forced_alignment.projection import script_timing_from_alignment
+    from radio_drama.dialogue import DialogueLine, SpeakerVoiceReference
+    from radio_drama.init import radio_drama_injector
+    root = Path(__file__).resolve().parent / 'resources'
+    audio, rate = sf.read(root / 'girl1.wav', dtype='float32')
+    texts = [segment['text'].strip() for segment in json.loads((root / 'whisperx_cli/girl1.json').read_text())['segments']]
+    modified = texts.copy()
+    modified[1] = 'purple aluminum watermelon ' + modified[1]
+    async def run():
+        injector = radio_drama_injector(config=ProductionConfig(alignment_backend='qwen', device='cuda'),
+                                       event_loop=asyncio.get_running_loop(), output_path=tmp_path / 'out.wav')
+        try:
+            resource = await injector(AsyncInjector).get_instance_async(ForcedAlignmentResource)
+            evidence = []
+            for lines in (texts, modified):
+                evidence.append(await (await resource.register_request(ForcedAlignmentRequest(
+                    audio, rate, ' '.join(lines), 'complete'))).align())
+            speaker = SpeakerVoiceReference('fixture', 'unused', Path('unused'))
+            timings = [script_timing_from_alignment([DialogueLine(speaker, text) for text in lines], result)
+                       for lines, result in zip((texts, modified), evidence, strict=True)]
+            assert resource._asr is None
+            for original, changed in zip(timings[0].dialogue_lines, timings[1].dialogue_lines, strict=True):
+                assert abs(original.start - changed.start) < .16
+                assert abs(original.end - changed.end) < .16
         finally:
             injector.close()
     asyncio.run(run())

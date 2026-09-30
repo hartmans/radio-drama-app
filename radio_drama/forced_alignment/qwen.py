@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from threading import RLock
 import math
 
@@ -20,6 +19,8 @@ _WINDOW_SECONDS = 180
 _OVERLAP_SECONDS = 10
 _MAX_NEW_TOKENS = 8192
 _SEAM_TOLERANCE = 0.4
+_COMPLETE_PREFIX_ATTEMPTS = 4
+_COMPLETE_OVERLAPS = (10, 20, 30)
 
 
 class AlignmentWindowError(RuntimeError):
@@ -146,7 +147,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
     @property
     def alignment_identity(self):
         return (f"qwen:{self.config.qwen_asr_model}:{self.config.qwen_alignment_model}:"
-                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:v1")
+                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:complete-greedy-v2")
 
     @property
     def transcription_identity(self):
@@ -160,11 +161,9 @@ class QwenAlignmentResource(ForcedAlignmentResource):
         device = self.config.resolved_device
         dtype = torch.float32 if device == "cpu" else (
             torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16)
-        # Keep downloaded artifacts inside this repository/worktree.
-        cache_dir = Path(__file__).resolve().parents[2] / ".model-cache"
         with shared_model_load():
-            processor = AutoProcessor.from_pretrained(model_id, cache_dir=cache_dir)
-            model = model_type.from_pretrained(model_id, cache_dir=cache_dir, dtype=dtype)
+            processor = AutoProcessor.from_pretrained(model_id)
+            model = model_type.from_pretrained(model_id, dtype=dtype)
             model = model.to(device).eval()
         return processor, model
 
@@ -216,20 +215,146 @@ class QwenAlignmentResource(ForcedAlignmentResource):
     async def _process_batch(self, requests):
         return await asyncio.to_thread(self._process_batch_sync, requests)
 
+    def _alignment_units(self, transcript, language):
+        """Obtain stable units through the processor's public language handling.
+
+        Preparing one second of silence obtains word lists without a model call.
+        This avoids duplicating language-specific segmentation or assuming ISO
+        language codes are accepted by split_words_for_alignment itself.
+        """
+        processor, _ = self._ensure_aligner()
+        _, lists = processor.prepare_forced_aligner_inputs(
+            audio=[np.zeros(_SAMPLE_RATE, dtype=np.float32)], transcript=[transcript],
+            language=[language], processor_kwargs={"sampling_rate": _SAMPLE_RATE, "padding": True})
+        return tuple(lists[0])
+
+    def _complete_window(self, audio, units, frame, cursor, language):
+        """Align a provisional prefix; a rate estimate only chooses input text."""
+        remaining_frames = len(audio) - frame
+        final = remaining_frames <= _WINDOW_SECONDS * _SAMPLE_RATE
+        clip = audio[frame:frame + _WINDOW_SECONDS * _SAMPLE_RATE]
+        duration = len(clip) / _SAMPLE_RATE
+        remaining_words = len(units) - cursor
+        count = remaining_words if final else min(remaining_words, max(
+            20, round(remaining_words / (remaining_frames / _SAMPLE_RATE) * duration * 1.3) + 12))
+        for _ in range(_COMPLETE_PREFIX_ATTEMPTS):
+            items = self._align_batch([clip], [" ".join(units[cursor:cursor + count])], [language])[0]
+            if tuple(item["text"] for item in items) != units[cursor:cursor + count]:
+                raise AlignmentWindowError("Qwen changed complete-transcript unit identities during alignment")
+            if final:
+                return decoded_words(items, duration, offset=frame / _SAMPLE_RATE), True
+            limit = duration - _OVERLAP_SECONDS
+            good = 0
+            for item in items:
+                start, end = item["start_time"], item["end_time"]
+                if (start is None or end is None or not math.isfinite(start) or not math.isfinite(end)
+                        or not 0 <= start <= end <= limit):
+                    break
+                good += 1
+            if good < count or count == remaining_words:
+                if not good:
+                    break
+                return decoded_words(items[:good], duration, offset=frame / _SAMPLE_RATE), False
+            count = min(remaining_words, max(count + 20, round(count * 1.5)))
+        raise AlignmentWindowError(
+            f"Cannot establish complete-transcript progress at {frame / _SAMPLE_RATE:.3f}s, word {cursor}; "
+            "ASR fallback is disabled")
+
+    @staticmethod
+    def _complete_overlap_agrees(previous, measured, cursor):
+        """Require broad agreement and neighboring anchors by source-unit identity.
+
+        A few incorrect supplied words can move locally without invalidating an
+        otherwise consistent seam. Require 80 percent of comparable boundaries
+        within tolerance plus two adjacent units whose complete spans agree.
+        This validates placement, not whether each supplied word was spoken.
+        """
+        errors = []
+        consecutive = longest = 0
+        for index, new in enumerate(measured, cursor):
+            if index >= len(previous):
+                break
+            old = previous[index]
+            word_errors = []
+            for before, after in ((old.start, new.start), (old.end, new.end)):
+                if before is not None and after is not None:
+                    word_errors.append(abs(before - after))
+            errors.extend(word_errors)
+            consecutive = (consecutive + 1 if len(word_errors) == 2
+                           and max(word_errors) <= _SEAM_TOLERANCE else 0)
+            longest = max(longest, consecutive)
+        return (len(errors) >= 4 and longest >= 2
+                and sum(error <= _SEAM_TOLERANCE for error in errors) / len(errors) >= .8)
+
+    def _align_complete_sync(self, audio, transcript, language):
+        """Advance with a provisional tail and validate overlap before committing.
+
+        The contiguous prefix before the last ten seconds advances the cursor.
+        Retries back up both source-unit identity and measured audio time, using
+        successively wider overlap. The final window retains every remaining
+        unit, including unknown boundaries. Plausible predictions are not proof
+        of transcript correctness: a forced aligner can timestamp unspoken words.
+        """
+        units = self._alignment_units(transcript, language)
+        if not units:
+            return ()
+        accepted = []
+        frame = cursor = 0
+        while True:
+            if accepted:
+                attempts = []
+                last_end = next((word.end for word in reversed(accepted) if word.end is not None), None)
+                for overlap in _COMPLETE_OVERLAPS:
+                    target = last_end - overlap
+                    back = next((i for i, word in enumerate(accepted)
+                                 if word.start is not None and word.start >= target), None)
+                    if back is not None and back > cursor:
+                        next_frame = round(max(0., accepted[back].start - .3) * _SAMPLE_RATE)
+                        if next_frame > frame:
+                            attempts.append((next_frame, back))
+                if not attempts:
+                    raise AlignmentWindowError(
+                        f"Insufficient complete-transcript progress at {frame / _SAMPLE_RATE:.3f}s, word {cursor}; "
+                        "ASR fallback is disabled")
+            else:
+                attempts = [(0, 0)]
+            failure = None
+            for next_frame, next_cursor in attempts:
+                try:
+                    measured, final = self._complete_window(audio, units, next_frame, next_cursor, language)
+                except AlignmentWindowError as exc:
+                    failure = exc
+                    continue
+                if accepted and not self._complete_overlap_agrees(accepted, measured, next_cursor):
+                    failure = AlignmentWindowError(
+                        f"Conflicting complete-transcript overlap at {next_frame / _SAMPLE_RATE:.3f}s, "
+                        f"word {next_cursor}; ASR fallback is disabled")
+                    continue
+                if next_cursor + len(measured) <= len(accepted) and not final:
+                    failure = AlignmentWindowError("Complete-transcript window did not advance")
+                    continue
+                # Keep the previously accepted measurements through the seam.
+                accepted.extend(measured[len(accepted) - next_cursor:])
+                frame, cursor = next_frame, next_cursor
+                if final or len(accepted) == len(units):
+                    if len(accepted) != len(units):
+                        raise AlignmentWindowError("Final complete-transcript window lost source units")
+                    return tuple(accepted)
+                break
+            else:
+                raise failure
+
     def _process_batch_sync(self, requests):
         with self._inference_lock:
             jobs = []
+            complete_results = {}
             by_request = [[] for _ in requests]
             for index, request in enumerate(requests):
                 audio = _mono_audio(request.audio, request.sample_rate)
                 windows = audio_windows(len(audio))
                 if request.transcript_kind == "complete" and len(windows) > 1:
-                    # Do not silently run ASR or proportionally divide text. A
-                    # validated transcript-window scheduler is a separate gate.
-                    raise AlignmentWindowError(
-                        "Complete transcripts longer than 180s need validated text/window assignment; "
-                        "ASR fallback is disabled. Supply bounded complete audio/text chunks for now."
-                    )
+                    complete_results[index] = self._align_complete_sync(audio, request.transcript, request.language)
+                    continue
                 for window in windows:
                     by_request[index].append(len(jobs))
                     jobs.append((index, window, audio[window.start_frame:window.end_frame]))
@@ -254,7 +379,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
                                                    offset=jobs[i][1].offset)
             output = []
             for request_index, indices in enumerate(by_request):
-                merged = ()
+                merged = complete_results.get(request_index, ())
                 previous_window = None
                 for i in indices:
                     _, window, _ = jobs[i]

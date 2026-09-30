@@ -17,11 +17,19 @@ and real overlapping recording windows with timestamps compared to whole-recordi
 alignment. Saved Qwen evidence now participates in backend-independent projection
 tests. The full offline suite passes in both venvs.
 
-Remaining gates: long complete-transcript window assignment (currently explicitly
-rejected without ASR fallback), long-form seam/quality evaluation, performance
+Implemented and validated: greedy long complete-transcript window assignment,
+bounded overlap recovery, synthetic 30-minute coverage and real 641-second input.
+Remaining gates: broader long-form seam/quality evaluation, performance
 measurement and new live WhisperX validation. Keep WhisperX as default until the
 long-form gates pass. No dependencies or external environments were changed by
 the implementation; the user installed pedalboard in the modern venv.
+
+Greedy mapping implementation and experimental evidence are documented in
+[docs/qwen_window_mapping.md](docs/qwen_window_mapping.md). Public timestamps
+provided full transcript coverage on complete recordings through 641 seconds,
+with overlap disagreement at most 0.26 seconds. Production uses bounded prefix
+expansion, overlap agreement gates and wider-overlap retries. Private recordings and decoded text remain excluded
+from checked-in tests. Qwen model loading uses the default Hugging Face cache.
 
 ## 1. Decisions and scope
 
@@ -533,16 +541,18 @@ assume that windowing only the subsequent alignment solves the length problem.
 The initial shared 180-second overlapping windows above keep both calls bounded;
 their window sizes may later be tuned independently.
 
-Mapping complete transcript spans to alignment windows remains an implementation
-issue to validate with long-form fixtures. Overlap supplies seam context; it does
-not itself identify the correct text span. Do not prescribe an unvalidated
-proportional-text split or forced-timestamp candidate-search algorithm here.
-Resolve this during the long-form alignment prototype and document the selected
-method before completing the backend. It must preserve text identity, avoid
-silent truncation, and meet the complete-transcript no-ASR contract. Native TTS
-chunk boundaries may help where available; 30-minute VibeVoice output must not
-require them. If the prototype cannot meet this contract, report the limitation
-rather than quietly enabling ASR.
+Map complete transcript spans using the implemented greedy scheduler described in
+[docs/qwen_window_mapping.md](docs/qwen_window_mapping.md). Obtain stable units
+through the public processor once. Estimate a provisional prefix using remaining
+units and duration; expand with bounded retries when the prefix fits entirely
+inside the usable window. Commit only the contiguous prefix before the provisional
+tail, then back up both unit index and measured audio time. Validate overlap by
+unit identity and retry with wider overlap on disagreement. The final window
+retains every remaining unit, including unknown boundaries. Failure to advance or
+establish a seam raises explicitly; ASR is never a complete-transcript fallback.
+Synthetic 30-minute tests and real recordings through 641 seconds validate this
+implementation, without making a guarantee that incorrectly supplied words can
+be detected acoustically from public timestamps.
 
 ## 7. Common script projection and preserved output
 

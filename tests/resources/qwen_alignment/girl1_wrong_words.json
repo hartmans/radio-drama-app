@@ -1,0 +1,544 @@
+{
+  "variants": [
+    {
+      "lines": [
+        "Dawn, you seem really tense tonight.",
+        "Is there something going on?",
+        "You know you can tell me anything."
+      ],
+      "words": [
+        {
+          "text": "Dawn",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "text": "you",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "text": "seem",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "really",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "tense",
+          "start": 1.6,
+          "end": 2.08
+        },
+        {
+          "text": "tonight",
+          "start": 2.08,
+          "end": 2.56
+        },
+        {
+          "text": "Is",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "there",
+          "start": 3.2,
+          "end": 3.28
+        },
+        {
+          "text": "something",
+          "start": 3.36,
+          "end": 3.76
+        },
+        {
+          "text": "going",
+          "start": 3.76,
+          "end": 4.0
+        },
+        {
+          "text": "on",
+          "start": 4.0,
+          "end": 4.32
+        },
+        {
+          "text": "You",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "text": "know",
+          "start": 4.96,
+          "end": 5.2
+        },
+        {
+          "text": "you",
+          "start": 5.2,
+          "end": 5.36
+        },
+        {
+          "text": "can",
+          "start": 5.36,
+          "end": 5.52
+        },
+        {
+          "text": "tell",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "text": "me",
+          "start": 5.76,
+          "end": 5.92
+        },
+        {
+          "text": "anything",
+          "start": 5.92,
+          "end": 6.4
+        }
+      ]
+    },
+    {
+      "lines": [
+        "Dawn, you purple aluminum watermelon seem really tense tonight.",
+        "Is there something going on?",
+        "You know you can tell me anything."
+      ],
+      "words": [
+        {
+          "text": "Dawn",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "text": "you",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "text": "purple",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "aluminum",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "watermelon",
+          "start": 1.6,
+          "end": 1.92
+        },
+        {
+          "text": "seem",
+          "start": 1.92,
+          "end": 1.92
+        },
+        {
+          "text": "really",
+          "start": 1.96,
+          "end": 2.0
+        },
+        {
+          "text": "tense",
+          "start": 2.04,
+          "end": 2.08
+        },
+        {
+          "text": "tonight",
+          "start": 2.08,
+          "end": 2.56
+        },
+        {
+          "text": "Is",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "there",
+          "start": 3.2,
+          "end": 3.28
+        },
+        {
+          "text": "something",
+          "start": 3.28,
+          "end": 3.76
+        },
+        {
+          "text": "going",
+          "start": 3.76,
+          "end": 4.0
+        },
+        {
+          "text": "on",
+          "start": 4.0,
+          "end": 4.32
+        },
+        {
+          "text": "You",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "text": "know",
+          "start": 4.96,
+          "end": 5.2
+        },
+        {
+          "text": "you",
+          "start": 5.2,
+          "end": 5.36
+        },
+        {
+          "text": "can",
+          "start": 5.36,
+          "end": 5.52
+        },
+        {
+          "text": "tell",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "text": "me",
+          "start": 5.76,
+          "end": 5.92
+        },
+        {
+          "text": "anything",
+          "start": 5.92,
+          "end": 6.4
+        }
+      ]
+    },
+    {
+      "lines": [
+        "Dawn, you seem really tense tonight.",
+        "purple aluminum watermelon Is there something going on?",
+        "You know you can tell me anything."
+      ],
+      "words": [
+        {
+          "text": "Dawn",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "text": "you",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "text": "seem",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "really",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "tense",
+          "start": 1.6,
+          "end": 2.08
+        },
+        {
+          "text": "tonight",
+          "start": 2.08,
+          "end": 2.56
+        },
+        {
+          "text": "purple",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "aluminum",
+          "start": 3.2,
+          "end": 3.36
+        },
+        {
+          "text": "watermelon",
+          "start": 3.52,
+          "end": 3.554
+        },
+        {
+          "text": "Is",
+          "start": 3.588,
+          "end": 3.622
+        },
+        {
+          "text": "there",
+          "start": 3.657,
+          "end": 3.691
+        },
+        {
+          "text": "something",
+          "start": 3.725,
+          "end": 3.76
+        },
+        {
+          "text": "going",
+          "start": 3.76,
+          "end": 4.0
+        },
+        {
+          "text": "on",
+          "start": 4.0,
+          "end": 4.32
+        },
+        {
+          "text": "You",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "text": "know",
+          "start": 4.96,
+          "end": 5.2
+        },
+        {
+          "text": "you",
+          "start": 5.2,
+          "end": 5.36
+        },
+        {
+          "text": "can",
+          "start": 5.36,
+          "end": 5.52
+        },
+        {
+          "text": "tell",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "text": "me",
+          "start": 5.76,
+          "end": 5.92
+        },
+        {
+          "text": "anything",
+          "start": 5.92,
+          "end": 6.4
+        }
+      ]
+    },
+    {
+      "lines": [
+        "Dawn, you seem really tense tonight.",
+        "Is there something going on?",
+        "You know you can tell me anything. purple aluminum watermelon"
+      ],
+      "words": [
+        {
+          "text": "Dawn",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "text": "you",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "text": "seem",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "really",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "tense",
+          "start": 1.6,
+          "end": 2.08
+        },
+        {
+          "text": "tonight",
+          "start": 2.08,
+          "end": 2.56
+        },
+        {
+          "text": "Is",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "there",
+          "start": 3.2,
+          "end": 3.28
+        },
+        {
+          "text": "something",
+          "start": 3.36,
+          "end": 3.76
+        },
+        {
+          "text": "going",
+          "start": 3.76,
+          "end": 4.0
+        },
+        {
+          "text": "on",
+          "start": 4.0,
+          "end": 4.32
+        },
+        {
+          "text": "You",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "text": "know",
+          "start": 4.96,
+          "end": 5.2
+        },
+        {
+          "text": "you",
+          "start": 5.2,
+          "end": 5.36
+        },
+        {
+          "text": "can",
+          "start": 5.36,
+          "end": 5.52
+        },
+        {
+          "text": "tell",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "text": "me",
+          "start": 5.76,
+          "end": 5.92
+        },
+        {
+          "text": "anything",
+          "start": 5.92,
+          "end": 6.4
+        },
+        {
+          "text": "purple",
+          "start": 6.4,
+          "end": 6.4
+        },
+        {
+          "text": "aluminum",
+          "start": 6.4,
+          "end": 6.4
+        },
+        {
+          "text": "watermelon",
+          "start": 6.4,
+          "end": 7.44
+        }
+      ]
+    },
+    {
+      "lines": [
+        "Dawn, you seem really purple tonight.",
+        "Is there something going on?",
+        "You know you can tell me anything."
+      ],
+      "words": [
+        {
+          "text": "Dawn",
+          "start": 0.0,
+          "end": 0.48
+        },
+        {
+          "text": "you",
+          "start": 0.8,
+          "end": 1.04
+        },
+        {
+          "text": "seem",
+          "start": 1.04,
+          "end": 1.36
+        },
+        {
+          "text": "really",
+          "start": 1.36,
+          "end": 1.6
+        },
+        {
+          "text": "purple",
+          "start": 1.6,
+          "end": 1.92
+        },
+        {
+          "text": "tonight",
+          "start": 1.92,
+          "end": 2.56
+        },
+        {
+          "text": "Is",
+          "start": 3.04,
+          "end": 3.2
+        },
+        {
+          "text": "there",
+          "start": 3.2,
+          "end": 3.28
+        },
+        {
+          "text": "something",
+          "start": 3.28,
+          "end": 3.76
+        },
+        {
+          "text": "going",
+          "start": 3.76,
+          "end": 4.0
+        },
+        {
+          "text": "on",
+          "start": 4.0,
+          "end": 4.32
+        },
+        {
+          "text": "You",
+          "start": 4.8,
+          "end": 4.96
+        },
+        {
+          "text": "know",
+          "start": 4.96,
+          "end": 5.2
+        },
+        {
+          "text": "you",
+          "start": 5.2,
+          "end": 5.36
+        },
+        {
+          "text": "can",
+          "start": 5.36,
+          "end": 5.52
+        },
+        {
+          "text": "tell",
+          "start": 5.52,
+          "end": 5.76
+        },
+        {
+          "text": "me",
+          "start": 5.76,
+          "end": 5.92
+        },
+        {
+          "text": "anything",
+          "start": 5.92,
+          "end": 6.4
+        }
+      ]
+    }
+  ]
+}
