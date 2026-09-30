@@ -922,6 +922,31 @@ def test_modulated_delay_uses_stereo_phase_offset():
     np.testing.assert_allclose(audio[4], np.array([2.0, 1.0], dtype=np.float32))
 
 
+def test_modulated_delay_retains_wet_audio_on_long_buffers():
+    sample_rate = 24000
+    audio = np.zeros(sample_rate * 2, dtype=np.float32)
+    audio[sample_rate // 2] = 1.0
+    modulated_delay(delay_ms=250, depth_ms=0, rate_hz=0,
+                    wet_mix=1, dry_mix=0).apply(audio, sample_rate=sample_rate)
+    expected = np.zeros_like(audio)
+    expected[sample_rate * 3 // 4] = 1.0
+    np.testing.assert_array_equal(audio, expected)
+
+
+def test_modulated_delay_moves_impulses_at_nonzero_rate_on_long_stereo_buffers():
+    sample_rate = 24000
+    audio = np.zeros((sample_rate * 2, 2), dtype=np.float32)
+    # At output time 0.5s, the left delay is 250ms and the right delay is
+    # 260ms (90-degree phase offset), so different input impulses coincide.
+    audio[6000, 0] = 1
+    audio[5760, 1] = 1
+    modulated_delay(delay_ms=250, depth_ms=10, rate_hz=2,
+                    stereo_phase_degrees=90, wet_mix=1, dry_mix=0).apply(
+                        audio, sample_rate=sample_rate)
+    np.testing.assert_allclose(audio[12000], [1, 1], atol=1e-6)
+    np.testing.assert_array_equal(np.argmax(audio, axis=0), [12000, 12000])
+
+
 def test_modulated_delay_rejects_noncausal_depth():
     with pytest.raises(ValueError, match="depth_ms must not exceed delay_ms"):
         modulated_delay(

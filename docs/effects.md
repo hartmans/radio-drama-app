@@ -155,6 +155,8 @@ and shorter delays sound more like a conventional chorus or vibrato.
 
 Like the other effect stages, `modulated_delay` preserves the input length. Its
 initial delayed samples therefore contain only the scaled dry signal.
+To hear just the moving delayed signal, use `dry_mix=0.0` and `wet_mix=1.0`.
+With `depth_ms=0.0`, this produces a fixed delayed copy, including on long clips.
 
 ---
 
