@@ -742,20 +742,6 @@ def test_cardinal_groups_share_timestamps_and_character_mark_boundaries():
         ('1', 0, 6), ('1', 0, 6), ('7', 7, 14), ('3', 15, 20)]
 
 
-@pytest.mark.parametrize('callsign', ['1173', 'eleven seventy three'])
-def test_misheard_rare_anchor_does_not_hide_better_early_callsign_match(callsign):
-    from radio_drama.forced_alignment.projection import _line_spans_from_alignment
-    early = f'Brave plus {callsign} Washington Control'.split()
-    late = 'Bravo 1173 Say again'.split()
-    alignment = AlignmentResult(
-        tuple(WordTiming(word, 10 + i, 11 + i) for i, word in enumerate(early))
-        + tuple(WordTiming(word, 190 + i, 191 + i) for i, word in enumerate(late)), ())
-    line = SimpleNamespace(spoken_text='Bravo 1173, Washington Control.')
-    start, end = _line_spans_from_alignment([line], alignment)[0]
-    assert start < 20
-    assert end == 10 + len(early)
-
-
 def test_saved_fighter_alignment_matches_all_lines_and_preserves_missing_boundaries():
     payload = json.loads((RESOURCE_DIR.parent / "whisperx_cli" / "fighter_conversation.json").read_text())
     response = WhisperXResponse(

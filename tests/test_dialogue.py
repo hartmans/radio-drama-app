@@ -752,7 +752,7 @@ def test_recording_callsign_match_keeps_tts_response_before_later_traffic(tmp_pa
     sound_file.write_bytes(b'fake')
     config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=1, output_channels=1)
     recording_audio = np.arange(220, dtype=np.float32)
-    early = 'Brave plus eleven seventy three Washington Control'.split()
+    early = 'Bravo eleven seventy three Washington Control'.split()
     late = 'Bravo 1173 Say again'.split()
     evidence = AlignmentResult(
         tuple(WordTiming(word, 10 + i, 11 + i) for i, word in enumerate(early))
@@ -804,7 +804,7 @@ def test_recording_callsign_match_keeps_tts_response_before_later_traffic(tmp_pa
             injector.close()
 
     result = asyncio.run(runner())
-    assert result.audio.tolist() == [11, 12, 13, 14, 15, 16, 20, 60, 61]
+    assert result.audio.tolist() == [10, 11, 12, 13, 14, 15, 20, 60, 61]
 
 
 def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):

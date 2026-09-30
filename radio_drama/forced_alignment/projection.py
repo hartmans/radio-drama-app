@@ -726,9 +726,8 @@ def _candidate_start_indexes(
                     candidate_starts.add(candidate_index - delta)
                 if candidate_index + delta < len(aligned_tokens):
                     candidate_starts.add(candidate_index + delta)
-        # A rare anchor may occur only in a later repetition when ASR misheard
-        # it in the intended line. Other anchors must still propose candidates
-        # there; rarity is an optimization, not grounds to exclude better spans.
+        if len(candidate_starts) > 1:
+            break
 
     return sorted(candidate_starts)
 
