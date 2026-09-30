@@ -111,3 +111,39 @@ but do not establish that bad words will be missed or that other timestamps will
 always remain unchanged. Overlap agreement validates window placement, not the
 acoustic truth of every supplied word. Marks placed at an incorrect word can
 therefore receive a plausible but false time.
+
+## Running a ground-truth regression
+
+`scripts/check_alignment_regression.py` runs the selected injected
+`ForcedAlignmentResource` through request registration, backend inference and
+shared `script_timing` projection. It compares every known line start/end with
+reference times, flags missing predictions and errors exceeding the threshold,
+and exits 1 if any case fails (0 if all pass). Cases with no known ground-truth
+boundaries fail explicitly. Unknown reference boundaries are counted but unscored.
+Line indexes in reports are zero-based; reports omit transcript text.
+
+```sh
+~/venv/bin/python scripts/check_alignment_regression.py /path/to/ground-truth-cache \
+  --backend qwen --mode complete --threshold 0.4 --output /tmp/alignment-report.json
+~/venv/bin/python scripts/check_alignment_regression.py /path/to/ground-truth-cache \
+  --backend qwen --mode asr --threshold 0.4
+~/ai/vibevoice/.venv/bin/python scripts/check_alignment_regression.py /path/to/ground-truth-cache \
+  --backend whisperx --mode asr --threshold 0.9
+```
+
+The directory is searched recursively for `*.wav` (change with `--pattern`). Each
+WAV needs a same-stem `.json` containing either:
+
+* a cache request with `dialogue_lines`, each with `spoken_text` and optional
+  `mark_offsets`, plus same-stem `.meta` with `dialogue_line_spans` pairs; or
+* `segments` with `text`, `start`, and `end` in the `.json` itself.
+
+Reference times are seconds from the WAV's beginning. `complete` declares that
+all supplied lines together cover its spoken content; `asr` treats them as a
+partial authored transcript and invokes the backend's ASR path. WhisperX retains
+its ASR-first implementation in either mode. Word alignment is requested in both
+modes. This runner compares line boundaries, not individual mark times or final
+production mixing. It never rewrites ground truth and continues reporting other
+cases after a case fails. Run reports outside the input directory, especially if
+using a broad audio glob. Source data remains external; no private audio is needed
+in the repository to retain this regression procedure.
