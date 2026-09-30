@@ -675,12 +675,7 @@ def modulated_delay(
     stereo_phase_degrees: float = 90.0,
     phase_degrees: float = 0.0,
 ) -> EffectStage:
-    """Mix the input with a sinusoidally moving, fractional-delay copy.
-
-    Keep the interpolation grid separate from time and source-position buffers.
-    Some NumPy/Python combinations reuse function-local arithmetic operands;
-    explicit outputs prevent those operations from changing the sample grid.
-    """
+    """Mix the input with a sinusoidally moving, fractional-delay copy."""
 
     if delay_ms < 0.0:
         raise ValueError("delay_ms must be non-negative")
@@ -695,20 +690,18 @@ def modulated_delay(
     def stage(audio: np.ndarray, sample_rate: int) -> None:
         frames = audio if audio.ndim == 2 else audio[:, np.newaxis]
         frame_positions = np.arange(frames.shape[0], dtype=np.float64)
-        time_seconds = np.divide(frame_positions, sample_rate, out=np.empty_like(frame_positions))
+        time_seconds = frame_positions / sample_rate
         rendered = frames * dry_mix
         base_phase = math.radians(phase_degrees)
         stereo_phase = math.radians(stereo_phase_degrees)
         delay_scale = sample_rate / 1000.0
-        oscillator_phase = math.tau * rate_hz * time_seconds
 
         for channel in range(frames.shape[1]):
             channel_phase = base_phase + (stereo_phase if channel % 2 else 0.0)
-            phase = np.add(oscillator_phase, channel_phase, out=np.empty_like(oscillator_phase))
-            delay = delay_ms + depth_ms * np.sin(phase)
-            source_positions = np.subtract(
-                frame_positions, delay * delay_scale, out=np.empty_like(frame_positions)
+            delay = delay_ms + depth_ms * np.sin(
+                math.tau * rate_hz * time_seconds + channel_phase
             )
+            source_positions = frame_positions - delay * delay_scale
             delayed = np.interp(
                 source_positions,
                 frame_positions,
