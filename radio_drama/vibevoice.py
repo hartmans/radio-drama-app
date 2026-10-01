@@ -224,6 +224,7 @@ class VibeVoiceResource(TtsResource):
                 max_length=model.config.text_config.max_position_embeddings,
                 guidance_scale=self.config.resolved_cfg_scale,
                 num_diffusion_steps=self.config.resolved_ddpm_inference_steps,
+                monitor_progress=True,
                 do_sample=False,
             )
 

@@ -12,18 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Local correction to Transformers 5.17 VibeVoice batch audio assignment.
+"""Local corrections to Transformers 5.17 VibeVoice generation.
 
 The generation loop is derived from transformers/models/vibevoice/generation_vibevoice.py.
-Its only algorithm change indexes decoded audio by the original batch row, rather
+Decoded audio is indexed by the original batch row, rather
 than the position in the compact list of active rows. The decoder and semantic
-encoder retain their full batch shape and per-row streaming caches. Remove this
-override once the upstream fix is available in our supported Transformers.
+encoder retain their full batch shape and per-row streaming caches. With
+VIBEVOICE_RESET=1 (default 0), at audio EOS,
+both tokenizer caches are zeroed for the ending rows, matching legacy VibeVoice's
+segment reset behavior. Language model context and voice references are retained.
+The resets follow decoding because the native decoder updates all batch rows,
+including rows that ended a segment while another row produced audio.
 
 Imported lazily by the live VibeVoice loader; no environment files are modified.
 """
 from __future__ import annotations
 
+import os
 import torch
 from transformers import VibeVoiceForConditionalGeneration
 from transformers.generation.utils import ALL_CACHE_NAMES
@@ -48,6 +53,10 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
         This method overrides [~generation.utils.GenerationMixin._sample].
         To ease maintenance, modifications are marked with the comment "VibeVoice specific".
         """
+        reset_setting = os.environ.get("VIBEVOICE_RESET", "0")
+        if reset_setting not in ("0", "1"):
+            raise ValueError("VIBEVOICE_RESET must be 0 or 1")
+        reset_tokenizer_caches = reset_setting == "1"
         # init values
         pad_token_id = generation_config._pad_token_tensor
         output_attentions = generation_config.output_attentions
@@ -236,6 +245,17 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
                 diffusion_embeds = acoustic_embed + semantic_embed.to(acoustic_embed.device)
                 next_inputs_embeds[diffusion_mask] = diffusion_embeds.to(next_inputs_embeds.device)
                 semantic_cache = semantic_outputs.padding_cache
+
+            # Restore legacy segment resets. These are audio segment boundaries,
+            # not necessarily dialogue line or speaker boundaries. Reset after
+            # full-batch decoding so another active row cannot refill ended rows.
+            diffusion_end_mask = unfinished_sequences.bool() & (next_tokens == self.config.audio_eos_token_id)
+            if reset_tokenizer_caches and diffusion_end_mask.any():
+                for cache in (acoustic_cache, semantic_cache):
+                    if cache is not None:
+                        for layer in cache.layers.values():
+                            if layer.is_initialized:
+                                layer.cache[diffusion_end_mask.to(layer.cache.device)] = 0
 
             inputs_embeds = next_inputs_embeds
             cur_len += 1

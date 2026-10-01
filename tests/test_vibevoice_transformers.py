@@ -91,3 +91,49 @@ def test_native_generation_preserves_audio_row_when_batch_members_pause_or_finis
         attention_mask=torch.ones(3, 1, dtype=torch.long), use_cache=True)
     assert harness.decoded_masks == [[True, False, True], [True, True, False], [False, True, True]]
     assert [clip.tolist() for clip in clips] == [[10., 10.], [20., 20.], [30., 30.]]
+
+
+@pytest.mark.parametrize('setting', [None, '0', '1'])
+def test_native_generation_resets_only_ended_segment_rows(monkeypatch, setting):
+    if setting is None:
+        monkeypatch.delenv('VIBEVOICE_RESET', raising=False)
+    else:
+        monkeypatch.setenv('VIBEVOICE_RESET', setting)
+    caches = [SimpleNamespace(layers={
+        'conv': SimpleNamespace(is_initialized=True, cache=torch.ones(3, 2, 4))
+    }) for _ in range(2)]
+
+    class SegmentGeneration(TaggedGeneration):
+        def __init__(self):
+            super().__init__()
+            # Row zero ends its segment while the other rows still emit audio.
+            self.tokens[3] = (5, 4, 4)
+
+        def __call__(self, **kwargs):
+            if self.step == 4:
+                for cache in caches:
+                    expected = torch.zeros(2, 4) if setting == '1' else torch.ones(2, 4)
+                    assert torch.equal(cache.layers['conv'].cache[0], expected)
+                    assert torch.equal(cache.layers['conv'].cache[1:], torch.ones(2, 2, 4))
+            return super().__call__(**kwargs)
+
+        def _decode_audio_latent(self, *args):
+            result = super()._decode_audio_latent(*args)
+            caches[0].layers['conv'].cache.fill_(1)
+            result.padding_cache = caches[0]
+            return result
+
+        def semantic(self, *args, **kwargs):
+            result = super().semantic(*args, **kwargs)
+            caches[1].layers['conv'].cache.fill_(1)
+            result.padding_cache = caches[1]
+            return result
+
+    monkeypatch.setitem(globals(), 'TaggedGeneration', SegmentGeneration)
+    test_native_generation_preserves_audio_row_when_batch_members_pause_or_finish()
+
+
+def test_native_generation_rejects_invalid_reset_setting(monkeypatch):
+    monkeypatch.setenv('VIBEVOICE_RESET', 'true')
+    with pytest.raises(ValueError, match='VIBEVOICE_RESET must be 0 or 1'):
+        test_native_generation_preserves_audio_row_when_batch_members_pause_or_finish()

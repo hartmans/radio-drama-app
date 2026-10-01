@@ -9,6 +9,11 @@ python -mvenv .venv
 .venv/bin/python -m pip install ~/ai/Qwen3-TTS
 .venv/bin/python -m pip install .
 ```
+Set `VIBEVOICE_RESET=1` to clear VibeVoice's acoustic and semantic streaming
+caches at each generated audio segment end. The default is `0` (disabled);
+only `0` and `1` are accepted. Segment ends need not coincide with speaker or
+dialogue line changes. VibeVoice synthesis displays generation progress.
+
 VibeVoice uses native Transformers 5.17+ and the Hugging Face checkpoint
 [`bezzam/VibeVoice-7B-hf`](https://huggingface.co/bezzam/VibeVoice-7B-hf), downloaded
 on first synthesis. No VibeVoice source checkout is required. `--model-file`
