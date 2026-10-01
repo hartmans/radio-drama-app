@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import types
 import wave
 from pathlib import Path
@@ -110,7 +112,7 @@ def test_higgs_render_batch_bounds_work_and_uses_shared_line_assembly(
         def write_audio(path, audio):
             _write_wav(str(path), audio, 24_000)
 
-    results = FakeEngine().render_batch([_request(("One", "Two", "Three"))])
+    results = asyncio.run(FakeEngine().render_batch([_request(("One", "Two", "Three"))]))
 
     assert seen == [["One", "Two"], ["Three"]]
     assert results[0]["dialogue_line_spans"] == [
@@ -136,7 +138,7 @@ def test_higgs_can_retain_line_wavs(tmp_path, monkeypatch):
         def write_audio(path, audio):
             _write_wav(str(path), audio, 24_000)
 
-    FakeEngine().render_batch([_request(("One",))])
+    asyncio.run(FakeEngine().render_batch([_request(("One",))]))
 
     assert len(list(tmp_path.glob("*.line-0.wav"))) == 1
 

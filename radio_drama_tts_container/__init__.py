@@ -5,6 +5,7 @@ from .server import (
     PROTOCOL_VERSION,
     artifact_name,
     run_server,
+    run_in_thread,
     write_pcm16_wav,
 )
 from .lines import LineWork, finish_line_work, prepare_line_work, remove_line_work
@@ -16,6 +17,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "artifact_name",
     "run_server",
+    "run_in_thread",
     "write_pcm16_wav",
     "LineWork",
     "finish_line_work",

@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from radio_drama_tts_container import (
-    finish_line_work, prepare_line_work, remove_line_work, run_server,
+    finish_line_work, prepare_line_work, remove_line_work, run_server, run_in_thread,
 )
 
 LANGUAGE = os.environ.get("CHATTERBOX_LANGUAGE", "en")
@@ -48,7 +48,14 @@ class ChatterboxEngine:
             cfg_weight=float(os.environ.get("CHATTERBOX_CFG_WEIGHT", "0.5")),
         )
 
-    def render_batch(self, requests: Sequence[Mapping[str, Any]]):
+    async def render_batch(self, requests):
+        """Render a serialized batch without blocking the protocol event loop."""
+        return await run_in_thread(self._render_batch, requests)
+
+    def _render_batch(self, requests: Sequence[Mapping[str, Any]]):
+        import torch
+
+        torch.set_grad_enabled(False)
         import torchaudio
 
         outputs, work = prepare_line_work(requests)

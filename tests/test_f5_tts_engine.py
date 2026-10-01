@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import wave
 from pathlib import Path
 
@@ -97,7 +99,7 @@ def test_f5_render_batch_uses_shared_line_assembly(tmp_path, monkeypatch):
 
         write_audio = staticmethod(_write_wav)
 
-    result = FakeEngine().render_batch([_request()])
+    result = asyncio.run(FakeEngine().render_batch([_request()]))
 
     assert result[0]["dialogue_line_spans"] == [[0.0, 0.1]]
     assert not list(tmp_path.glob("*.line-*.wav"))

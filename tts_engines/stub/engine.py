@@ -2,13 +2,17 @@
 
 from pathlib import Path
 
-from radio_drama_tts_container import artifact_name, run_server, write_pcm16_wav
+from radio_drama_tts_container import artifact_name, run_server, run_in_thread, write_pcm16_wav
 
 
 SAMPLE_RATE = 24_000
 
 
-def render_batch(requests):
+async def render_batch(requests):
+    return await run_in_thread(_render_batch, requests)
+
+
+def _render_batch(requests):
     results = []
     for request in requests:
         name = artifact_name(request)

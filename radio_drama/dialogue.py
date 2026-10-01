@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Mapping, Protocol, Sequence
+from typing import AsyncIterator, TYPE_CHECKING, Literal, Mapping, Protocol, Sequence
 
 import yaml
 from carthage.dependency_injection import (
@@ -38,9 +38,26 @@ _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 
 
 class RegisteredTtsRequest(Protocol):
-    """A registered speech request that can be rendered later."""
+    """A registered request with shared rendering and replayable streaming.
+
+    ``render_stream()`` yields successive audio chunks in the same production
+    sample rate and channel layout as ``render()``. Each iterator starts at the
+    beginning, even for concurrent or later callers. One active generation is
+    shared; readers consume independently and leaving early does not stop cache
+    filling. An error may be retried on a later call, with a new stream beginning
+    from the start rather than appending to the failed attempt.
+
+    After successful iterator completion, ``await render()`` returns the whole
+    concatenated audio. Cache encoding and format conversion may change samples
+    slightly; bit-for-bit identity and identical replay chunk boundaries are
+    not guaranteed. Per-chunk timing is not promised. Backends without streaming
+    and cache hits may yield the complete result as one chunk.
+    """
 
     async def render(self) -> ScriptRenderResult:
+        ...
+
+    def render_stream(self) -> AsyncIterator[RenderResult]:
         ...
 
     async def ensure_timing(
@@ -52,7 +69,13 @@ class RegisteredTtsRequest(Protocol):
 
 
 class BackendRegisteredTtsRequest(Protocol):
-    """An uncached registration returned by a concrete TTS backend."""
+    """An uncached registration returned by a concrete TTS backend.
+
+    A backend may additionally expose
+    ``render_stream() -> AsyncIterator[BackendTtsResult]`` yielding successive
+    native-format chunks. The shared cache handles replay, concurrent callers,
+    conversion, and fallback for backends without this optional method.
+    """
 
     async def render(self) -> BackendTtsResult:
         ...
@@ -465,6 +488,11 @@ class ScriptPlan(AudioPlan):
                 f"No TTS resource is configured for {self.tts!r}"
             ) from None
         self._registered_request = await resource.register_request(self.render_request)
+
+    @property
+    def registered_request(self) -> RegisteredTtsRequest | None:
+        """Return the prepared speech registration, if this script has TTS audio."""
+        return self._registered_request
 
     async def render_base_audio(self) -> RenderResult:
         if self._registered_request is None:

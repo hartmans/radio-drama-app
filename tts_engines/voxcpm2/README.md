@@ -19,3 +19,13 @@ degradation.
 
 Prompt state is scoped to one render request, so concurrently submitted script
 requests do not condition one another.
+
+The engine also advertises `streaming` and serves a single render request over
+a Unix socket, using the same resident model and cloning rules as batch renders.
+Model access is exclusive: a stream can start between background batch lines,
+then holds the model until it ends. Client disconnect stops generation after
+the current generator advance finishes. Engine failures are logged and close
+the socket with whatever audio was already produced.
+
+Rebuild the VoxCPM2 image to enable streaming. Existing non-streaming container
+images continue to work with the host's batch protocol and streaming fallback.

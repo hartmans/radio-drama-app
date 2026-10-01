@@ -11,7 +11,7 @@ from radio_drama_tts_container import (
     finish_line_work,
     prepare_line_work,
     remove_line_work,
-    run_server,
+    run_server, run_in_thread,
 )
 
 
@@ -147,7 +147,14 @@ class HiggsTtsEngine:
 
         soundfile.write(str(path), audio.numpy(), SAMPLE_RATE, subtype="PCM_16")
 
-    def render_batch(self, requests: Sequence[Mapping[str, Any]]):
+    async def render_batch(self, requests):
+        """Render a serialized batch without blocking the protocol event loop."""
+        return await run_in_thread(self._render_batch, requests)
+
+    def _render_batch(self, requests: Sequence[Mapping[str, Any]]):
+        import torch
+
+        torch.set_grad_enabled(False)
         outputs, work = prepare_line_work(requests)
         try:
             if work:

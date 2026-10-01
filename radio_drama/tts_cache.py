@@ -5,15 +5,18 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import aclosing
 from dataclasses import replace
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import AsyncIterator, TYPE_CHECKING, Sequence
 
+import numpy as np
 import soundfile as sf
 
 from .audio import convert_audio_format
-from .rendering import BackendTtsResult, DialogueLineTiming, ScriptRenderResult, ScriptTiming, DialogueMarkTiming
+from .stream_audio import StreamingAudioConverter
+from .rendering import BackendTtsResult, RenderResult, DialogueLineTiming, ScriptRenderResult, ScriptTiming, DialogueMarkTiming
 
 
 if TYPE_CHECKING:
@@ -26,12 +29,23 @@ _ALIGNMENT_VERSION = "script-timing-v6"
 
 
 @dataclass(slots=True)
+class _RenderAttempt:
+    """One producer and its immutable-in-order chunks, shared by all readers."""
+
+    chunks: list[RenderResult] = field(default_factory=list)
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task[ScriptRenderResult] | None = None
+    done: bool = False
+    error: BaseException | None = None
+
+
+@dataclass(slots=True)
 class CachedTtsRequest:
     """One lazy backend request mediated by the shared TTS cache."""
 
     resource: "TtsResource"
     request: "ScriptRenderRequest"
-    _result_task: asyncio.Task[ScriptRenderResult] | None = None
+    _attempt: _RenderAttempt | None = None
     _backend_registration: "BackendRegisteredTtsRequest | None" = None
     _backend_result: BackendTtsResult | None = None
     _wav_path: Path | None = None
@@ -56,14 +70,98 @@ class CachedTtsRequest:
                 )
         return registration
 
+    def _start_attempt(self, *, streaming: bool) -> _RenderAttempt:
+        if self._attempt is None or (self._attempt.done and self._attempt.error is not None):
+            attempt = _RenderAttempt()
+            self._attempt = attempt
+            attempt.task = asyncio.create_task(self._produce(attempt, streaming=streaming))
+            # Keep failed attempts observable by their readers without emitting
+            # unhandled-task warnings when every consumer has left early.
+            attempt.task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        return self._attempt
+
     async def render(self) -> ScriptRenderResult:
-        if self._result_task is None:
-            self._result_task = asyncio.create_task(self._render())
+        attempt = self._start_attempt(streaming=False)
+        return await asyncio.shield(attempt.task)
+
+    async def render_stream(self) -> AsyncIterator[RenderResult]:
+        """Replay from the beginning and follow the registration's shared producer.
+
+        A backend without streaming (or an existing batch render/cache hit)
+        supplies one complete chunk. Consumers never throttle socket draining.
+        Leaving early keeps the producer running to fill the cache. Failed
+        attempts can be retried by a subsequent call; existing readers retain
+        their attempt and receive its error rather than a replacement stream.
+        """
+        attempt = self._start_attempt(streaming=True)
+        index = 0
+        while True:
+            attempt.changed.clear()
+            while index < len(attempt.chunks):
+                chunk = attempt.chunks[index]
+                index += 1
+                yield RenderResult(audio=chunk.audio.copy())
+            if attempt.done:
+                if attempt.error is not None:
+                    raise attempt.error
+                return
+            await attempt.changed.wait()
+
+    async def _produce(self, attempt: _RenderAttempt, *, streaming: bool) -> ScriptRenderResult:
         try:
-            return await self._result_task
-        except BaseException:
-            self._result_task = None
+            if (streaming and self._backend_result is None
+                and self._backend_registration is not None
+                and hasattr(self._backend_registration, "render_stream")):
+                await self._produce_stream(attempt)
+            result = await self._render()
+            if not attempt.chunks:
+                attempt.chunks.append(RenderResult(audio=result.audio.copy()))
+            return result
+        except BaseException as exc:
+            attempt.error = exc
+            self._backend_result = None
             raise
+        finally:
+            attempt.done = True
+            attempt.changed.set()
+
+    async def _produce_stream(self, attempt: _RenderAttempt) -> None:
+        native_chunks = []
+        converter = None
+        sample_rate = None
+        channels = None
+        timing = None
+        async with aclosing(self._backend_registration.render_stream()) as stream:
+            async for chunk in stream:
+                if converter is None:
+                    sample_rate, channels = chunk.sample_rate, chunk.channel_count
+                    converter = StreamingAudioConverter(
+                        sample_rate, self.resource.config.resolved_output_sample_rate,
+                        self.resource.config.resolved_output_channels,
+                    )
+                elif chunk.sample_rate != sample_rate or chunk.channel_count != channels:
+                    raise RuntimeError("TTS backend changed audio format during streaming")
+                # Own the retained samples: engines may reuse buffers after yielding.
+                native_chunks.append(chunk.audio.copy())
+                timing = chunk.timing if len(native_chunks) == 1 else None
+                converted = converter.feed(chunk.audio)
+                if len(converted):
+                    attempt.chunks.append(RenderResult(audio=converted))
+                    attempt.changed.set()
+        if converter is not None:
+            converted = converter.feed(np.empty((0,) if channels == 1 else (0, channels)), final=True)
+            if len(converted):
+                attempt.chunks.append(RenderResult(audio=converted))
+                attempt.changed.set()
+            self._backend_result = BackendTtsResult(
+                audio=np.concatenate(native_chunks), sample_rate=sample_rate, timing=timing,
+            )
+        else:
+            self._backend_result = BackendTtsResult(
+                audio=RenderResult.empty(channels=self.resource.config.resolved_output_channels).audio,
+                sample_rate=self.resource.config.resolved_output_sample_rate,
+            )
+        await asyncio.to_thread(self._store_backend_result)
 
     async def ensure_timing(
         self,

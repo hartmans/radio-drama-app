@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import sys
 import types
 import wave
@@ -75,9 +77,9 @@ def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
             seen.append([line["spoken_text"] for line in lines])
             return [np.zeros((1, 10)) for _ in lines]
 
-    results = FakeEngine().render_batch(
+    results = asyncio.run(FakeEngine().render_batch(
         [_request("first", ("one", "two")), _request("second", ("three",))]
-    )
+    ))
 
     assert seen == [["one", "two"], ["three"]]
     assert [len(result["dialogue_line_spans"]) for result in results] == [
@@ -174,7 +176,7 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     ]
     requests[0]["dialogue_contents"][0]["speaker"]["transcript"] = "Reference."
 
-    results = engine.render_batch(requests)
+    results = asyncio.run(engine.render_batch(requests))
 
     assert [call["text"] for call in calls] == [
         "one",
@@ -227,13 +229,13 @@ def test_moss_ttsd_batches_complete_scripts(tmp_path, monkeypatch):
         def write_audio(self, path, _audio):
             _save_wav(str(path), np.zeros(24_000), 24_000)
 
-    results = FakeEngine().render_batch(
+    results = asyncio.run(FakeEngine().render_batch(
         [
             _request("first", ("one",)),
             _request("second", ("two",)),
             _request("third", ("three",)),
         ]
-    )
+    ))
 
     assert seen == [["first", "second"], ["third"]]
     assert [result["wav"] for result in results] == [
@@ -317,9 +319,9 @@ def test_speaker_slots_distinguish_path_and_gain_only():
 
 def test_moss_ttsd_accepts_empty_scripts(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    results = MossTtsdEngine().render_batch(
+    results = asyncio.run(MossTtsdEngine().render_batch(
         [{"first_words": "empty", "dialogue_contents": []}]
-    )
+    ))
 
     assert results == [
         {"wav": artifact_name({"first_words": "empty", "dialogue_contents": []})}

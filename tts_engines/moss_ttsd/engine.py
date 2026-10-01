@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from radio_drama.text import normalize_text_punctuation
-from radio_drama_tts_container import SpeakerSlots, artifact_name, run_server, write_pcm16_wav
+from radio_drama_tts_container import SpeakerSlots, artifact_name, run_server, run_in_thread, write_pcm16_wav
 
 
 MODEL = os.environ.get("MOSS_TTSD_MODEL", "OpenMOSS-Team/MOSS-TTSD-v1.0")
@@ -177,7 +177,14 @@ class MossTtsdEngine:
             processor.model_config.sampling_rate,
         )
 
-    def render_batch(self, requests: Sequence[Mapping[str, Any]]):
+    async def render_batch(self, requests):
+        """Render a serialized batch without blocking the protocol event loop."""
+        return await run_in_thread(self._render_batch, requests)
+
+    def _render_batch(self, requests: Sequence[Mapping[str, Any]]):
+        import torch
+
+        torch.set_grad_enabled(False)
         prepared = [self.prepare_request(request) for request in requests]
         batch_size = int(os.environ.get("MOSS_TTSD_BATCH_SIZE", "10"))
         if batch_size < 1:

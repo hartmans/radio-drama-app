@@ -69,7 +69,7 @@ def test_proxy_podman_command_omits_shm_size_for_host_ipc(tmp_path: Path):
         shm_size="32g",
     )
     resource._voice_paths = {}
-    resource._voice_mounts = {}
+    resource._stream_directory = None
 
     command = resource._podman_command(tmp_path)
 
@@ -115,7 +115,7 @@ def test_container_server_handshake_and_render():
     )
     output_stream = io.StringIO()
 
-    def render_with_library_noise(requests):
+    async def render_with_library_noise(requests):
         print("third-party model status")
         return [{"wav": artifact_name(requests[0])}]
 
@@ -231,15 +231,17 @@ def test_proxy_transcribes_shared_reference_only_when_capability_requires_it(
             output = tmp_path / "cache" / "result.wav"
             output.parent.mkdir(parents=True, exist_ok=True)
             write_pcm16_wav(output, (0.0,), sample_rate=8000)
-            return {
-                "id": message["id"],
+            future = asyncio.get_running_loop().create_future()
+            future.set_result({
+                "id": 1,
                 "results": [
                     {
                         "wav": "result.wav",
                         "dialogue_line_spans": [[0.0, 0.0001], [0.0001, 0.000125]],
                     }
                 ],
-            }
+            })
+            return future
 
     async def runner():
         injector = radio_drama_injector(
@@ -308,6 +310,8 @@ def test_proxy_prepares_and_reuses_normalized_voice_by_speaker_name(
 
     monkeypatch.setattr("radio_drama.proxy.load_preprocessed_voice_reference", fake_load)
     resource = object.__new__(ProxyTtsResource)
+    resource._voice_paths = {}
+    resource._reference_targets = {}
     speaker = SpeakerVoiceReference(
         authored_name=" Narrator ",
         voice_name="voice",
@@ -329,16 +333,15 @@ def test_proxy_prepares_and_reuses_normalized_voice_by_speaker_name(
     )
 
     resource._prepare_voice_references([request], tmp_path / "cache")
-    first_mounts = dict(resource._voice_mounts)
+    first_paths = dict(resource._voice_paths)
     resource._prepare_voice_references([request], tmp_path / "cache")
 
     assert calls == [(voice_path, 3.0), (voice_path, 0.0)]
-    assert resource._voice_paths == {
-        "narrator": "/voices/0.wav", "other": "/voices/0.wav", "quiet": "/voices/1.wav",
-    }
-    assert len(resource._voice_mounts) == 2
-    assert resource._voice_mounts == first_mounts
-    cached_path = next(iter(resource._voice_mounts))
+    assert resource._voice_paths == first_paths
+    assert resource._voice_paths["narrator"] == resource._voice_paths["other"]
+    assert resource._voice_paths["quiet"] != resource._voice_paths["narrator"]
+    assert len(resource._reference_targets) == 2
+    cached_path = tmp_path / "cache" / resource._voice_paths["narrator"].removeprefix("/cache/")
     assert cached_path.parent == (tmp_path / "cache" / "normalized_voices").resolve()
     audio, sample_rate = sf.read(cached_path, dtype="float32")
     assert sample_rate == 16_000
