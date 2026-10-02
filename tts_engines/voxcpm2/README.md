@@ -50,3 +50,16 @@ through container device visibility; the deployment uses logical GPU 0.
 
 Rebuild the image to switch existing installations to vLLM-Omni. The image
 pins matching vLLM and vLLM-Omni 0.30.0 releases; Omni installs from PyPI.
+
+The image defaults to `HF_HUB_OFFLINE=1`, matching the proxy's default
+`network="none"`. Runtime uses the mounted model cache without DNS or remote
+repository metadata queries. Existing native VoxCPM2 checkpoint files are
+reused by vLLM-Omni.
+
+Prepare the image and cache with `just build` and `just download` from
+`tts_engines/voxcpm2`. The download target enables networking only for the
+cache-population container and defaults to `/srv/ai/models/voxcpm2`.
+Set `VOXCPM_HF_CACHE` to your configured host cache directory if different,
+for example `VOXCPM_HF_CACHE=~/.cache/radio-drama/voxcpm2-huggingface just download`
+when using `tts.toml.example`. Existing blobs are reused; the target fetches
+any missing files and updates the cached snapshot metadata.

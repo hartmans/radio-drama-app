@@ -9,6 +9,7 @@ ipc = "host"
 
 [tts.voxcpm2.environment]
 HF_HOME = "/models/huggingface"
+HF_HUB_OFFLINE = "1"
 VOXCPM_MODEL = "openbmb/VoxCPM2"
 # Optional: mount a custom deployment YAML and set VOXCPM_DEPLOY_CONFIG.
 
