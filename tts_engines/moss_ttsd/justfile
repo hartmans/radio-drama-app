@@ -1,0 +1,4 @@
+image := "localhost/radio-drama-moss-ttsd:latest"
+
+build:
+    TMPDIR=/tmp podman build -f Containerfile -t {{image}} ../..
