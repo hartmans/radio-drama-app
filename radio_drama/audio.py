@@ -1054,7 +1054,10 @@ class LoopPlan(AudioPlan):
         if not self._layout_complete or self.loop_until_expression is None:
             return
         self.resolved_loop_stop = self._resolve_loop_stop()
-        if self.resolved_loop_stop + self._loop_epsilon() < self.resolved_loop_end:
+        if (
+            self.loop_whole != "no"
+            and self.resolved_loop_stop + self._loop_epsilon() < self.resolved_loop_end
+        ):
             raise self.document_error(
                 f"{self.node.display_name} loop_until must be greater than or equal to loop_end"
             )
@@ -1078,7 +1081,10 @@ class LoopPlan(AudioPlan):
             )
         self.resolved_loop_silence = self.loop_silence
         self.resolved_loop_stop = self._resolve_loop_stop()
-        if self.resolved_loop_stop + self._loop_epsilon() < self.resolved_loop_end:
+        if (
+            self.loop_whole != "no"
+            and self.resolved_loop_stop + self._loop_epsilon() < self.resolved_loop_end
+        ):
             raise self.document_error(
                 f"{self.node.display_name} loop_until must be greater than or equal to loop_end"
             )
@@ -1092,14 +1098,14 @@ class LoopPlan(AudioPlan):
                 self._render_wrapped_interval(
                     base_result,
                     self.inner_first,
-                    self.resolved_loop_beg,
+                    min(self.resolved_loop_beg, self.resolved_loop_stop),
                 )
             )
         segments.append(
             self._render_wrapped_interval(
                 base_result,
                 self.resolved_loop_beg,
-                self.resolved_loop_end,
+                min(self.resolved_loop_end, self.resolved_loop_stop),
             )
         )
         remaining_repeat_frames = max(
@@ -1151,6 +1157,11 @@ class LoopPlan(AudioPlan):
         )
 
     def _resolve_loop_stop(self) -> float:
+        """Resolve the body stop, allowing an incomplete first pass in no mode.
+
+        Whole-cycle rounding applies to repetitions after the initial body;
+        only no mode can stop before the first body has finished.
+        """
         cycle_frames = self._seconds_to_frames(
             (self.resolved_loop_end - self.resolved_loop_beg) + self.resolved_loop_silence
         )
@@ -1171,6 +1182,12 @@ class LoopPlan(AudioPlan):
             variables,
             attribute_name="loop_until",
         )
+        if self.loop_whole == "no":
+            if raw_stop < min(self.audio_plan.inner_first, self.resolved_loop_beg):
+                raise self.document_error(
+                    f"{self.node.display_name} loop_until must be greater than or equal to the audio start"
+                )
+            return raw_stop
         extra_frames = self._seconds_to_frames(max(0.0, raw_stop - self.resolved_loop_end))
         if self.loop_whole == "extend":
             extra_frames = ((extra_frames + cycle_frames - 1) // cycle_frames) * cycle_frames
@@ -1188,6 +1205,8 @@ class LoopPlan(AudioPlan):
         marks: dict[str, float] = {}
         epsilon = self._loop_epsilon()
         for mark_id, position in self.audio_plan.mark_positions.items():
+            if position > self.resolved_loop_stop + epsilon:
+                continue
             if position < self.resolved_loop_beg - epsilon:
                 marks[mark_id] = position
                 continue

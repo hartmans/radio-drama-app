@@ -576,6 +576,50 @@ def test_loop_plan_repeats_region_suppresses_loop_marks_and_shifts_outro(tmp_pat
         plan.cut_after_mark("out")
 
 
+@pytest.mark.parametrize(
+    "attrs, expected, marks",
+    [
+        ({"loop_until": "0.75", "loop_whole": "no"}, [0, 1, 2], {"pre": 0.25, "beg": 0.5}),
+        ({"loop_until": "0.75"}, [0, 1, 2], {"pre": 0.25, "beg": 0.5}),
+        ({"loop_until": "0.25"}, [0], {"pre": 0.25}),
+        ({"loop_until": "0"}, [], {}),
+        ({"loop_until": "0.75", "loop_end": "1", "loop_outro": True}, [0, 1, 2, 4, 5],
+         {"pre": 0.25, "beg": 0.5, "out": 1.0}),
+        ({"loop_until": "0.75", "loop_whole": "extend"}, [0, 1, 2, 3, 4, 5],
+         {"pre": 0.25, "beg": 0.5}),
+        ({"loop_until": "0.75", "loop_whole": "shorten"}, [0, 1, 2, 3, 4, 5],
+         {"pre": 0.25, "beg": 0.5}),
+    ],
+)
+def test_loop_until_before_first_iteration_ends(attrs, expected, marks):
+    config = ProductionConfig(output_sample_rate=4, output_channels=1)
+
+    @inject(config=ProductionConfig)
+    class FakeAudioPlan(AudioPlan):
+        async def layout_node(self) -> None:
+            self.inner_last = 1.5
+            self.advance = self.inner_last
+            self.mark_positions = {"pre": 0.25, "beg": 0.5, "end": 1.0, "out": 1.25}
+
+        async def render_node(self) -> RenderResult:
+            return RenderResult(audio=np.arange(6, dtype=np.float32))
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config)
+        try:
+            plan = await ainjector(FakeAudioPlan, node=None, attrs={"loop_beg": "0.5", **attrs})
+            result = await plan.render()
+            return plan, result
+        finally:
+            injector.close()
+
+    plan, result = asyncio.run(runner())
+    np.testing.assert_allclose(result.audio, np.array(expected, dtype=np.float32))
+    assert plan.inner_last == pytest.approx(len(expected) / 4)
+    assert plan.advance == pytest.approx(len(expected) / 4)
+    assert plan.mark_positions == marks
+
+
 def test_loop_plan_loop_until_whole_extend_adjusts_loop_stop(tmp_path: Path):
     config = ProductionConfig(output_sample_rate=4, output_channels=1)
 

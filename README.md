@@ -241,8 +241,8 @@ Supported attributes:
 * `loop_loops="NUMBER"`: repeat count after the first pass through the loop body
 * `loop_until="EXPR"`: keep repeating until this inner-time position is reached
 * `loop_silence="SECONDS"`: silence inserted between loop iterations
-* `loop_outro="BOOL"`: append wrapped audio after `loop_end`
-* `loop_whole="extend|shorten|no"`: when `loop_until` lands mid-cycle, either extend to the next whole cycle, shorten to the previous whole cycle, or leave the partial cycle in place
+* `loop_outro="BOOL"`: append wrapped audio after `loop_end`, including when the first pass is trimmed; the outro may extend the audio past `loop_until`
+* `loop_whole="extend|shorten|no"`: when `loop_until` lands mid-cycle, either extend to the next whole cycle, shorten to the previous whole cycle, or stop at `loop_until`, even during the first pass (`no`, the default)
 
 Current rules:
 

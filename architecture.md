@@ -324,6 +324,7 @@ Current expression scopes:
 * loop expressions use three scopes:
   * `loop_beg` and `loop_end` evaluate in the wrapped plan's inner geometry
   * `loop_until` evaluates in the loop plan's own inner geometry
+  * `loop_whole="no"` (the default) stops the loop body at `loop_until`, including during the first pass or pre-loop audio; marks after that cut are removed, and an enabled outro still appends audio after `loop_end`
   * for explicit-start loops, parent-scope marks from automatic siblings may be rebased into that same inner geometry and exposed under `inner_<mark>`
   * render-time controls on the loop plan use the loop plan's render geometry like any other plan
 * `start` is the exception to the usual left-side scope rules because it defines that inner/outer coordinate transform
