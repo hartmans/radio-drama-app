@@ -6,6 +6,7 @@ import asyncio
 import copy
 import os
 import re
+import sys
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -117,7 +118,13 @@ class VoxCPM2Engine:
                 mm = output.multimodal_output
                 if not mm:
                     continue
-                values = mm["model_outputs"] if "model_outputs" in mm else mm["audio"]
+                if "model_outputs" in mm:
+                    values = mm["model_outputs"]
+                elif "audio" in mm:
+                    values = mm["audio"]
+                else:
+                    # Metadata-only events (for example sample rate) carry no PCM.
+                    continue
                 for value in values if isinstance(values, list) else [values]:
                     if value is not None:
                         audio = torch.as_tensor(value).detach().float().cpu().numpy()
@@ -205,13 +212,23 @@ class VoxCPM2Engine:
 
 
 def main() -> None:
-    engine = VoxCPM2Engine()
-    try:
-        run_server(engine.render_batch, capabilities={"needs_transcript"},
-                   stream_request=engine.stream_request, stream_sample_rate=SAMPLE_RATE)
-    finally:
-        if engine.model is not None:
-            engine.model.shutdown()
+    """Reserve the original stdout pipe for protocol messages only.
+
+    vLLM workers inherit file descriptors, so Python's redirect_stdout alone
+    cannot keep their native/subprocess output out of the JSON-lines pipe.
+    The duplicate is non-inheritable; workers inherit stderr as stdout instead.
+    """
+    sys.stdout.flush()
+    with os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1) as protocol_output:
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+        engine = VoxCPM2Engine()
+        try:
+            run_server(engine.render_batch, capabilities={"needs_transcript"},
+                       stream_request=engine.stream_request, stream_sample_rate=SAMPLE_RATE,
+                       output_stream=protocol_output)
+        finally:
+            if engine.model is not None:
+                engine.model.shutdown()
 
 
 if __name__ == "__main__":
