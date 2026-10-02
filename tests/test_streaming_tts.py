@@ -334,56 +334,47 @@ def test_early_socket_close_cancels_container_stream(tmp_path, streaming_proxy):
     asyncio.run(run())
 
 
-def test_voxcpm_stream_gets_model_between_batch_lines(tmp_path, monkeypatch):
+def test_voxcpm_stream_bypasses_saturated_batch_admission(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     async def run():
-        first_started = threading.Event()
-        finish_first = threading.Event()
-        stream_started = asyncio.Event()
-        finish_stream = asyncio.Event()
+        saturated = asyncio.Event()
+        release = asyncio.Event()
         calls = []
 
-        class Model:
-            tts_model = types.SimpleNamespace(sample_rate=48000)
-
-            def generate(self, **kwargs):
-                calls.append(kwargs["text"])
-                if kwargs["text"] == "first":
-                    first_started.set()
-                    assert finish_first.wait(5)
-                return np.zeros(48, dtype=np.float32)
-
-            def generate_streaming(self, **kwargs):
-                calls.append("stream")
+        class Engine(VoxCPM2Engine):
+            async def line_chunks(self, line, **kwargs):
+                text = line["spoken_text"]
+                calls.append(text)
+                if text != "interactive":
+                    if len(calls) == 7:
+                        saturated.set()
+                    await release.wait()
                 yield np.zeros(48, dtype=np.float32)
 
-        engine = VoxCPM2Engine()
-        engine.model = Model()
-        line = lambda text: {"type": "line", "spoken_text": text, "speaker": {"voice_path": "voice.wav"}}
-        batch = asyncio.create_task(engine.render_batch([{"dialogue_contents": [line("first"), line("second")]}]))
-        assert await asyncio.to_thread(first_started.wait, 5)
+        engine = Engine()
 
-        async def stream():
-            async with aclosing(engine.stream_request({"dialogue_contents": [line("interactive")]})) as chunks:
-                await anext(chunks)
-                stream_started.set()
-                await finish_stream.wait()
-                async for _ in chunks:
-                    pass
+        def request(text):
+            return {"dialogue_contents": [{"type": "line", "spoken_text": text,
+                                           "speaker": {"voice_path": "voice.wav"}}]}
 
-        streaming = asyncio.create_task(stream())
-        await asyncio.sleep(0)
-        finish_first.set()
-        await asyncio.wait_for(stream_started.wait(), 5)
-        assert calls == ["first", "stream"]
-        assert engine.model_lock.locked()
-        finish_stream.set()
-        await streaming
-        await batch
-        assert calls == ["first", "stream", "second"]
+        batch = asyncio.create_task(engine.render_batch([request(str(i)) for i in range(8)]))
+        try:
+            await asyncio.wait_for(saturated.wait(), 5)
+            assert calls == [str(i) for i in range(7)]
+            async with aclosing(engine.stream_request(request("interactive"))) as chunks:
+                assert len(await asyncio.wait_for(anext(chunks), 5)) == 48 * 4
+            assert calls == [*[str(i) for i in range(7)], "interactive"]
+            release.set()
+            results = await asyncio.wait_for(batch, 5)
+            assert len(results) == 8
+            assert calls[-1] == "7"
+        finally:
+            batch.cancel()
+            await asyncio.gather(batch, return_exceptions=True)
 
     asyncio.run(run())
+
 
 
 def test_cancelled_worker_keeps_model_lock_until_thread_finishes():

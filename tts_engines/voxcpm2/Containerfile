@@ -1,16 +1,17 @@
-FROM docker.io/lmsysorg/sglang-omni@sha256:46235435997d1fa93fc81fb1c2d5b7fd8470d77395a5c348c0176094ffddf95e
+FROM docker.io/vllm/vllm-openai:v0.30.0
 
-# VoxCPM2 requires a much newer Transformers release than the main project.
-RUN uv pip install --python /opt/omni/bin/python --no-cache \
-    voxcpm==2.0.3 transformers==5.14.1
+# Match the published Omni release to the vLLM base image.
+RUN uv pip install --system --no-cache \
+    vllm-omni==0.30.0 voxcpm==2.0.3 soundfile ninja
 
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
 COPY tts_engines/voxcpm2/engine.py /opt/voxcpm2_engine.py
+COPY tts_engines/voxcpm2/deploy.yaml /opt/voxcpm2.yaml
 
 ENV PYTHONPATH=/opt \
     HF_HOME=/models/huggingface \
     VOXCPM_MODEL=openbmb/VoxCPM2 \
-    VOXCPM_DEVICE=cuda
+    VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 VOLUME ["/models/huggingface"]
-ENTRYPOINT ["/opt/omni/bin/python", "/opt/voxcpm2_engine.py"]
+ENTRYPOINT ["python3", "/opt/voxcpm2_engine.py"]

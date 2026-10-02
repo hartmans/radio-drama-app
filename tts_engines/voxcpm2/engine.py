@@ -1,12 +1,15 @@
-"""Radio-drama proxy adapter for sequential VoxCPM2 voice cloning."""
+"""Concurrent VoxCPM2 voice cloning through vLLM-Omni."""
 
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 import re
 import tempfile
+import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +25,6 @@ from radio_drama_tts_container import (
 
 
 SAMPLE_RATE = 48_000
-_END = object()
 
 MODEL = os.environ.get("VOXCPM_MODEL", "openbmb/VoxCPM2")
 _LEADING_INSTRUCTION_RE = re.compile(
@@ -30,38 +32,96 @@ _LEADING_INSTRUCTION_RE = re.compile(
 )
 
 
-def _environment_flag(name: str, default: bool) -> bool:
-    """Read a conventional true/false environment setting."""
-    return os.environ.get(name, str(default)).lower() in {"1", "true", "yes", "on"}
-
-
 class VoxCPM2Engine:
-    """Keep VoxCPM2 resident and synthesize cloned lines one at a time.
-
-    VoxCPM2 does not currently have a suitable batched interface for the
-    prompt-conditioned mode used here. Serializing generation also preserves a
-    clean seam for future continuation-based speaker conditioning.
-    """
+    """Share one async scheduler across background scripts and live streams."""
 
     def __init__(self) -> None:
         self.model = None
-        self.model_lock = asyncio.Lock()
+        self.load_lock = asyncio.Lock()
+        self.batch_slots = asyncio.Semaphore(7)
 
     def load_model(self):
-        if self.model is None:
-            import torch
-            from voxcpm import VoxCPM
+        from transformers import AutoTokenizer
+        from vllm_omni.entrypoints.async_omni import AsyncOmni
+        from vllm_omni.model_executor.models.voxcpm2.voxcpm2_talker import build_cjk_split_map
 
-            self.model = VoxCPM.from_pretrained(
-                os.environ.get("VOXCPM_MODEL", MODEL),
-                load_denoiser=False,
-                optimize=_environment_flag("VOXCPM_OPTIMIZE", True),
-                device=os.environ.get("VOXCPM_DEVICE", "cuda"),
-            )
-            torch.set_grad_enabled(False)
-        if self.model.tts_model.sample_rate != SAMPLE_RATE:
-            raise RuntimeError("VoxCPM2 model sample rate differs from the streaming format")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            os.environ.get("VOXCPM_MODEL", MODEL), trust_remote_code=True,
+        )
+        self.split_map = build_cjk_split_map(self.tokenizer)
+        self.model = AsyncOmni(
+            model=os.environ.get("VOXCPM_MODEL", MODEL),
+            deploy_config=os.environ.get("VOXCPM_DEPLOY_CONFIG", "/opt/voxcpm2.yaml"),
+        )
         return self.model
+
+    async def ready(self):
+        async with self.load_lock:
+            if self.model is None:
+                await run_in_thread(self.load_model)
+        return self.model
+
+    def build_prompt(self, line, *, prompt_wav_path=None, prompt_text=None):
+        """Combine independent identity and continuation prefills.
+
+        The upstream helper supports either reference or continuation audio.
+        Build both through it, combining their metadata and prefill lengths
+        while counting the target text/audio-start only once. This retains the
+        original identity reference even after a controlled line sets a prompt.
+        """
+        from vllm_omni.model_executor.models.voxcpm2.voxcpm2_talker import build_voxcpm2_prompt
+
+        def build(path=None, transcript=None):
+            audio, rate = (None, None)
+            if path is not None:
+                audio, rate = sf.read(path, dtype="float32")
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=-1)
+                audio = audio.tolist()
+            return build_voxcpm2_prompt(
+                hf_config=self.model.engine.stage_vllm_configs[0].model_config.hf_config,
+                tokenizer=self.tokenizer, split_map=self.split_map,
+                text=str(line["spoken_text"]), ref_audio=audio,
+                ref_sr=rate, ref_text=transcript,
+            )
+
+        reference = build(line["speaker"]["voice_path"])
+        if prompt_wav_path is not None:
+            continuation = build(prompt_wav_path, prompt_text)
+            base = build()
+            length = (len(reference["prompt_token_ids"])
+                      + len(continuation["prompt_token_ids"])
+                      - len(base["prompt_token_ids"]))
+            reference["prompt_token_ids"] = [1] * length
+            reference["additional_information"].update(continuation["additional_information"])
+        return reference
+
+    async def line_chunks(self, line, *, prompt_wav_path=None, prompt_text=None):
+        """Consume DELTA audio and close the generator to abort on disconnect."""
+        from vllm.sampling_params import RequestOutputKind
+        import torch
+
+        model = await self.ready()
+        prompt = await run_in_thread(
+            self.build_prompt, line,
+            prompt_wav_path=prompt_wav_path, prompt_text=prompt_text,
+        )
+        params = copy.deepcopy(model.default_sampling_params_list)
+        for param in params:
+            param.output_kind = RequestOutputKind.DELTA
+        async with aclosing(model.generate(
+            prompt=prompt, request_id=uuid.uuid4().hex,
+            sampling_params_list=params, output_modalities=["audio"],
+        )) as outputs:
+            async for output in outputs:
+                mm = output.multimodal_output
+                if not mm:
+                    continue
+                values = mm["model_outputs"] if "model_outputs" in mm else mm["audio"]
+                for value in values if isinstance(values, list) else [values]:
+                    if value is not None:
+                        audio = torch.as_tensor(value).detach().float().cpu().numpy()
+                        yield np.asarray(audio, dtype="<f4").reshape(-1)
 
     @staticmethod
     def split_leading_instruction(text: str) -> tuple[bool, str]:
@@ -76,46 +136,6 @@ class VoxCPM2Engine:
             return False, text
         return True, match.group("text").strip()
 
-    def generation_kwargs(
-        self,
-        line: Mapping[str, object],
-        *,
-        prompt_wav_path: str | None = None,
-        prompt_text: str | None = None,
-    ):
-        """Build matching conditioning for normal and streaming generation."""
-        speaker = line["speaker"]
-        reference_wav_path = speaker["voice_path"]
-        kwargs = {
-            "text": line["spoken_text"],
-            "reference_wav_path": reference_wav_path,
-            "cfg_value": float(os.environ.get("VOXCPM_CFG_VALUE", "2.0")),
-            "inference_timesteps": int(
-                os.environ.get("VOXCPM_INFERENCE_TIMESTEPS", "10")
-            ),
-            "normalize": _environment_flag("VOXCPM_NORMALIZE", True),
-        }
-        if prompt_wav_path is not None and prompt_text is not None:
-            kwargs["prompt_wav_path"] = prompt_wav_path
-            kwargs["prompt_text"] = prompt_text
-        return kwargs
-
-    def synthesize_line(self, line, *, prompt_wav_path=None, prompt_text=None):
-        """Generate one line with inference mode set in the calling thread."""
-        import torch
-
-        with torch.no_grad():
-            return self.load_model().generate(**self.generation_kwargs(
-                line, prompt_wav_path=prompt_wav_path, prompt_text=prompt_text,
-            ))
-
-    @staticmethod
-    def _next_chunk(generator):
-        import torch
-
-        with torch.no_grad():
-            return next(generator, _END)
-
     @classmethod
     def _line_prompt(cls, line, prompts):
         speaker = line["speaker"]
@@ -128,75 +148,70 @@ class VoxCPM2Engine:
 
     async def render_batch(self, requests: Sequence[Mapping[str, object]]):
         outputs, work = prepare_line_work(requests)
-        prompts_by_request: dict[int, dict[str, tuple[str, str]]] = {}
-        try:
-            async with self.model_lock:
-                model = await run_in_thread(self.load_model)
-            for item in work:
-                prompts = prompts_by_request.setdefault(item.request_index, {})
-                speaker_key, has_instruction, audible_text, prompt = self._line_prompt(item.line, prompts)
-                async with self.model_lock:
-                    audio = await run_in_thread(
-                        self.synthesize_line, item.line,
-                        prompt_wav_path=prompt[0] if prompt else None,
+        by_request = [[] for _ in requests]
+        for item in work:
+            by_request[item.request_index].append(item)
+
+        async def render_script(items):
+            async with self.batch_slots:
+                prompts = {}
+                for item in items:
+                    speaker_key, controlled, audible_text, prompt = self._line_prompt(item.line, prompts)
+                    chunks = []
+                    async with aclosing(self.line_chunks(
+                        item.line, prompt_wav_path=prompt[0] if prompt else None,
                         prompt_text=prompt[1] if prompt else None,
-                    )
-                await run_in_thread(sf.write,
-                    item.path,
-                    audio,
-                    model.tts_model.sample_rate,
-                    subtype="PCM_16",
-                )
-                if has_instruction:
-                    prompts[speaker_key] = (str(item.path), audible_text)
-            return await run_in_thread(finish_line_work,
-                outputs, work, sample_rate=model.tts_model.sample_rate
-            )
+                    )) as audio_chunks:
+                        async for chunk in audio_chunks:
+                            chunks.append(chunk)
+                    audio = np.concatenate(chunks) if chunks else np.empty(0)
+                    await run_in_thread(sf.write, item.path, audio, SAMPLE_RATE, subtype="PCM_16")
+                    if controlled:
+                        prompts[speaker_key] = (str(item.path), audible_text)
+
+        tasks = [asyncio.create_task(render_script(items)) for items in by_request]
+        try:
+            await asyncio.gather(*tasks)
+            return await run_in_thread(finish_line_work, outputs, work, sample_rate=SAMPLE_RATE)
         finally:
+            # Stop siblings before deleting paths that may still be in use.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             await run_in_thread(remove_line_work, work)
 
     async def stream_request(self, request) -> AsyncIterator[bytes]:
-        """Stream one request while retaining exclusive access to model caches.
-
-        Holding the lock across yields prevents another generation from changing
-        VoxCPM2's model-owned state. Worker calls complete before cancellation
-        releases the lock. Continuation prompts remain local to this request.
-        """
-        async with self.model_lock:
-            model = await run_in_thread(self.load_model)
-            prompts = {}
-            with tempfile.TemporaryDirectory(prefix="voxcpm-stream-", dir=".") as directory:
-                for index, line in enumerate(request["dialogue_contents"]):
-                    if line["type"] != "line" or not str(line["spoken_text"]).strip():
-                        continue
-                    speaker_key, has_instruction, audible_text, prompt = self._line_prompt(line, prompts)
-                    generator = model.generate_streaming(**self.generation_kwargs(
-                        line, prompt_wav_path=prompt[0] if prompt else None,
-                        prompt_text=prompt[1] if prompt else None,
-                    ))
-                    controlled_chunks = []
-                    try:
-                        while True:
-                            chunk = await run_in_thread(self._next_chunk, generator)
-                            if chunk is _END:
-                                break
-                            audio = np.asarray(chunk, dtype="<f4").reshape(-1)
-                            if has_instruction:
-                                controlled_chunks.append(audio.copy())
-                            yield audio.tobytes()
-                    finally:
-                        await run_in_thread(generator.close)
-                    if has_instruction:
-                        path = Path(directory) / f"{index}.wav"
-                        audio = np.concatenate(controlled_chunks) if controlled_chunks else np.empty(0)
-                        await run_in_thread(sf.write, path, audio, SAMPLE_RATE, subtype="PCM_16")
-                        prompts[speaker_key] = (str(path), audible_text)
+        """Submit live lines without acquiring background admission slots."""
+        prompts = {}
+        with tempfile.TemporaryDirectory(prefix="voxcpm-stream-", dir=".") as directory:
+            for index, line in enumerate(request["dialogue_contents"]):
+                if line["type"] != "line" or not str(line["spoken_text"]).strip():
+                    continue
+                speaker_key, controlled, audible_text, prompt = self._line_prompt(line, prompts)
+                controlled_chunks = []
+                async with aclosing(self.line_chunks(
+                    line, prompt_wav_path=prompt[0] if prompt else None,
+                    prompt_text=prompt[1] if prompt else None,
+                )) as chunks:
+                    async for audio in chunks:
+                        if controlled:
+                            controlled_chunks.append(audio.copy())
+                        yield audio.tobytes()
+                if controlled:
+                    path = Path(directory) / f"{index}.wav"
+                    audio = np.concatenate(controlled_chunks) if controlled_chunks else np.empty(0)
+                    await run_in_thread(sf.write, path, audio, SAMPLE_RATE, subtype="PCM_16")
+                    prompts[speaker_key] = (str(path), audible_text)
 
 
 def main() -> None:
     engine = VoxCPM2Engine()
-    run_server(engine.render_batch, capabilities={"needs_transcript"},
-               stream_request=engine.stream_request, stream_sample_rate=SAMPLE_RATE)
+    try:
+        run_server(engine.render_batch, capabilities={"needs_transcript"},
+                   stream_request=engine.stream_request, stream_sample_rate=SAMPLE_RATE)
+    finally:
+        if engine.model is not None:
+            engine.model.shutdown()
 
 
 if __name__ == "__main__":

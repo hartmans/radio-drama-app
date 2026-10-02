@@ -162,15 +162,16 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     monkeypatch.chdir(tmp_path)
     calls = []
 
-    class FakeModel:
-        tts_model = types.SimpleNamespace(sample_rate=48_000)
-
-        def generate(self, **kwargs):
+    class FakeEngine(VoxCPM2Engine):
+        async def line_chunks(self, line, *, prompt_wav_path=None, prompt_text=None):
+            kwargs = {"text": line["spoken_text"],
+                      "reference_wav_path": line["speaker"]["voice_path"]}
+            if prompt_wav_path is not None:
+                kwargs.update(prompt_wav_path=prompt_wav_path, prompt_text=prompt_text)
             calls.append(kwargs)
-            return np.zeros(48_000, dtype=np.float32)
+            yield np.zeros(48_000, dtype=np.float32)
 
-    engine = VoxCPM2Engine()
-    engine.model = FakeModel()
+    engine = FakeEngine()
     requests = [
         _request("first", ("one", "(flustered) two", "three", "four"))
     ]
@@ -202,12 +203,6 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
         [3.0, 4.0],
     ]
     assert not list(tmp_path.glob("*.line-*.wav"))
-
-    engine.synthesize_line(
-        {"spoken_text": "fallback", "speaker": {"voice_path": "/voices/other.wav"}}
-    )
-    assert calls[-1]["reference_wav_path"] == "/voices/other.wav"
-    assert "prompt_wav_path" not in calls[-1]
 
 
 def test_moss_ttsd_batches_complete_scripts(tmp_path, monkeypatch):

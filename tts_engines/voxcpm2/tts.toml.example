@@ -10,10 +10,7 @@ ipc = "host"
 [tts.voxcpm2.environment]
 HF_HOME = "/models/huggingface"
 VOXCPM_MODEL = "openbmb/VoxCPM2"
-VOXCPM_DEVICE = "cuda"
-VOXCPM_CFG_VALUE = "2.0"
-VOXCPM_INFERENCE_TIMESTEPS = "10"
-VOXCPM_NORMALIZE = "true"
+# Optional: mount a custom deployment YAML and set VOXCPM_DEPLOY_CONFIG.
 
 [[tts.voxcpm2.mounts]]
 source = "~/.cache/radio-drama/voxcpm2-huggingface"
