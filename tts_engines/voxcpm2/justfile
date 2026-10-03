@@ -1,9 +1,4 @@
 image := "localhost/radio-drama-voxcpm2:latest"
-cache := env_var_or_default("VOXCPM_HF_CACHE", "/srv/ai/models/voxcpm2")
 
 build:
     TMPDIR=/tmp podman build -f Containerfile -t {{image}} ../..
-
-# Populate the offline runtime cache; existing checkpoint blobs are reused.
-download:
-    TMPDIR=/tmp podman run --rm --entrypoint python3 --network slirp4netns -e HF_HUB_OFFLINE=0 -e TRANSFORMERS_OFFLINE=0 -v {{cache}}:/models/huggingface:Z {{image}} -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ["VOXCPM_MODEL"])'

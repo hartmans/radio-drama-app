@@ -162,16 +162,15 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     monkeypatch.chdir(tmp_path)
     calls = []
 
-    class FakeEngine(VoxCPM2Engine):
-        async def line_chunks(self, line, *, prompt_wav_path=None, prompt_text=None):
-            kwargs = {"text": line["spoken_text"],
-                      "reference_wav_path": line["speaker"]["voice_path"]}
-            if prompt_wav_path is not None:
-                kwargs.update(prompt_wav_path=prompt_wav_path, prompt_text=prompt_text)
-            calls.append(kwargs)
-            yield np.zeros(48_000, dtype=np.float32)
+    class FakeModel:
+        tts_model = types.SimpleNamespace(sample_rate=48_000)
 
-    engine = FakeEngine()
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return np.zeros(48_000, dtype=np.float32)
+
+    engine = VoxCPM2Engine()
+    engine.model = FakeModel()
     requests = [
         _request("first", ("one", "(flustered) two", "three", "four"))
     ]
@@ -203,6 +202,12 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
         [3.0, 4.0],
     ]
     assert not list(tmp_path.glob("*.line-*.wav"))
+
+    engine.synthesize_line(
+        {"spoken_text": "fallback", "speaker": {"voice_path": "/voices/other.wav"}}
+    )
+    assert calls[-1]["reference_wav_path"] == "/voices/other.wav"
+    assert "prompt_wav_path" not in calls[-1]
 
 
 def test_moss_ttsd_batches_complete_scripts(tmp_path, monkeypatch):
@@ -333,11 +338,14 @@ def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
         "chatterbox"
     ]
     voxcpm2 = load_proxy_tts_configs(root / "voxcpm2" / "tts.toml.example")["voxcpm2"]
+    voxcpm2_longform = load_proxy_tts_configs(
+        root / "voxcpm2_longform" / "tts.toml.example"
+    )["voxcpm2_longform"]
     moss_ttsd = load_proxy_tts_configs(root / "moss_ttsd" / "tts.toml.example")[
         "moss-ttsd"
     ]
 
-    for config in (zonos, chatterbox, voxcpm2, moss_ttsd):
+    for config in (zonos, chatterbox, voxcpm2, voxcpm2_longform, moss_ttsd):
         assert config.devices == ("nvidia.com/gpu=all",)
         assert config.ipc == "host"
         assert config.environment["HF_HOME"] == "/models/huggingface"
@@ -345,4 +353,5 @@ def test_new_engine_examples_enable_gpu_and_persistent_model_cache():
         assert not config.mounts[0].read_only
     assert zonos.environment["ZONOS_MODEL"] == "Zyphra/Zonos-v0.1-transformer"
     assert voxcpm2.environment["VOXCPM_MODEL"] == "openbmb/VoxCPM2"
+    assert voxcpm2_longform.environment["VOXCPM_MODEL"] == "openbmb/VoxCPM2"
     assert moss_ttsd.environment["MOSS_TTSD_BATCH_SIZE"] == "10"

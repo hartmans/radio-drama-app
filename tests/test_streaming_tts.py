@@ -22,6 +22,7 @@ from radio_drama.stream_audio import StreamingAudioConverter
 from radio_drama.tts_cache import CachedTtsRequest
 from radio_drama_tts_container import run_in_thread, write_pcm16_wav
 from tts_engines.voxcpm2.engine import VoxCPM2Engine
+from tts_engines.voxcpm2_longform.engine import VoxCPM2Engine as VoxCPM2LongformEngine
 
 
 def request(name="Narrator", words="Hello"):
@@ -334,6 +335,58 @@ def test_early_socket_close_cancels_container_stream(tmp_path, streaming_proxy):
     asyncio.run(run())
 
 
+def test_voxcpm_stream_gets_model_between_batch_lines(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    async def run():
+        first_started = threading.Event()
+        finish_first = threading.Event()
+        stream_started = asyncio.Event()
+        finish_stream = asyncio.Event()
+        calls = []
+
+        class Model:
+            tts_model = types.SimpleNamespace(sample_rate=48000)
+
+            def generate(self, **kwargs):
+                calls.append(kwargs["text"])
+                if kwargs["text"] == "first":
+                    first_started.set()
+                    assert finish_first.wait(5)
+                return np.zeros(48, dtype=np.float32)
+
+            def generate_streaming(self, **kwargs):
+                calls.append("stream")
+                yield np.zeros(48, dtype=np.float32)
+
+        engine = VoxCPM2Engine()
+        engine.model = Model()
+        line = lambda text: {"type": "line", "spoken_text": text, "speaker": {"voice_path": "voice.wav"}}
+        batch = asyncio.create_task(engine.render_batch([{"dialogue_contents": [line("first"), line("second")]}]))
+        assert await asyncio.to_thread(first_started.wait, 5)
+
+        async def stream():
+            async with aclosing(engine.stream_request({"dialogue_contents": [line("interactive")]})) as chunks:
+                await anext(chunks)
+                stream_started.set()
+                await finish_stream.wait()
+                async for _ in chunks:
+                    pass
+
+        streaming = asyncio.create_task(stream())
+        await asyncio.sleep(0)
+        finish_first.set()
+        await asyncio.wait_for(stream_started.wait(), 5)
+        assert calls == ["first", "stream"]
+        assert engine.model_lock.locked()
+        finish_stream.set()
+        await streaming
+        await batch
+        assert calls == ["first", "stream", "second"]
+
+    asyncio.run(run())
+
+
 def test_voxcpm_stream_bypasses_saturated_batch_admission(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
@@ -342,7 +395,7 @@ def test_voxcpm_stream_bypasses_saturated_batch_admission(tmp_path, monkeypatch)
         release = asyncio.Event()
         calls = []
 
-        class Engine(VoxCPM2Engine):
+        class Engine(VoxCPM2LongformEngine):
             async def line_chunks(self, line, **kwargs):
                 text = line["spoken_text"]
                 calls.append(text)

@@ -1,0 +1,19 @@
+# Install as $XDG_CONFIG_HOME/radio-drama/tts.toml, normally
+# ~/.config/radio-drama/tts.toml. Build from the repository root:
+# TMPDIR=/tmp podman build -f tts_engines/voxcpm2_longform/Containerfile -t localhost/radio-drama-voxcpm2-longform .
+
+[tts.voxcpm2_longform]
+image = "localhost/radio-drama-voxcpm2-longform:latest"
+devices = ["nvidia.com/gpu=all"]
+ipc = "host"
+
+[tts.voxcpm2_longform.environment]
+HF_HOME = "/models/huggingface"
+HF_HUB_OFFLINE = "1"
+VOXCPM_MODEL = "openbmb/VoxCPM2"
+# Optional: mount a custom deployment YAML and set VOXCPM_DEPLOY_CONFIG.
+
+[[tts.voxcpm2_longform.mounts]]
+source = "~/.cache/radio-drama/voxcpm2-huggingface"
+target = "/models/huggingface"
+mode = "rw"
