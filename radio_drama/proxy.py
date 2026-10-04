@@ -139,7 +139,7 @@ class ProxyTtsResource(TtsResource):
     async def stream_registered_request(
         self, registration: RegisteredProxyTtsRequest
     ) -> AsyncIterator[BackendTtsResult]:
-        """Claim pending work for streaming, or reuse an already started batch.
+        """Claim pending work or stream independently alongside an active batch.
 
         The cache wrapper owns replay and the shared producer. Socket bytes are
         little-endian interleaved float32 PCM; socket EOF completes the result
@@ -152,13 +152,16 @@ class ProxyTtsResource(TtsResource):
             if claimed:
                 registration.started = True
                 self._pending = [ref for ref in self._pending if ref() is not registration]
-        if not claimed:
+        if not claimed and registration.future.done():
             yield await asyncio.shield(registration.future)
             return
         writer = None
         try:
             await self._prepare_submission([registration.request])
             if "streaming" not in self._capabilities:
+                if not claimed:
+                    yield await asyncio.shield(registration.future)
+                    return
                 result = (await self._render_batch([registration]))[0]
                 registration.future.set_result(result)
                 yield result
@@ -204,11 +207,12 @@ class ProxyTtsResource(TtsResource):
                 (0,) if channels == 1 else (0, channels), dtype=np.float32
             )
             result = BackendTtsResult(audio=audio, sample_rate=sample_rate)
-            registration.future.set_result(result)
+            if claimed:
+                registration.future.set_result(result)
             if not chunks:
                 yield result
         except BaseException as exc:
-            if not registration.future.done():
+            if claimed and not registration.future.done():
                 registration.future.set_exception(exc)
                 registration.future.exception()
             raise

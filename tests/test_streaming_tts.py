@@ -104,6 +104,7 @@ def test_failed_attempt_is_shared_and_later_call_retries_from_start():
 
         backend = Backend()
         registration = cached(backend)
+        assert not registration.audio_available()
         first = registration.render_stream()
         second = registration.render_stream()
         await anext(first)
@@ -112,10 +113,12 @@ def test_failed_attempt_is_shared_and_later_call_retries_from_start():
         for iterator in (first, second):
             with pytest.raises(RuntimeError, match="failed attempt"):
                 await anext(iterator)
+        assert not registration.audio_available()
         retry = await collect(registration)
         assert np.allclose(np.concatenate([c.audio for c in retry]), [.2, .3])
         assert np.allclose((await registration.render()).audio, [.2, .3])
         assert backend.calls == 2
+        assert registration.audio_available()
 
     asyncio.run(run())
 
@@ -531,5 +534,124 @@ def test_stream_consumers_cannot_mutate_other_callers_replay():
         replay = await collect(registration)
         assert np.allclose(replay[0].audio, [.1, .2])
         assert np.allclose((await registration.render()).audio, [.1, .2])
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("first", ["batch", "stream"])
+@pytest.mark.parametrize("loser_fails", [False, True])
+def test_overlapping_attempts_persist_one_winner(tmp_path, first, loser_fails):
+    async def run():
+        batch_started = asyncio.Event()
+        release_batch = asyncio.Event()
+        release_stream = asyncio.Event()
+
+        class Backend:
+            batch_calls = 0
+            stream_calls = 0
+
+            async def render(self):
+                self.batch_calls += 1
+                batch_started.set()
+                await release_batch.wait()
+                if loser_fails and first == "stream":
+                    raise RuntimeError("batch failed")
+                return BackendTtsResult(audio=np.full(10, .1), sample_rate=8000)
+
+            async def render_stream(self):
+                self.stream_calls += 1
+                yield BackendTtsResult(audio=np.full(5, .2), sample_rate=8000)
+                await release_stream.wait()
+                if loser_fails and first == "batch":
+                    raise RuntimeError("stream failed")
+                yield BackendTtsResult(audio=np.full(5, .2), sample_rate=8000)
+
+        class Collection:
+            enabled = True
+
+            def key_for(self, request):
+                return "shared"
+
+            def path_for_subtype(self, key, subtype):
+                return tmp_path / f"{key}.{subtype}"
+
+        backend = Backend()
+        registration = cached(backend)
+        registration.resource.cache_manager["fake"] = Collection()
+        assert not registration.audio_available()
+        batch = asyncio.create_task(registration.render())
+        await batch_started.wait()
+        iterator = registration.render_stream()
+        prefix = await anext(iterator)
+        assert not batch.done()
+        assert not registration.audio_available()
+        other_stream = asyncio.create_task(collect(registration))
+        if first == "batch":
+            release_batch.set()
+            await batch
+        else:
+            release_stream.set()
+            await other_stream
+        assert registration.audio_available()
+        winner = (await registration.render()).audio.copy()
+        # A late reader sees completed audio while the original stream stays pinned.
+        late = await collect(registration)
+        assert np.array_equal(np.concatenate([c.audio for c in late]), winner)
+        release_batch.set()
+        release_stream.set()
+        if loser_fails:
+            losing = batch if first == "stream" else other_stream
+            with pytest.raises(RuntimeError, match="failed"):
+                await losing
+        else:
+            await batch
+            await other_stream
+        if loser_fails and first == "batch":
+            with pytest.raises(RuntimeError, match="stream failed"):
+                await anext(iterator)
+        else:
+            own_chunks = [prefix, *[c async for c in iterator]]
+            assert np.allclose(np.concatenate([c.audio for c in own_chunks]), .2)
+        assert np.array_equal((await registration.render()).audio, winner)
+        assert backend.batch_calls == backend.stream_calls == 1
+        replay = cached(backend)
+        replay.resource.cache_manager["fake"] = Collection()
+        assert replay.audio_available()
+        assert np.allclose((await replay.render()).audio, winner, atol=1 / 32768)
+        assert backend.batch_calls == backend.stream_calls == 1
+
+    asyncio.run(run())
+
+
+def test_proxy_streams_same_registration_during_active_batch(tmp_path, streaming_proxy):
+    async def run():
+        injector, resource, voice = await injected_resource(streaming_proxy, tmp_path)
+        cache_dir = tmp_path / "cache"
+        try:
+            req = request()
+            req.dialogue_lines[0].speaker.resolved_path = voice
+            registration = await resource.register_request(req)
+            batch = asyncio.create_task(registration.render())
+            await wait_file(cache_dir / "batch_started")
+            iterator = registration.render_stream()
+            prefix = await asyncio.wait_for(anext(iterator), 5)
+            assert prefix.frame_count > 0
+            assert not batch.done()
+            (cache_dir / "release_stream").touch()
+            remaining = [c async for c in iterator]
+            assert sum(c.frame_count for c in [prefix, *remaining]) == 40000
+            assert registration.audio_available()
+            (cache_dir / "release_batch").touch()
+            assert (await asyncio.wait_for(batch, 5)).frame_count == 16
+            assert (await registration.render()).frame_count == 40000
+            replay = await resource.register_request(req)
+            assert replay.audio_available()
+            assert (await replay.render()).frame_count == 40000
+        finally:
+            process = resource._process
+            resource.close()
+            if process is not None:
+                await process.wait()
+            injector.close()
 
     asyncio.run(run())

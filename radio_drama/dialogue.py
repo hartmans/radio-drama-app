@@ -38,21 +38,31 @@ _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 
 
 class RegisteredTtsRequest(Protocol):
-    """A registered request with shared rendering and replayable streaming.
+    """A cache-mediated request with replayable streaming and completed audio.
 
-    ``render_stream()`` yields successive audio chunks in the same production
-    sample rate and channel layout as ``render()``. Each iterator starts at the
-    beginning, even for concurrent or later callers. One active generation is
-    shared; readers consume independently and leaving early does not stop cache
-    filling. An error may be retried on a later call, with a new stream beginning
-    from the start rather than appending to the failed attempt.
+    ``render_stream()`` yields production-format audio from the beginning for
+    each caller. Concurrent stream readers share one streaming attempt, consume
+    independently, and do not stop cache filling when they leave early. Failed
+    attempts may be retried from the beginning.
 
-    After successful iterator completion, ``await render()`` returns the whole
-    concatenated audio. Cache encoding and format conversion may change samples
-    slightly; bit-for-bit identity and identical replay chunk boundaries are
-    not guaranteed. Per-chunk timing is not promised. Backends without streaming
-    and cache hits may yield the complete result as one chunk.
+    A completed result may satisfy either method. With a streaming backend,
+    calling ``render_stream()`` during an unfinished batch starts streaming
+    independently rather than waiting for that batch. Existing stream readers
+    finish their own attempt even if another attempt completes first. Successful
+    attempts establish one persistent cached result for subsequent calls; winner
+    selection and what existing batch waiters receive are implementation details.
+    Streaming and batch audio are assumed suitable for the same cache entry,
+    without guarantees of identical samples or model quality. Replay chunk
+    boundaries and per-chunk timing are not promised. Cache hits and backends
+    without streaming may supply one complete chunk.
+
+    ``audio_available()`` checks for completed audio in memory or persistent
+    cache without starting rendering or waiting. Partial streaming audio alone
+    does not count. These guarantees belong to the cache, not direct backend use.
     """
+
+    def audio_available(self) -> bool:
+        ...
 
     async def render(self) -> ScriptRenderResult:
         ...
@@ -75,6 +85,10 @@ class BackendRegisteredTtsRequest(Protocol):
     ``render_stream() -> AsyncIterator[BackendTtsResult]`` yielding successive
     native-format chunks. The shared cache handles replay, concurrent callers,
     conversion, and fallback for backends without this optional method.
+    Streaming backends must accept overlapping batch and streaming calls for the
+    same registration with independently consumable output: a stream must not
+    merely join an unfinished batch. Internal model scheduling may serialize
+    work. Backends need not implement replay, persistent winners, or availability.
     """
 
     async def render(self) -> BackendTtsResult:

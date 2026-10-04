@@ -45,7 +45,11 @@ class CachedTtsRequest:
 
     resource: "TtsResource"
     request: "ScriptRenderRequest"
-    _attempt: _RenderAttempt | None = None
+    _batch_attempt: _RenderAttempt | None = None
+    _stream_attempt: _RenderAttempt | None = None
+    _publish_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _published: bool = False
+    _completed_result: ScriptRenderResult | None = None
     _backend_registration: "BackendRegisteredTtsRequest | None" = None
     _backend_result: BackendTtsResult | None = None
     _wav_path: Path | None = None
@@ -64,35 +68,60 @@ class CachedTtsRequest:
             registration._backend_result = await asyncio.to_thread(
                 registration._load_cached
             )
+            registration._published = registration._backend_result is not None
             if registration._backend_result is None:
                 registration._backend_registration = await resource.register_backend_request(
                     request
                 )
         return registration
 
+    def audio_available(self) -> bool:
+        """Check completed audio without starting generation or waiting for it."""
+        if self._published or not self.request.dialogue_lines:
+            return True
+        # Another registration may have filled this cache entry since registration.
+        if self._publish_lock.locked():
+            return False
+        result = self._load_cached()
+        if result is not None:
+            self._backend_result = result
+            self._published = True
+        return self._published
+
     def _start_attempt(self, *, streaming: bool) -> _RenderAttempt:
-        if self._attempt is None or (self._attempt.done and self._attempt.error is not None):
+        # Without backend streaming, the batch attempt is also the fallback stream.
+        streaming = streaming and hasattr(self._backend_registration, "render_stream")
+        attribute = "_stream_attempt" if streaming else "_batch_attempt"
+        attempt = getattr(self, attribute)
+        if attempt is None or (attempt.done and attempt.error is not None):
             attempt = _RenderAttempt()
-            self._attempt = attempt
+            setattr(self, attribute, attempt)
             attempt.task = asyncio.create_task(self._produce(attempt, streaming=streaming))
-            # Keep failed attempts observable by their readers without emitting
-            # unhandled-task warnings when every consumer has left early.
             attempt.task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
-        return self._attempt
+        return attempt
 
     async def render(self) -> ScriptRenderResult:
-        attempt = self._start_attempt(streaming=False)
+        if self.audio_available():
+            return self._converted_result()
+        # A stream already underway can satisfy a later batch caller.
+        attempt = self._stream_attempt
+        if attempt is None or (attempt.done and attempt.error is not None):
+            attempt = self._start_attempt(streaming=False)
         return await asyncio.shield(attempt.task)
 
     async def render_stream(self) -> AsyncIterator[RenderResult]:
         """Replay from the beginning and follow the registration's shared producer.
 
-        A backend without streaming (or an existing batch render/cache hit)
-        supplies one complete chunk. Consumers never throttle socket draining.
+        A backend without streaming or a cache hit supplies one complete chunk.
+        An active batch does not prevent a separate streaming attempt. Consumers
+        never throttle socket draining.
         Leaving early keeps the producer running to fill the cache. Failed
         attempts can be retried by a subsequent call; existing readers retain
         their attempt and receive its error rather than a replacement stream.
         """
+        if self.audio_available():
+            yield RenderResult(audio=self._converted_result().audio.copy())
+            return
         attempt = self._start_attempt(streaming=True)
         index = 0
         while True:
@@ -109,23 +138,26 @@ class CachedTtsRequest:
 
     async def _produce(self, attempt: _RenderAttempt, *, streaming: bool) -> ScriptRenderResult:
         try:
-            if (streaming and self._backend_result is None
-                and self._backend_registration is not None
-                and hasattr(self._backend_registration, "render_stream")):
-                await self._produce_stream(attempt)
-            result = await self._render()
+            if self._published or not self.request.dialogue_lines:
+                result = self._converted_result()
+            else:
+                if streaming:
+                    backend_result = await self._produce_stream(attempt)
+                else:
+                    backend_result = await self._backend_registration.render()
+                backend_result = await self._publish(backend_result)
+                result = self._converted_result(backend_result)
             if not attempt.chunks:
                 attempt.chunks.append(RenderResult(audio=result.audio.copy()))
             return result
         except BaseException as exc:
             attempt.error = exc
-            self._backend_result = None
             raise
         finally:
             attempt.done = True
             attempt.changed.set()
 
-    async def _produce_stream(self, attempt: _RenderAttempt) -> None:
+    async def _produce_stream(self, attempt: _RenderAttempt) -> BackendTtsResult:
         native_chunks = []
         converter = None
         sample_rate = None
@@ -153,15 +185,15 @@ class CachedTtsRequest:
             if len(converted):
                 attempt.chunks.append(RenderResult(audio=converted))
                 attempt.changed.set()
-            self._backend_result = BackendTtsResult(
+            backend_result = BackendTtsResult(
                 audio=np.concatenate(native_chunks), sample_rate=sample_rate, timing=timing,
             )
         else:
-            self._backend_result = BackendTtsResult(
+            backend_result = BackendTtsResult(
                 audio=RenderResult.empty(channels=self.resource.config.resolved_output_channels).audio,
                 sample_rate=self.resource.config.resolved_output_sample_rate,
             )
-        await asyncio.to_thread(self._store_backend_result)
+        return backend_result
 
     async def ensure_timing(
         self,
@@ -208,22 +240,32 @@ class CachedTtsRequest:
         await asyncio.to_thread(self._write_metadata)
         return timing
 
-    async def _render(self) -> ScriptRenderResult:
-        if not self.request.dialogue_lines:
-            return ScriptRenderResult.empty(
-                channels=self.resource.config.resolved_output_channels
-            )
-        if self._backend_result is None:
-            assert self._backend_registration is not None
-            self._backend_result = await self._backend_registration.render()
-            await asyncio.to_thread(self._store_backend_result)
-            persisted = await asyncio.to_thread(self._load_cached)
-            if persisted is not None:
-                self._backend_result = persisted
+    async def _publish(self, result: BackendTtsResult) -> BackendTtsResult:
+        """First successful publication wins; losing attempts keep local results."""
+        async with self._publish_lock:
+            if self._published:
+                return result
+            self._backend_result = result
+            try:
+                await asyncio.to_thread(self._store_backend_result)
+                persisted = await asyncio.to_thread(self._load_cached)
+                if persisted is not None:
+                    self._backend_result = persisted
+            except BaseException:
+                self._backend_result = None
+                raise
+            self._published = True
+            return self._backend_result
 
-        backend_result = self._backend_result
+    def _converted_result(self, backend_result: BackendTtsResult | None = None) -> ScriptRenderResult:
+        if not self.request.dialogue_lines:
+            return ScriptRenderResult.empty(channels=self.resource.config.resolved_output_channels)
+        backend_result = backend_result if backend_result is not None else self._backend_result
         assert backend_result is not None
-        return ScriptRenderResult(
+        completed = self._published and backend_result is self._backend_result
+        if completed and self._completed_result is not None:
+            return self._completed_result
+        result = ScriptRenderResult(
             audio=convert_audio_format(
                 backend_result.audio,
                 input_sample_rate=backend_result.sample_rate,
@@ -232,6 +274,9 @@ class CachedTtsRequest:
             ),
             timing=backend_result.timing,
         )
+        if completed:
+            self._completed_result = result
+        return result
 
     def _cache_paths(self) -> tuple[Path, Path] | None:
         collection = self.resource.cache_manager[self.resource.cache_collection_name]
