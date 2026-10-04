@@ -302,6 +302,132 @@ def test_forced_alignment_metadata_reuses_audio_and_invalidates_by_projection(
     assert math.isnan(missing_payload["dialogue_line_spans"][0][0])
 
 
+def test_concurrent_ensure_timing_runs_alignment_once(monkeypatch, tmp_path: Path):
+    """Overlapping ensure_timing callers share one alignment attempt."""
+    config = ProductionConfig(output_sample_rate=24000, output_channels=1)
+    output_path = tmp_path / "render.wav"
+    request = request_from_normalized_script("Speaker 1: Align me.", ("anna.wav",))
+
+    class UntimedVibeVoiceResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._sample_rate = 24000
+
+        def _render_batch_native_sync(self, batch):
+            return [np.array([0.25, -0.25], dtype=np.float32) for _ in batch]
+
+    class ConcurrentWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        calls = 0
+        active = 0
+        max_active = 0
+        started = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def script_timing(self, contents, result, **kwargs):
+            type(self).calls += 1
+            type(self).active += 1
+            type(self).max_active = max(type(self).max_active, type(self).active)
+            type(self).started.set()
+            try:
+                await type(self).proceed.wait()
+                return ScriptTiming((DialogueLineTiming(0.0, result.frame_count / 24000),))
+            finally:
+                type(self).active -= 1
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, output_path=output_path)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), ConcurrentWhisperX(), close=False)
+        try:
+            resource = await ainjector(UntimedVibeVoiceResource)
+            registration = await resource.register_request(request)
+            result = await registration.render()
+            # Two concurrent callers must observe the in-flight overlap, not
+            # serialize into a second alignment call.
+            first = asyncio.create_task(registration.ensure_timing(request.dialogue_contents, result))
+            await ConcurrentWhisperX.started.wait()
+            second = asyncio.create_task(registration.ensure_timing(request.dialogue_contents, result))
+            await ConcurrentWhisperX.started.wait()
+            ConcurrentWhisperX.proceed.set()
+            first_timing, second_timing = await asyncio.gather(first, second)
+            return first_timing, second_timing
+        finally:
+            injector.close()
+
+    first_timing, second_timing = asyncio.run(runner())
+    assert first_timing == second_timing
+    assert ConcurrentWhisperX.calls == 1
+    assert ConcurrentWhisperX.max_active == 1
+
+
+def test_cancelled_ensure_timing_waiter_preserves_shared_alignment(monkeypatch, tmp_path: Path):
+    """A waiter's cancellation must not cancel the shared alignment attempt."""
+    config = ProductionConfig(output_sample_rate=24000, output_channels=1)
+    output_path = tmp_path / "render.wav"
+    request = request_from_normalized_script("Speaker 1: Align me.", ("anna.wav",))
+
+    class UntimedVibeVoiceResource(VibeVoiceResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._sample_rate = 24000
+
+        def _render_batch_native_sync(self, batch):
+            return [np.array([0.25, -0.25], dtype=np.float32) for _ in batch]
+
+    class DelayedWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        calls = 0
+        started = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def script_timing(self, contents, result, **kwargs):
+            type(self).calls += 1
+            type(self).started.set()
+            await type(self).proceed.wait()
+            return ScriptTiming((DialogueLineTiming(0.0, result.frame_count / 24000),))
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, output_path=output_path)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), DelayedWhisperX(), close=False)
+        try:
+            resource = await ainjector(UntimedVibeVoiceResource)
+            registration = await resource.register_request(request)
+            result = await registration.render()
+            # The first caller leads the shared attempt; the second waits on it.
+            leader = asyncio.create_task(registration.ensure_timing(request.dialogue_contents, result))
+            await DelayedWhisperX.started.wait()  # leader is in flight, future published
+            waiter = asyncio.create_task(registration.ensure_timing(request.dialogue_contents, result))
+            await asyncio.sleep(0)  # let the waiter attach to the leader's future
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            # The cancelled waiter must not have interrupted the leader's work.
+            DelayedWhisperX.proceed.set()
+            timing = await leader
+            # A later caller reuses the now-cached timing without re-aligning.
+            cached = await registration.ensure_timing(request.dialogue_contents, result)
+            return timing, cached
+        finally:
+            injector.close()
+
+    timing, cached = asyncio.run(runner())
+    assert timing == cached
+    assert (timing.dialogue_lines[0].start, timing.dialogue_lines[0].end) == (0.0, 2 / 24000)
+    assert DelayedWhisperX.calls == 1
+
+
 def test_qwentts_resource_reuses_cached_native_timing(monkeypatch, tmp_path: Path):
     config = ProductionConfig(output_sample_rate=48000, output_channels=2)
     output_path = tmp_path / "render.wav"

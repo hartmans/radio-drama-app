@@ -57,6 +57,7 @@ class CachedTtsRequest:
     _alignment_key: str | None = None
     _mark_alignment_key: str | None = None
     _mark_offsets: tuple[tuple[int, ...], ...] = ()
+    _timing_futures: dict[str, asyncio.Future] = field(default_factory=dict)
 
     @classmethod
     async def register(
@@ -217,27 +218,40 @@ class CachedTtsRequest:
                 return timing
             if native and self._mark_offsets == offsets and self._mark_alignment_key == requested_key:
                 return timing
-        aligned = await alignment.script_timing(
-            contents, result,
-            sample_rate=self.resource.config.resolved_output_sample_rate,
-            transcript_kind="complete",
-        )
-        if native:
-            enriched = []
-            for line, existing, measured in zip(lines, timing.dialogue_lines, aligned.dialogue_lines, strict=True):
-                marks = tuple(DialogueMarkTiming(
-                    existing.end if offset == len(line.spoken_text) else mark.previous_end,
-                    existing.start if offset == 0 else mark.next_start,
-                ) for offset, mark in zip(line.mark_offsets, measured.marks, strict=True))
-                enriched.append(replace(existing, marks=marks))
-            timing = ScriptTiming(tuple(enriched))
-            self._mark_alignment_key = requested_key
+        pending = self._timing_futures.get(requested_key)
+        if pending is not None:
+            return await asyncio.shield(pending)
+        future = asyncio.get_running_loop().create_future()
+        self._timing_futures[requested_key] = future
+        try:
+            aligned = await alignment.script_timing(
+                contents, result,
+                sample_rate=self.resource.config.resolved_output_sample_rate,
+                transcript_kind="complete",
+            )
+            if native:
+                enriched = []
+                for line, existing, measured in zip(lines, timing.dialogue_lines, aligned.dialogue_lines, strict=True):
+                    marks = tuple(DialogueMarkTiming(
+                        existing.end if offset == len(line.spoken_text) else mark.previous_end,
+                        existing.start if offset == 0 else mark.next_start,
+                    ) for offset, mark in zip(line.mark_offsets, measured.marks, strict=True))
+                    enriched.append(replace(existing, marks=marks))
+                timing = ScriptTiming(tuple(enriched))
+                self._mark_alignment_key = requested_key
+            else:
+                timing = aligned
+                self._alignment_key = requested_key
+            self._backend_result.timing = timing
+            self._mark_offsets = offsets
+            await asyncio.to_thread(self._write_metadata)
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
         else:
-            timing = aligned
-            self._alignment_key = requested_key
-        self._backend_result.timing = timing
-        self._mark_offsets = offsets
-        await asyncio.to_thread(self._write_metadata)
+            future.set_result(timing)
+        finally:
+            self._timing_futures.pop(requested_key, None)
         return timing
 
     async def _publish(self, result: BackendTtsResult) -> BackendTtsResult:
