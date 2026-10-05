@@ -51,6 +51,23 @@ through container device visibility; the deployment uses logical GPU 0.
 Rebuild the image to switch existing installations to vLLM-Omni. The image
 pins matching vLLM and vLLM-Omni 0.30.0 releases; Omni installs from PyPI.
 
+Mount a persistent read-write cache at `/voxcpm2_longform_cache`, as in
+`tts.toml.example`, to reuse compile artifacts after the proxy removes its
+container. The example uses the host directory
+`~/.cache/radio-drama/voxcpm2_longform_cache`, created automatically by the
+proxy. The image and example route PyTorch Inductor, Triton, vLLM (including
+its compile cache), CUDA driver JIT, and XDG-based dependency caches into
+separate subdirectories of this mount. The Hugging Face model cache remains
+at `/models/huggingface`.
+
+Existing installations can add the example's cache environment settings and
+mount to their `tts.toml` without rebuilding. Restart the resident backend to
+apply them. The first run populates the cache; later compatible runs reuse
+artifacts. Changes to models, GPU hardware, or compiler versions can require
+recompilation. Model loading and process-local CUDA graph capture still run
+at startup, so this does not eliminate all startup work. The cache is
+disposable and can be cleared while the backend is stopped.
+
 The image defaults to `HF_HUB_OFFLINE=1`, matching the proxy's default
 `network="none"`. Runtime uses the mounted model cache without DNS or remote
 repository metadata queries. Existing native VoxCPM2 checkpoint files are

@@ -11,8 +11,13 @@ COPY tts_engines/voxcpm2_longform/deploy.yaml /opt/voxcpm2.yaml
 ENV PYTHONPATH=/opt \
     HF_HOME=/models/huggingface \
     HF_HUB_OFFLINE=1 \
+    XDG_CACHE_HOME=/voxcpm2_longform_cache \
+    TORCHINDUCTOR_CACHE_DIR=/voxcpm2_longform_cache/torchinductor \
+    TRITON_CACHE_DIR=/voxcpm2_longform_cache/triton \
+    VLLM_CACHE_ROOT=/voxcpm2_longform_cache/vllm \
+    CUDA_CACHE_PATH=/voxcpm2_longform_cache/cuda \
     VOXCPM_MODEL=openbmb/VoxCPM2 \
     VLLM_WORKER_MULTIPROC_METHOD=spawn
 
-VOLUME ["/models/huggingface"]
+VOLUME ["/models/huggingface", "/voxcpm2_longform_cache"]
 ENTRYPOINT ["python3", "/opt/voxcpm2_engine.py"]

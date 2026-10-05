@@ -11,9 +11,19 @@ ipc = "host"
 HF_HOME = "/models/huggingface"
 HF_HUB_OFFLINE = "1"
 VOXCPM_MODEL = "openbmb/VoxCPM2"
+XDG_CACHE_HOME = "/voxcpm2_longform_cache"
+TORCHINDUCTOR_CACHE_DIR = "/voxcpm2_longform_cache/torchinductor"
+TRITON_CACHE_DIR = "/voxcpm2_longform_cache/triton"
+VLLM_CACHE_ROOT = "/voxcpm2_longform_cache/vllm"
+CUDA_CACHE_PATH = "/voxcpm2_longform_cache/cuda"
 # Optional: mount a custom deployment YAML and set VOXCPM_DEPLOY_CONFIG.
 
 [[tts.voxcpm2_longform.mounts]]
 source = "~/.cache/radio-drama/voxcpm2-huggingface"
 target = "/models/huggingface"
+mode = "rw"
+
+[[tts.voxcpm2_longform.mounts]]
+source = "~/.cache/radio-drama/voxcpm2_longform_cache"
+target = "/voxcpm2_longform_cache"
 mode = "rw"
