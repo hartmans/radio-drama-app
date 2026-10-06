@@ -91,7 +91,7 @@ class VoxCPM2Engine:
             "reference_wav_path": reference_wav_path,
             "cfg_value": float(os.environ.get("VOXCPM_CFG_VALUE", "2.0")),
             "inference_timesteps": int(
-                os.environ.get("VOXCPM_INFERENCE_TIMESTEPS", "10")
+                os.environ.get("VOXCPM_INFERENCE_TIMESTEPS", "20")
             ),
             "normalize": _environment_flag("VOXCPM_NORMALIZE", True),
         }

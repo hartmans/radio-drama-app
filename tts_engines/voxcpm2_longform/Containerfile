@@ -4,6 +4,9 @@ FROM docker.io/vllm/vllm-openai:v0.30.0
 RUN uv pip install --system --no-cache \
     vllm-omni==0.30.0 voxcpm==2.0.3 soundfile ninja
 
+COPY tts_engines/voxcpm2_longform/patch_timesteps.py /opt/patch_timesteps.py
+RUN python3 /opt/patch_timesteps.py
+
 COPY radio_drama_tts_container /opt/radio_drama_tts_container
 COPY tts_engines/voxcpm2_longform/engine.py /opt/voxcpm2_engine.py
 COPY tts_engines/voxcpm2_longform/deploy.yaml /opt/voxcpm2.yaml

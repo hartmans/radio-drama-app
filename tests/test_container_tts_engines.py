@@ -160,6 +160,7 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VOXCPM_INFERENCE_TIMESTEPS", raising=False)
     calls = []
 
     class FakeModel:
@@ -184,6 +185,7 @@ def test_voxcpm2_holds_the_controlled_line_as_the_continuation_prompt(
         "three",
         "four",
     ]
+    assert all(call["inference_timesteps"] == 20 for call in calls)
     assert calls[0]["reference_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_wav_path"] == "/voices/narrator.wav"
     assert calls[0]["prompt_text"] == "Reference."

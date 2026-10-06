@@ -42,10 +42,16 @@ This follows the upstream
 To tune runtime settings, mount a custom deployment YAML and set
 `VOXCPM_DEPLOY_CONFIG` to its container path. Adjust `kv_cache_memory_bytes`,
 `max_model_len`, and `engine_extras.hf_overrides.voxcpm2_runtime_config`
-there. Version 0.30.0 uses fixed generation defaults (`cfg_value=2.0`,
-`inference_timesteps=10`). The native engine's
-`VOXCPM_DEVICE`, `VOXCPM_OPTIMIZE`, `VOXCPM_NORMALIZE`, `VOXCPM_CFG_VALUE`, and
-`VOXCPM_INFERENCE_TIMESTEPS` environment settings no longer apply. Select GPUs
+there. The image patches version 0.30.0's hardcoded generation settings
+to default to 20 steps, avoiding the echo observed on longer texts at 10 steps.
+Set `VOXCPM_INFERENCE_TIMESTEPS` to override this default, as with the native
+engine. `VOXCPM_CFG_VALUE` overrides guidance strength, which defaults to 2.0.
+The patch runs during the image build and fails if the upstream
+initializations change; rebuild the image to apply it. Both settings are read
+when each worker initializes its model, before CUDA graph capture; restart
+the backend after changing them. The native engine's
+`VOXCPM_DEVICE`, `VOXCPM_OPTIMIZE`, and `VOXCPM_NORMALIZE`
+environment settings do not apply. Select GPUs
 through container device visibility; the deployment uses logical GPU 0.
 
 Rebuild the image to switch existing installations to vLLM-Omni. The image
