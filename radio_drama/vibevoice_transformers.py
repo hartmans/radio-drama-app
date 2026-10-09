@@ -31,6 +31,10 @@ from __future__ import annotations
 import os
 import torch
 from transformers import VibeVoiceForConditionalGeneration
+from transformers.generation.logits_process import (
+    LogitsProcessorList,
+    UnbatchedClassifierFreeGuidanceLogitsProcessor,
+)
 from transformers.generation.utils import ALL_CACHE_NAMES
 from transformers.models.vibevoice.generation_vibevoice import VibeVoiceGenerateOutput
 from transformers.utils import logging
@@ -39,6 +43,19 @@ logger = logging.get_logger(__name__)
 
 
 class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
+    def _get_logits_processor(self, *args, **kwargs):
+        """Keep guidance on audio diffusion, matching upstream VibeVoice.
+
+        Transformers also interprets guidance_scale as a request for generic
+        token CFG. Remove that processor without changing the generation config:
+        the diffusion head still needs the original guidance scale.
+        """
+        processors = super()._get_logits_processor(*args, **kwargs)
+        return LogitsProcessorList(
+            processor for processor in processors
+            if not isinstance(processor, UnbatchedClassifierFreeGuidanceLogitsProcessor)
+        )
+
     def _sample(
         self,
         input_ids: torch.LongTensor,
