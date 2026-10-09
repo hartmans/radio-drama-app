@@ -12,6 +12,7 @@ SUPPORTED_DEBUG_CATEGORIES = (
     "qwen_alignment",
 )
 DEFAULT_MODEL_PATH = "bezzam/VibeVoice-7B-hf"
+DEFAULT_UPSTREAM_MODEL_PATH = "/srv/ai/models/vibevoice/vibevoice-large"
 DEFAULT_VOICE_DIRECTORY = Path("./voices")
 DEFAULT_SOUNDS_DIRECTORY = Path("./sounds")
 DEFAULT_OUTPUT_SAMPLE_RATE = 48000
@@ -25,6 +26,7 @@ MODEL_NATIVE_SAMPLE_RATE = 24000
 
 @dataclass(slots=True)
 class ProductionConfig:
+    upstream_vibevoice: bool = False
     alignment_backend: str = "qwen"
     alignment_language: str = "en"
     qwen_asr_model: str = "Qwen/Qwen3-ASR-1.7B-hf"
@@ -63,7 +65,9 @@ class ProductionConfig:
 
     @property
     def resolved_model_name(self) -> str:
-        return self.model_name or DEFAULT_MODEL_PATH
+        return self.model_name or (
+            DEFAULT_UPSTREAM_MODEL_PATH if self.upstream_vibevoice else DEFAULT_MODEL_PATH
+        )
 
     @property
     def resolved_output_sample_rate(self) -> int:

@@ -81,8 +81,13 @@ def radio_drama_injector(
     if injector.injector_containing(CacheManager) is None:
         injector.add_provider(CacheManager)
     proxy_configs = load_proxy_tts_configs()
+    selected_config = injector.get_instance(ProductionConfig)
+    vibevoice_type = VibeVoiceResource
+    if selected_config.upstream_vibevoice:
+        from .vibevoice_upstream import UpstreamVibeVoiceResource
+        vibevoice_type = UpstreamVibeVoiceResource
     builtin_tts_resources = {
-        "vibevoice": VibeVoiceResource,
+        "vibevoice": vibevoice_type,
         "qwen": QwenTtsResource,
     }
     for name, resource_type in builtin_tts_resources.items():

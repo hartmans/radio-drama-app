@@ -44,6 +44,10 @@ def initialize_arg_parser(
     parser.add_argument(
         "--model-file", default=None, help="VibeVoice Hugging Face model ID or directory."
     )
+    parser.add_argument(
+        "--upstream-vibevoice", action="store_true",
+        help="Use the installed upstream VibeVoice implementation and original checkpoint.",
+    )
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "--output",
@@ -129,6 +133,7 @@ def build_config_from_namespace(
     debug_categories = tuple(getattr(args, "debug", ()))
     debug_log_path = Path(f"{output_path}.log") if debug_categories else None
     return ProductionConfig(
+        upstream_vibevoice=getattr(args, "upstream_vibevoice", False),
         alignment_backend=getattr(args, "alignment_backend", "qwen"),
         alignment_language=getattr(args, "alignment_language", "en"),
         qwen_asr_model=getattr(args, "qwen_asr_model", "Qwen/Qwen3-ASR-1.7B-hf"),

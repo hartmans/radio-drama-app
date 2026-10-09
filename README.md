@@ -9,7 +9,7 @@ python -mvenv .venv
 .venv/bin/python -m pip install ~/ai/Qwen3-TTS
 .venv/bin/python -m pip install .
 ```
-Set `VIBEVOICE_RESET=1` to clear VibeVoice's acoustic and semantic streaming
+For native Transformers VibeVoice, set `VIBEVOICE_RESET=1` to clear its acoustic and semantic streaming
 caches at each generated audio segment end. The default is `0` (disabled);
 only `0` and `1` are accepted. Segment ends need not coincide with speaker or
 dialogue line changes. VibeVoice synthesis displays generation progress.
@@ -18,6 +18,32 @@ VibeVoice uses native Transformers 5.17+ and the Hugging Face checkpoint
 [`bezzam/VibeVoice-7B-hf`](https://huggingface.co/bezzam/VibeVoice-7B-hf), downloaded
 on first synthesis. No VibeVoice source checkout is required. `--model-file`
 accepts another Transformers-compatible model ID or local directory.
+
+`--upstream-vibevoice` instead selects the installed original VibeVoice package,
+using `/srv/ai/models/vibevoice/vibevoice-large` unless `--model-file` is supplied.
+Use the upstream checkout with Transformers 4/5 compatibility support. Install it
+into the selected environment without changing that environment's dependencies:
+
+```console
+~/venv/bin/python -m pip install --no-deps -e ~/ai/vibevoice
+```
+
+For the existing older environment, run from this source checkout (the project's
+normal package dependencies require modern Transformers):
+
+```console
+~/ai/vibevoice/.venv/bin/python radio_drama_app.py INPUT.xml --upstream-vibevoice --alignment-backend whisperx
+~/venv/bin/python radio_drama_app.py INPUT.xml --upstream-vibevoice --alignment-backend qwen
+VIBEVOICE_RESET=0 ~/venv/bin/python radio_drama_app.py INPUT.xml --alignment-backend qwen
+VIBEVOICE_RESET=1 ~/venv/bin/python radio_drama_app.py INPUT.xml --alignment-backend qwen
+```
+
+Alignment selection is independent of the VibeVoice implementation; available
+backends depend on the environment. Upstream retains its own segment-reset
+behavior and does not read `VIBEVOICE_RESET`. Both implementations reuse the
+same accepted script-audio cache: use different `--output` paths for comparison
+runs, or remove the cached clip to request regeneration. Run the implementations
+in separate processes because upstream registers its own Transformers models.
 
 Qwen TTS requires a version compatible with modern Transformers. This workspace
 uses the patched checkout at `~/ai/Qwen3-TTS`, installed in `~/venv`; the PyPI
@@ -103,6 +129,7 @@ Useful options:
 * `--output-sample-rate N`: override the production sample rate
 * `--output-channels N`: override the output channel count
 * `--model-file ID_OR_PATH`: override the VibeVoice Hugging Face checkpoint or directory
+* `--upstream-vibevoice`: use the original VibeVoice package instead of native Transformers VibeVoice
 * `--batch-size N`, `--device NAME`, `--cfg-scale X`, `--ddpm-inference-steps N`: VibeVoice overrides
 
 If `--sounds-dir` is not supplied, relative sound references are resolved under a `sounds/` directory next to the XML file.
