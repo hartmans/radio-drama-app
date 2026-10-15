@@ -11,6 +11,7 @@ import numpy as np
 from ..audio import resample_audio
 from ..debug import write_debug_json
 from ..model_loading import shared_model_load
+from ..text import normalize_text_punctuation
 from .base import AlignmentResult, ForcedAlignmentResource, TranscriptionResult, WordTiming
 
 
@@ -27,10 +28,11 @@ def _alignment_text(text):
     """Keep dash-separated words distinct in Qwen's punctuation-dropping tokenizer.
 
     The processor removes punctuation without flushing its word buffer, so an
-    unspaced dash otherwise joins two words. Preserve apostrophes and the authored
-    text/mark offsets; this transformation only prepares alignment model inputs.
+    unspaced dash otherwise joins two words. Only ASCII apostrophes survive, so
+    normalize typographic punctuation first to preserve contractions. Authored
+    text/mark offsets are unchanged; this only prepares alignment model inputs.
     """
-    return text.translate(str.maketrans({char: " " for char in "-‐‑‒–—―"}))
+    return normalize_text_punctuation(text).translate(str.maketrans({char: " " for char in "-‐‑‒–—―"}))
 
 
 class AlignmentWindowError(RuntimeError):
@@ -157,7 +159,7 @@ class QwenAlignmentResource(ForcedAlignmentResource):
     @property
     def alignment_identity(self):
         return (f"qwen:{self.config.qwen_asr_model}:{self.config.qwen_alignment_model}:"
-                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:complete-greedy-v2:dash-boundaries-v1")
+                f"windows-{_WINDOW_SECONDS}-{_OVERLAP_SECONDS}:tokens-{_MAX_NEW_TOKENS}:complete-greedy-v2:dash-boundaries-v1:apostrophes-v1")
 
     @property
     def transcription_identity(self):
