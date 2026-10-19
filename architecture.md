@@ -249,7 +249,7 @@ Current resource contract:
 * Qwen uses native Transformers APIs, independently lazy ASR/alignment models, and configurable batches of overlapping 180-second windows (10-second overlap). Recording windows use text and absolute timestamp correspondence for seams, with bounded bridge retries
 * complete Qwen transcripts align without ASR at any duration. Long inputs advance through overlapping bounded windows using stable supplied word identities and validated overlap; ambiguous placement raises explicitly rather than truncating text or falling back to ASR. Unknown word boundaries remain represented. Forced alignment can assign plausible times to incorrect supplied words; projection cannot guarantee their acoustic correctness
 * importing the package must not load models or import model backend implementation classes. Resources defer those imports and model loading until inference requires them, so selecting a backend or replaying cached results does not require unrelated model packages
-* heavyweight model loads are serialized process-wide; inference can run concurrently after startup
+* heavyweight model loads and shared runtime initialization are serialized process-wide; shared lazy dependencies needed by inference are initialized before the first model is released for use, and inference can then run concurrently
 * `NormalizedSoundCache` owns production-scoped sound normalization tasks so multiple `SoundPlan`s can share one normalized numpy buffer per resolved asset path
 * `ProductionConfig` may override both the voice directory and the sounds directory used for document-authored relative asset references
 * `ProductionConfig` also carries optional debug categories and a debug log path for render-time instrumentation
