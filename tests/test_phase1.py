@@ -684,8 +684,7 @@ def test_vibevoice_resource_returns_production_format_audio(monkeypatch, tmp_pat
             assert kwargs["num_diffusion_steps"] == 8
             assert kwargs["do_sample"] is False
             assert kwargs["max_length"] == 32768
-            from types import SimpleNamespace
-            return SimpleNamespace(audio=[np.ones(2400, dtype=np.float32)], trace=None)
+            return [np.ones(2400, dtype=np.float32)]
 
     class FakeResource(VibeVoiceResource):
         def _ensure_loaded(self):
@@ -752,8 +751,7 @@ def test_vibevoice_resource_preserves_paragraphs_and_first_turn_reference(
             assert kwargs["num_diffusion_steps"] == 8
             assert kwargs["do_sample"] is False
             assert kwargs["max_length"] == 32768
-            from types import SimpleNamespace
-            return SimpleNamespace(audio=[np.ones(2400, dtype=np.float32)], trace=None)
+            return [np.ones(2400, dtype=np.float32)]
 
     class FakeResource(VibeVoiceResource):
         def __init__(self, **kwargs):

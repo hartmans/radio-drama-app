@@ -29,7 +29,6 @@ Imported lazily by the live VibeVoice loader; no environment files are modified.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 import torch
 from transformers import VibeVoiceForConditionalGeneration
 from transformers.generation.logits_process import (
@@ -41,13 +40,6 @@ from transformers.models.vibevoice.generation_vibevoice import VibeVoiceGenerate
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
-
-from .vibevoice_diagnostics import VibeVoiceTrace
-
-
-@dataclass
-class VibeVoiceDiagnosticOutput(VibeVoiceGenerateOutput):
-    trace: VibeVoiceTrace | None = None
 
 
 class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
@@ -128,11 +120,6 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
         noise_scheduler = generation_config.noise_scheduler
         monitor_progress = generation_config.monitor_progress
         num_diffusion_steps = generation_config.num_diffusion_steps
-        trace = VibeVoiceTrace(self.config, generation_config, logits_processor,
-                              batch_size, reset_tokenizer_caches)
-        trace.metadata["prompt_padded_length"] = input_ids.shape[1]
-        trace.metadata["prompt_lengths"] = model_kwargs["attention_mask"].sum(-1).tolist()
-        logits_processor = trace.processors
         if do_sample:
             logger.warning_once(
                 "VibeVoice generation does not support sampling-based token selection. "
@@ -239,7 +226,6 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
             # When audio_token is predicted, run the diffusion head to synthesize the next audio chunk
             # and compute the embedding for the next LM step.
             diffusion_mask = unfinished_sequences.bool() & (next_tokens == self.config.audio_token_id)
-            chunk_frames = [0] * batch_size
             if diffusion_mask.any():
                 negative_condition, negative_input_ids, negative_model_kwargs = self._step_negative_branch(
                     diffusion_mask,
@@ -263,7 +249,6 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
                 # rows. Compact active-row indexes would copy another clip.
                 for sample_idx in diffusion_mask.nonzero(as_tuple=False).view(-1):
                     audio_chunks[sample_idx.item()].append(audio_output.audio[sample_idx.item()])
-                    chunk_frames[sample_idx.item()] = audio_output.audio[sample_idx.item()].shape[-1]
 
                 # prepare inputs for next LM step
                 semantic_outputs = self.model.semantic_tokenizer_encoder(
@@ -290,7 +275,6 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
                                 layer.cache[diffusion_end_mask.to(layer.cache.device)] = 0
 
             inputs_embeds = next_inputs_embeds
-            trace.record(cur_len - initial_length, unfinished_sequences, next_tokens, chunk_frames)
             cur_len += 1
             # ============================================
 
@@ -319,8 +303,7 @@ class VibeVoiceWithBatchAudioFix(VibeVoiceForConditionalGeneration):
                 cache_key = next(cache_key for cache_key in ALL_CACHE_NAMES if cache_key in model_kwargs)
                 cache = model_kwargs[cache_key]
             # *************** VibeVoice specific ***************
-            return VibeVoiceDiagnosticOutput(
-                trace=trace,
+            return VibeVoiceGenerateOutput(
                 sequences=input_ids,
                 scores=scores,
                 logits=raw_logits,

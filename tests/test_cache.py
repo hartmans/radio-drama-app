@@ -4,7 +4,6 @@ import asyncio
 import json
 import math
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import numpy as np
@@ -21,62 +20,6 @@ from radio_drama.rendering import BackendTtsResult, DialogueLineTiming, ScriptTi
 from radio_drama.vibevoice import VibeVoiceResource
 
 from phase1_helpers import make_async_injector, request_from_normalized_script
-
-
-def test_vibevoice_trace_is_replaced_with_generation_and_preserved_on_cache_hit(tmp_path):
-    output = tmp_path / 'render.wav'
-    request = request_from_normalized_script('Speaker 1: Hello.', ('anna.wav',))
-    calls = []
-
-    class Trace:
-        def jsonl(self, row, **kwargs):
-            yield json.dumps(dict(row=row, generation=len(calls), **kwargs)) + '\n'
-
-    class Model:
-        config = SimpleNamespace(text_config=SimpleNamespace(max_position_embeddings=32768))
-
-        def generate(self, **kwargs):
-            assert kwargs['return_dict_in_generate'] is True
-            calls.append(kwargs)
-            return SimpleNamespace(audio=[np.ones(240, dtype=np.float32)], trace=Trace())
-
-    class Resource(VibeVoiceResource):
-        def _ensure_loaded(self):
-            self._sample_rate = 24000
-            return SimpleNamespace(
-                feature_extractor=SimpleNamespace(sampling_rate=24000),
-                apply_chat_template=lambda *args, **kwargs: {},
-            ), Model()
-
-        def _conversation(self, *args, **kwargs):
-            return []
-
-    async def render():
-        injector, ainjector = await make_async_injector(
-            ProductionConfig(device='cpu'), output_path=output,
-        )
-        try:
-            resource = await ainjector(Resource)
-            registration = await resource.register_request(request)
-            await registration.render()
-        finally:
-            injector.close()
-
-    asyncio.run(render())
-    directory = Path(f'{output}.cache')
-    wav = next(directory.glob('vibevoice*.wav'))
-    trace = wav.with_suffix('.trace.jsonl')
-    first = trace.read_bytes()
-    assert json.loads(first)['generation'] == 1
-    asyncio.run(render())
-    assert len(calls) == 1
-    assert trace.read_bytes() == first
-    # Removing the WAV requests a fresh render even if its sidecars remain.
-    wav.unlink()
-    asyncio.run(render())
-    assert len(calls) == 2
-    assert json.loads(trace.read_bytes())['generation'] == 2
-    assert wav.is_file()
 
 
 def test_cache_collection_recreates_invalid_hit(tmp_path: Path):

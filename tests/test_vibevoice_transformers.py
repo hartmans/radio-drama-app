@@ -16,7 +16,7 @@ class TaggedGeneration:
         self.tokens = [(3, 3, 3), (4, 3, 4), (4, 4, 3), (9, 4, 4), (9, 9, 9)]
         self.step = 0
         self.config = SimpleNamespace(audio_bos_token_id=3, audio_eos_token_id=5,
-                                      audio_token_id=4, eos_token_id=9, is_encoder_decoder=False)
+                                      audio_token_id=4, is_encoder_decoder=False)
         self.model = SimpleNamespace(
             semantic_tokenizer_encoder=self.semantic,
             multi_modal_projector=lambda value: torch.zeros(len(value), 1, 2),
@@ -87,7 +87,7 @@ def test_native_generation_preserves_audio_row_when_batch_members_pause_or_finis
         def __call__(self, ids, scores):
             return ids[:, -1] == self.eos_token_id
     clips = VibeVoiceWithBatchAudioFix._sample(
-        harness, torch.ones(3, 1, dtype=torch.long), [], Stop(), config,
+        harness, torch.ones(3, 1, dtype=torch.long), lambda ids, scores: scores, Stop(), config,
         attention_mask=torch.ones(3, 1, dtype=torch.long), use_cache=True)
     assert harness.decoded_masks == [[True, False, True], [True, True, False], [False, True, True]]
     assert [clip.tolist() for clip in clips] == [[10., 10.], [20., 20.], [30., 30.]]
