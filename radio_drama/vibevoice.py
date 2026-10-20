@@ -226,14 +226,28 @@ class VibeVoiceResource(TtsResource):
                 num_diffusion_steps=self.config.resolved_ddpm_inference_steps,
                 monitor_progress=True,
                 do_sample=False,
+                return_dict_in_generate=True,
             )
 
-        generated = outputs
+        generated = outputs.audio
         if len(generated) != len(batch):
             raise RuntimeError(
                 f"Model generation returned {len(generated)} clips for {len(batch)} requests"
             )
-        return [self._normalize_audio_array(audio) for audio in generated]
+        normalized = [self._normalize_audio_array(audio) for audio in generated]
+        collection = self.cache_manager["vibevoice"]
+        if collection.enabled:
+            for row, request in enumerate(requests):
+                path = collection.path_for_subtype(collection.key_for(request), "trace.jsonl")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix(".jsonl.tmp")
+                with temporary.open("w", encoding="utf-8") as stream:
+                    stream.writelines(outputs.trace.jsonl(
+                        row, sample_rate=self.sample_rate,
+                        model_name=self.config.resolved_model_name,
+                    ))
+                temporary.replace(path)
+        return normalized
 
     def _ensure_loaded(
         self,

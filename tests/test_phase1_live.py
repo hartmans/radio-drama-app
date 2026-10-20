@@ -204,6 +204,7 @@ def test_live_end_to_end_mixed_tts_scripts(tmp_path: Path):
 def test_live_vibevoice_native_batch(tmp_path: Path):
     """Render scripts with different speaker counts through native Transformers."""
     import asyncio
+    import json
     import numpy as np
 
     from phase1_helpers import make_async_injector
@@ -214,6 +215,7 @@ def test_live_vibevoice_native_batch(tmp_path: Path):
     async def render():
         injector, ainjector = await make_async_injector(
             ProductionConfig(device="cuda", batch_size=2),
+            output_path=tmp_path / "native.wav",
         )
         try:
             resource = await ainjector(VibeVoiceResource)
@@ -248,3 +250,13 @@ def test_live_vibevoice_native_batch(tmp_path: Path):
         assert np.isfinite(result.audio).all()
         assert np.max(np.abs(result.audio)) > 0.01
         sf.write(tmp_path / f"script-{index}.wav", result.audio, result.sample_rate)
+    traces = list((tmp_path / "native.wav.cache").glob("*.trace.jsonl"))
+    assert len(traces) == 2
+    for path in traces:
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        metadata, *steps = records
+        result = results[metadata['batch_row']]
+        assert metadata['frame_count'] == result.audio.size
+        assert steps[-1]['audio_end_sample'] == result.audio.size
+        assert 'before_token_guidance' in steps[0]['scores']
+        assert 'after_token_guidance' in steps[0]['scores']
