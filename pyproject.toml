@@ -16,7 +16,7 @@ dependencies = [
     "uvicorn>=0.42,<1",
     "carthage",
     "qwen-tts",
-    "transformers>=5.17,<6",
+    "transformers[kernels]>=5.17,<6",
     "pedalboard>=0.9,<1",
     "PyYAML>=6,<7",
     "Pillow>=11,<12",

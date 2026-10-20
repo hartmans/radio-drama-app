@@ -251,22 +251,12 @@ class VibeVoiceResource(TtsResource):
             self._sample_rate = int(processor.feature_extractor.sampling_rate)
 
             load_dtype, attn_implementation = self._load_settings_for_device(self.device)
-            try:
-                model = self._load_model(
-                    model_name=self.config.resolved_model_name,
-                    device=self.device,
-                    load_dtype=load_dtype,
-                    attn_implementation=attn_implementation,
-                )
-            except Exception:
-                if attn_implementation != "flash_attention_2":
-                    raise
-                model = self._load_model(
-                    model_name=self.config.resolved_model_name,
-                    device=self.device,
-                    load_dtype=load_dtype,
-                    attn_implementation="sdpa",
-                )
+            model = self._load_model(
+                model_name=self.config.resolved_model_name,
+                device=self.device,
+                load_dtype=load_dtype,
+                attn_implementation=attn_implementation,
+            )
 
             model.eval()
 
@@ -292,6 +282,7 @@ class VibeVoiceResource(TtsResource):
                 model_name,
                 dtype=load_dtype,
                 attn_implementation={"": "eager", "text_config": attn_implementation},
+                use_kernels=True,
                 device_map=None,
             )
             model.to("mps")
@@ -303,6 +294,7 @@ class VibeVoiceResource(TtsResource):
             dtype=load_dtype,
             device_map=device_map,
             attn_implementation={"": "eager", "text_config": attn_implementation},
+            use_kernels=True,
         )
 
     def _detect_device(self) -> str:
@@ -326,7 +318,7 @@ class VibeVoiceResource(TtsResource):
 
     def _load_settings_for_device(self, device: str) -> tuple[torch.dtype, str]:
         if device == "cuda":
-            return torch.bfloat16, "flash_attention_2"
+            return torch.bfloat16, "sdpa"
         return torch.float32, "sdpa"
 
     def _normalize_audio_array(self, audio: torch.Tensor | np.ndarray) -> np.ndarray:

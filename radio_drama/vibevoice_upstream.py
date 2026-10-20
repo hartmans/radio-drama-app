@@ -39,6 +39,12 @@ def _upstream_vibevoice_types():
 class UpstreamVibeVoiceResource(VibeVoiceResource):
     """Render through upstream's script/voice_samples interface on Transformers 4 or 5."""
 
+    def _load_settings_for_device(self, device: str) -> tuple[torch.dtype, str]:
+        """Keep upstream's attention policy independent of native Transformers."""
+        if device == "cuda":
+            return torch.bfloat16, "flash_attention_2"
+        return torch.float32, "sdpa"
+
     def _render_batch_native_sync(
         self,
         batch: Sequence[RegisteredRenderRequest],
