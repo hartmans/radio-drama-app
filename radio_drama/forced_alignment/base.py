@@ -153,7 +153,8 @@ class ForcedAlignmentResource(AsyncInjectable):
             transcript="\n".join(line.spoken_text for line in lines),
             transcript_kind=transcript_kind,
             require_word_alignment=(require_word_alignment or any(line.mark_offsets for line in lines)
-                                    or any(isinstance(event, ScriptGap) for event in contents)),
+                                    or any(isinstance(event, ScriptGap) and event.reset_alignment
+                                           for event in contents)),
             language=language or self.config.alignment_language,
         ))
         return script_timing_from_alignment(contents, await registration.align())

@@ -432,7 +432,12 @@ class ProxyTtsResource(TtsResource):
                 )
             elif isinstance(content, ScriptGap):
                 contents.append(
-                    {"type": "gap", "label": content.label, "mode": content.mode}
+                    {
+                        "type": "gap",
+                        "label": content.label,
+                        "reset_alignment": content.reset_alignment,
+                        "include_audio": content.include_audio,
+                    }
                 )
         return {"dialogue_contents": contents, "first_words": request.first_words}
 

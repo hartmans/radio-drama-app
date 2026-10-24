@@ -59,7 +59,8 @@ def copy_dialogue_contents(contents: Sequence[ScriptEvent]) -> list[ScriptEvent]
             copied.append(
                 ScriptGap(
                     label=content.label,
-                    mode=content.mode,
+                    reset_alignment=content.reset_alignment,
+                    include_audio=content.include_audio,
                     start_pos=content.start_pos,
                 )
             )
@@ -246,7 +247,10 @@ def _dialogue_content_spans_from_alignment(
     dialogue_lines = [content for content in dialogue_contents if isinstance(content, DialogueLine)]
     if not dialogue_lines:
         return [(None, None) for _ in dialogue_contents]
-    if any(isinstance(content, ScriptGap) for content in dialogue_contents):
+    if any(
+        isinstance(content, ScriptGap) and content.reset_alignment
+        for content in dialogue_contents
+    ):
         line_spans = _line_spans_from_alignment_segments(dialogue_contents, alignment)
     else:
         line_spans = _line_spans_from_alignment(dialogue_lines, alignment)
@@ -941,7 +945,9 @@ def script_timing_from_alignment(contents, alignment):
     mappings = []
     spans = _line_spans_from_alignment(
         lines, alignment,
-        allow_positional_clauses=not any(isinstance(event, ScriptGap) for event in contents),
+        allow_positional_clauses=not any(
+            isinstance(event, ScriptGap) and event.reset_alignment for event in contents
+        ),
         correspondences=mappings,
     )
     audio_tokens = _aligned_word_tokens(alignment.words or ())

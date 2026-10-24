@@ -121,14 +121,15 @@ def test_script_allows_sound_nodes_by_attribute_or_text():
     assert sound_nodes[1].ref == "footsteps"
 
 
-def test_script_recording_must_lead_and_line_source_is_normalized():
+def test_script_recordings_must_lead_and_speaker_selects_source():
     root = parse_production_string(
         """
         <production>
           <speaker-map>anna: anna.wav</speaker-map>
           <script>
-            <recording ref="anna-take.wav" from="12" gain="-2" />
-            <line speaker="Anna" source="recording">Recorded line.</line>
+            <recording ref="anna-take.wav" source="a" speaker="Anna" from="12" gain="-2" />
+            <recording ref="ben-take.wav" source="b" />
+            <line speaker="~Anna">Recorded line.</line>
           </script>
         </production>
         """,
@@ -136,18 +137,65 @@ def test_script_recording_must_lead_and_line_source_is_normalized():
     )
 
     script = root.script_nodes[0]
-    assert script.recording_node is not None
-    assert script.recording_node.ref == "anna-take.wav"
-    assert script.child_elements_named("line")[0].source == "recording"
+    assert [recording.ref for recording in script.recordings] == [
+        "anna-take.wav",
+        "ben-take.wav",
+    ]
+    assert script.recording_by_source["a"].key == "a"
+    assert script.recording_by_speaker["anna"].key == "a"
+    assert script.recording_by_source["b"].key == "b"
 
-    with pytest.raises(DocumentError, match="first element child"):
+    with pytest.raises(DocumentError, match="must precede other element children"):
         parse_production_string(
             """
             <production><speaker-map>anna: anna.wav</speaker-map><script>
-              <line speaker="Anna">First.</line><recording ref="take.wav" />
+              <line speaker="Anna">First.</line><recording ref="take.wav" source="a" />
             </script></production>
             """,
             source_name="bad-recording.xml",
+        )
+
+    with pytest.raises(DocumentError, match="no longer accepts a source attribute"):
+        parse_production_string(
+            """
+            <production><speaker-map>anna: anna.wav</speaker-map><script>
+              <recording ref="take.wav" source="a" />
+              <line speaker="Anna" source="recording">Recorded line.</line>
+            </script></production>
+            """,
+            source_name="bad-line-source.xml",
+        )
+
+    with pytest.raises(DocumentError, match="requires a source or speaker attribute"):
+        parse_production_string(
+            """
+            <production><speaker-map>anna: anna.wav</speaker-map><script>
+              <recording ref="take.wav" />
+            </script></production>
+            """,
+            source_name="unlabeled-recording.xml",
+        )
+
+    with pytest.raises(DocumentError, match="source 'a' is declared more than once"):
+        parse_production_string(
+            """
+            <production><speaker-map>anna: anna.wav</speaker-map><script>
+              <recording ref="one.wav" source="a" />
+              <recording ref="two.wav" source="A" />
+            </script></production>
+            """,
+            source_name="duplicate-source.xml",
+        )
+
+    with pytest.raises(DocumentError, match="speaker alias 'anna' is declared more than once"):
+        parse_production_string(
+            """
+            <production><speaker-map>anna: anna.wav</speaker-map><script>
+              <recording ref="one.wav" speaker="Anna" />
+              <recording ref="two.wav" speaker="anna" />
+            </script></production>
+            """,
+            source_name="duplicate-alias.xml",
         )
 
 

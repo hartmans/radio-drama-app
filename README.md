@@ -281,10 +281,12 @@ Current rules:
 * `loop_silence` must be non-negative
 * `start` is special because it defines the mapping from parent time into the node's inner time, so `start` expressions may use `outer_<mark>` names but not child-local `natural_length` or `inner_<mark>` names
 * dialogue lines use `Speaker: text`
-* a leading `<recording ref="..." />` declares the script's default recorded source; prefix a stanza with `~` (for example `~Speaker: text`) or use `<line speaker="Speaker" source="recording">text</line>` to select it
-* when a script mixes sources, the complete dialogue remains in the TTS request for context, while only TTS-selected lines use synthesized audio; forced alignment for the recording receives only recording-selected dialogue
-* recording alignment projects inline audio and marks only while the most recent dialogue line selects the recording source; a TTS line switches subsequent inline events out of the recording projection until another recorded line appears
-* `<script-gap>` defaults to `mode="exclude"`, which cuts the preceding recording at its dialogue line's aligned end; `mode="include"` keeps recorded material until the next recorded line's aligned start, or through the end of the recording when there is no later recorded line
+* a leading `<recording>` element declares a recorded source, named by a single-letter `source` name, a `speaker` alias, or both (at least one is required)
+* a speaker selector chooses the source: `~Speaker: text` (or `<line speaker="~Speaker">text</line>`) selects the recording declared with `speaker="Speaker"`, and `a~Speaker: text` (or `<line speaker="a~Speaker">text</line>`) selects the recording declared with `source="a"` regardless of the speaker name; a plain speaker name selects TTS
+* when a script mixes sources, the complete dialogue remains in the TTS request for context, while only TTS-selected lines use synthesized audio; forced alignment for a recording receives only that recording's selected dialogue
+* each recording's alignment projects inline audio and marks only while the most recent dialogue line selects that recording; a line from another source switches subsequent inline events out of its projection until a line returns to it
+* `<script-gap>` defaults to `mode="exclude"`, which cuts the preceding recording at its dialogue line's aligned end; `mode="include"` keeps recorded material until the next same-source line's aligned start, or through the end of the recording when there is no later same-source line
+* source transitions between recordings — or between a recording and TTS — cut the outgoing source tightly at the preceding line's aligned end without resetting alignment; a recording that never transitions out plays through the end of that recording
 * continuation lines are folded into the previous dialogue line
 * blank lines become paragraph breaks within the same speaker turn
 * a script may be empty
@@ -309,21 +311,21 @@ Mixed recorded and synthesized dialogue example:
 
 ```xml
 <script>
-  <recording ref="alice-take.wav" from="12s" gain="-2db" />
+  <recording speaker="alice" ref="alice-take.wav" from="12s" gain="-2db" />
   narrator: Alice waited for the verdict.
   ~alice: I already know what it will be.
   narrator: Nobody in the room believed her.
 </script>
 ```
 
-`<recording>` must be the first element child of its script. `<sound-script>` is no longer supported; ordinary nested `<sound>` elements continue to insert inline audio.
+All `<recording>` elements must precede the other element children of their script. `<sound-script>` is no longer supported; ordinary nested `<sound>` elements continue to insert inline audio.
 
 To retain a recorded reaction or pause while a TTS line is inserted, use an
 including script gap:
 
 ```xml
 <script>
-  <recording ref="alice-take.wav" />
+  <recording speaker="alice" ref="alice-take.wav" />
   ~alice: I already know what it will be.
   <script-gap mode="include" />
   narrator: Nobody in the room believed her.

@@ -37,6 +37,30 @@ if TYPE_CHECKING:
 _SPEAKER_LINE_RE = re.compile(r"^([^:\n]+?)\s*:\s*(.*)$")
 
 
+def parse_speaker_selector(selector: str) -> tuple[str, str]:
+    """Split a speaker selector into a source letter and a speaker name.
+
+    ``Sam`` selects TTS speech, ``~Sam`` the recording declared with
+    ``speaker="Sam"``, and ``a~Sam`` the recording declared with
+    ``source="a"``. The source letter is a single character and need not
+    match the speaker name.
+    """
+    letter, separator, name = selector.partition("~")
+    if not separator:
+        return "", selector.strip()
+    letter = letter.strip().lower()
+    name = name.strip()
+    if "~" in name:
+        raise ValueError(
+            f"Speaker selector {selector!r} contains more than one '~'"
+        )
+    if letter and (len(letter) != 1 or letter in {":", " "}):
+        raise ValueError(
+            f"Recording source in speaker selector {selector!r} must be a single letter"
+        )
+    return letter, name
+
+
 class RegisteredTtsRequest(Protocol):
     """A cache-mediated request with replayable streaming and completed audio.
 
@@ -160,7 +184,8 @@ class DialogueLine(DialogueContent):
     speaker: SpeakerVoiceReference
     spoken_text: str
     handling: Literal["normal", "ignore", "special"] = "normal"
-    source: Literal["tts", "recording"] = "tts"
+    # "tts" or the key of the selected <recording> declaration.
+    source: str = "tts"
     node: DocumentNode | None = None
     # Python-string boundaries in spoken_text; order and duplicates are meaningful.
     mark_offsets: tuple[int, ...] = ()
@@ -168,10 +193,18 @@ class DialogueLine(DialogueContent):
 
 @dataclass(slots=True)
 class ScriptGap(DialogueContent):
-    """Explicit omitted region where forced alignment should resynchronize."""
+    """Omitted-region boundary with source-tail and resynchronization policies.
+
+    Explicit gaps request an alignment resynchronization; implicit gaps
+    inserted at source transitions only affect slice boundaries. With
+    ``include_audio`` the preceding slice runs through the next same-source
+    line's aligned start (or the source end); without it the slice ends at
+    the preceding line's aligned end.
+    """
 
     label: str = ""
-    mode: Literal["exclude", "include"] = "exclude"
+    reset_alignment: bool = True
+    include_audio: bool = False
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -461,16 +494,6 @@ class ScriptPlan(AudioPlan):
         for event in self.script_events:
             if isinstance(event, DialogueLine):
                 validate_mark_offsets(event)
-        if (
-            any(
-                isinstance(event, DialogueLine) and event.source == "recording"
-                for event in self.script_events
-            )
-            and self.node.recording_node is None
-        ):
-            raise self.document_error(
-                "Recorded dialogue requires a leading <recording> declaration"
-            )
         dialogue_lines = [
             content for content in self.dialogue_contents if isinstance(content, DialogueLine)
         ]
@@ -491,6 +514,53 @@ class ScriptPlan(AudioPlan):
             raise self.document_error(
                 "A <script> requires a <speaker-map> to be planned before it"
             ) from None
+
+    def _resolve_speaker_selector(
+        self,
+        selector: str,
+        *,
+        error_node: DocumentNode | None = None,
+    ) -> tuple[SpeakerVoiceReference, str]:
+        """Resolve a speaker selector to a voice reference and source key.
+
+        Plain names select TTS; ``~Sam`` requires a recording declared with
+        ``speaker="Sam"``; ``a~Sam`` requires one declared with
+        ``source="a"`` and may name any mapped speaker.
+        """
+        try:
+            letter, name = parse_speaker_selector(selector)
+        except ValueError as exc:
+            raise self.document_error(str(exc), node=error_node) from None
+        if not name:
+            raise self.document_error(
+                f"Speaker selector {selector!r} must name a speaker",
+                node=error_node,
+            )
+        try:
+            speaker_ref = self.speaker_map_plan.lookup(name)
+        except KeyError:
+            raise self.document_error(
+                f"Speaker {name!r} is not defined in the <speaker-map>",
+                node=error_node,
+            )
+        if letter:
+            recording = self.node.recording_by_source.get(letter)
+            if recording is None:
+                raise self.document_error(
+                    f"Recording source {letter!r} has no "
+                    "<recording source=...> declaration",
+                    node=error_node,
+                )
+            return speaker_ref, recording.key
+        if selector.strip().startswith("~"):
+            recording = self.node.recording_by_speaker.get(name.lower())
+            if recording is None:
+                raise self.document_error(
+                    f"Speaker {name!r} has no <recording speaker=...> declaration",
+                    node=error_node,
+                )
+            return speaker_ref, recording.key
+        return speaker_ref, "tts"
 
     async def register_render_request(self) -> None:
         try:
@@ -651,15 +721,15 @@ class ScriptPlan(AudioPlan):
                 ),
                 cls._projection_marker_indexes(script_plan.script_events, projection),
             )
-        if script_plan._source_has_output("recording"):
-            recording = node.recording_node
-            if recording is None:
-                raise node.error("Recorded dialogue requires a leading <recording> declaration")
+        for recording in node.recordings:
+            source_key = recording.key
+            if not script_plan._source_has_output(source_key):
+                continue
             recording_plan = await ainjector(
                 SoundPlan, node=recording, attrs=SoundPlan.attrs_from_node(recording)
             )
-            projection = script_plan.recording_projection()
-            sources["recording"] = (
+            projection = script_plan.projection_for_source(source_key)
+            sources[source_key] = (
                 await ainjector(
                     AlignedScriptSource,
                     node=recording,
@@ -754,7 +824,9 @@ class ScriptPlan(AudioPlan):
                 continue
             if isinstance(child, LineNode):
                 line_attrs = ScriptSlice.attrs_from_node(child)
-                speaker = self.speaker_map_plan.lookup(child.speaker)
+                speaker, source_key = self._resolve_speaker_selector(
+                    child.speaker, error_node=child
+                )
                 handling: Literal["normal", "special"] = (
                     "special" if line_attrs or speaker.effect_expression is not None else "normal"
                 )
@@ -763,17 +835,43 @@ class ScriptPlan(AudioPlan):
                         speaker=speaker,
                         spoken_text=child.normalized_text_content,
                         handling=handling,
-                        source=child.source,
+                        source=source_key,
                         node=child if handling == "special" else None,
                     )
                 )
                 continue
             if isinstance(child, ScriptGapNode):
-                contents.append(ScriptGap(label=child.label, mode=child.mode))
+                contents.append(
+                    ScriptGap(label=child.label, include_audio=child.mode == "include")
+                )
                 continue
             contents.append(DialogueAudio(audio_plan=await child.plan(self.ainjector)))
         flush_pending_text()
-        return contents
+        return self._insert_transition_gaps(contents)
+
+    @staticmethod
+    def _insert_transition_gaps(contents: list[ScriptEvent]) -> list[ScriptEvent]:
+        """Insert non-resetting gaps where the dialogue source changes.
+
+        An implicit gap bounds the outgoing source's slice at the preceding
+        line's aligned end. It is omitted where an authored gap already ends
+        the run, and it never carries the alignment resynchronization that
+        explicit gaps request.
+        """
+        events: list[ScriptEvent] = []
+        previous_line: DialogueLine | None = None
+        for event in contents:
+            if (
+                isinstance(event, DialogueLine)
+                and previous_line is not None
+                and previous_line.source != event.source
+                and not (events and isinstance(events[-1], ScriptGap))
+            ):
+                events.append(ScriptGap(reset_alignment=False))
+            events.append(event)
+            if isinstance(event, DialogueLine):
+                previous_line = event
+        return events
 
     def _parse_dialogue_text(
         self,
@@ -801,7 +899,7 @@ class ScriptPlan(AudioPlan):
 
         lines: list[DialogueLine] = []
         current_speaker: SpeakerVoiceReference | None = None
-        current_source: Literal["tts", "recording"] = "tts"
+        current_source: str = "tts"
         current_paragraph: list[str] = []
         current_paragraphs: list[str] = []
 
@@ -838,19 +936,24 @@ class ScriptPlan(AudioPlan):
                 continue
             match = _SPEAKER_LINE_RE.match(stripped_line)
             if match is not None:
-                candidate_speaker = match.group(1).strip()
-                candidate_source: Literal["tts", "recording"] = "tts"
-                if candidate_speaker.startswith("~"):
-                    candidate_source = "recording"
-                    candidate_speaker = candidate_speaker[1:].strip()
+                candidate_selector = match.group(1).strip()
+                if "~" in candidate_selector:
+                    speaker_ref, source_key = self._resolve_speaker_selector(
+                        candidate_selector, error_node=error_node or node
+                    )
+                    flush_stanza()
+                    current_speaker = speaker_ref
+                    current_source = source_key
+                    current_paragraph.append(match.group(2).strip())
+                    continue
                 try:
-                    speaker_ref = self.speaker_map_plan.lookup(candidate_speaker)
+                    speaker_ref = self.speaker_map_plan.lookup(candidate_selector)
                 except KeyError:
                     speaker_ref = None
                 if speaker_ref is not None:
                     flush_stanza()
                     current_speaker = speaker_ref
-                    current_source = candidate_source
+                    current_source = "tts"
                     current_paragraph.append(match.group(2).strip())
                     continue
             if current_speaker is None:
@@ -905,14 +1008,14 @@ class ScriptPlan(AudioPlan):
 
     def slice_end_marker_index(self, end_index: int, source: str) -> int:
         """Return the authored boundary used to end a normal dialogue slice."""
-        if source != "recording" or end_index >= len(self.script_events):
+        if source == "tts" or end_index >= len(self.script_events):
             return end_index
         content = self.script_events[end_index]
-        if not isinstance(content, ScriptGap) or content.mode == "exclude":
+        if not isinstance(content, ScriptGap) or not content.include_audio:
             return end_index
         for index in range(end_index + 1, len(self.script_events)):
             following = self.script_events[index]
-            if isinstance(following, DialogueLine) and following.source == "recording":
+            if isinstance(following, DialogueLine) and following.source == source:
                 return index
         return len(self.script_events)
 
@@ -924,24 +1027,22 @@ class ScriptPlan(AudioPlan):
             for event in self.script_events
         )
 
-    def recording_projection(self) -> list[ScriptEvent]:
-        """Retain gaps adjacent to recorded dialogue, across source transitions.
+    def projection_for_source(self, source_key: str) -> list[ScriptEvent]:
+        """Retain the events of one recording source's local projection.
 
-        Inline audio follows the preceding source; a gap also belongs to the
-        following source so that a leading recording exclusion survives.
+        Explicit gaps belong to a source when that source has a line on
+        either side, keeping their authored include/exclude policy. Implicit
+        transition gaps belong only to the outgoing source; because that
+        source necessarily has a preceding line, they never lead a
+        projection, so first-use lead-in is preserved. Inline audio follows
+        the preceding source.
         """
         retained: list[ScriptEvent] = []
-        has_recording = any(
-            isinstance(event, DialogueLine) and event.source == "recording"
-            for event in self.script_events
-        )
-        if not has_recording:
-            return retained
-        current_source: Literal["tts", "recording"] | None = None
+        previous_source: str | None = None
         for index, event in enumerate(self.script_events):
             if isinstance(event, DialogueLine):
-                current_source = event.source
-                if current_source == "recording":
+                previous_source = event.source
+                if event.source == source_key:
                     retained.append(event)
             elif isinstance(event, ScriptGap):
                 next_source = next(
@@ -952,9 +1053,12 @@ class ScriptPlan(AudioPlan):
                     ),
                     None,
                 )
-                if current_source == "recording" or next_source == "recording":
+                if event.reset_alignment:
+                    if previous_source == source_key or next_source == source_key:
+                        retained.append(event)
+                elif previous_source == source_key:
                     retained.append(event)
-            elif isinstance(event, DialogueAudio) and current_source == "recording":
+            elif isinstance(event, DialogueAudio) and previous_source == source_key:
                 retained.append(event)
         return retained
 

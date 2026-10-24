@@ -459,7 +459,8 @@ def _serialize_dialogue_content(content: ScriptEvent) -> dict[str, object]:
         return {
             "type": "gap",
             "label": content.label,
-            "mode": content.mode,
+            "reset_alignment": content.reset_alignment,
+            "include_audio": content.include_audio,
         }
     audio_node = getattr(content.audio_plan, "node", None)
     return {

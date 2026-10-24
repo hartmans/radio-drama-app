@@ -405,7 +405,12 @@ class CachedTtsRequest:
                 )
             elif isinstance(content, ScriptGap):
                 projection.append(
-                    {"type": "gap", "label": content.label, "mode": content.mode}
+                    {
+                        "type": "gap",
+                        "label": content.label,
+                        "reset_alignment": content.reset_alignment,
+                        "include_audio": content.include_audio,
+                    }
                 )
         encoded = json.dumps({"projection": projection, "backend": backend_identity,
                               "language": self.resource.config.alignment_language,

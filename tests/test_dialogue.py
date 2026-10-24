@@ -3,6 +3,7 @@ from __future__ import annotations
 from phase1_helpers import start_position_fixture, TimingTtsDouble
 
 import asyncio
+import math
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +12,7 @@ from carthage.dependency_injection import InjectionKey
 
 from radio_drama.audio import ComposeAudioPlan
 from radio_drama.config import ProductionConfig
-from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptPlan, ScriptRenderRequest, TtsResource
+from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptPlan, ScriptRenderRequest, SpeakerVoiceReference, TtsResource
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
@@ -537,7 +538,7 @@ def test_recording_script_renders_without_tts_registration(tmp_path: Path):
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="door" from="natural_length / 2" />
+                    <recording speaker="Anna" ref="door" from="natural_length / 2" />
                     ~Anna: Transcript only.
                   </script>
                 </production>
@@ -617,7 +618,7 @@ def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="door" />
+                    <recording speaker="Anna" ref="door" />
                     ~Anna: Before the missing material.
                     <script-gap />
                     ~Anna: After the missing material.
@@ -683,11 +684,12 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
             updated = []
             for content in contents:
                 if isinstance(content, DialogueLine):
-                    start_pos = (
-                        0.75
-                        if content.spoken_text == "Second recorded line."
-                        else 0.0
-                    )
+                    if content.spoken_text == "Second recorded line.":
+                        start_pos = 0.75
+                    elif content.spoken_text == "TTS response.":
+                        start_pos = 0.5
+                    else:
+                        start_pos = 0.0
                     updated.append(
                         DialogueLine(
                             speaker=content.speaker,
@@ -702,8 +704,9 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
                     updated.append(
                         ScriptGap(
                             label=content.label,
-                            mode=content.mode,
-                            start_pos=0.25,
+                            reset_alignment=content.reset_alignment,
+                            include_audio=content.include_audio,
+                            start_pos=0.25 if content.include_audio else 1.0,
                         )
                     )
                 else:
@@ -726,7 +729,7 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="door" />
+                    <recording speaker="Anna" ref="door" />
                     ~Anna: First recorded line.
                     <script-gap mode="include" />
                     Anna: TTS response.
@@ -742,7 +745,7 @@ def test_including_script_gap_keeps_recording_until_next_recorded_line(tmp_path:
             injector.close()
 
     render_result = asyncio.run(runner())
-    assert render_result.audio.tolist() == pytest.approx([1.0, 2.0, 3.0, 11.0, 12.0, 4.0, 5.0])
+    assert render_result.audio.tolist() == pytest.approx([1.0, 2.0, 3.0, 12.0, 13.0, 4.0, 5.0])
 
 
 def test_recording_callsign_match_keeps_tts_response_before_later_traffic(tmp_path: Path):
@@ -790,7 +793,7 @@ def test_recording_callsign_match_keeps_tts_response_before_later_traffic(tmp_pa
         try:
             root = parse_production_string('''
                 <production><speaker-map>Anna: anna.wav</speaker-map>
-                  <script><recording ref="recording" /><script-gap />
+                  <script><recording speaker="Anna" ref="recording" /><script-gap />
                     ~Anna: Bravo 1173, Washington Control.
                     Anna: TTS response.
                     <script-gap />
@@ -848,7 +851,7 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
                     )
                 else:
                     updated.append(
-                        ScriptGap(label=content.label, mode=content.mode, start_pos=0.25)
+                        ScriptGap(label=content.label, include_audio=content.include_audio, start_pos=0.25)
                     )
             return updated
 
@@ -868,7 +871,7 @@ def test_including_trailing_script_gap_keeps_rest_of_recording(tmp_path: Path):
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="door" />
+                    <recording speaker="Anna" ref="door" />
                     ~Anna: First recorded line.
                     <script-gap mode="include" />
                     Anna: TTS response.
@@ -936,7 +939,7 @@ def test_leading_recording_gap_excludes_lead_in(tmp_path: Path, tts_intro: str):
         try:
             root = parse_production_string(
                 f'''<production><speaker-map>Anna: anna.wav</speaker-map>
-                <script><recording ref="recording" />{tts_intro}
+                <script><recording speaker="Anna" ref="recording" />{tts_intro}
                 <script-gap mode="exclude" />~Anna: Recorded reply.
                 </script></production>''', source_name=str(xml_path),
             )
@@ -979,7 +982,7 @@ def test_recording_projection_tracks_current_dialogue_source(tmp_path: Path):
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="recording" />
+                    <recording speaker="Anna" ref="recording" />
                     ~Anna: I am coming out.
                     <mark id="recorded_mark" />
                     Anna: Do not shoot.
@@ -999,9 +1002,13 @@ def test_recording_projection_tracks_current_dialogue_source(tmp_path: Path):
 
     projection = asyncio.run(runner())
     assert [
-        content.spoken_text if isinstance(content, DialogueLine) else content.audio_plan.id
+        content.spoken_text
+        if isinstance(content, DialogueLine)
+        else content.audio_plan.id
+        if isinstance(content, DialogueAudio)
+        else "gap"
         for content in projection
-    ] == ["I am coming out.", "recorded_mark", "Thank you."]
+    ] == ["I am coming out.", "recorded_mark", "gap", "Thank you."]
 
 
 def test_script_gap_mode_must_be_include_or_exclude():
@@ -1426,7 +1433,7 @@ def test_recording_script_missing_speaker_after_gap_reports_chunk_start(tmp_path
                 <production>
                   <speaker-map>Anna: anna.wav</speaker-map>
                   <script>
-                    <recording ref="door" />
+                    <recording speaker="Anna" ref="door" />
                     ~Anna: First line.
                     <script-gap />
                     Missing speaker here.
@@ -1445,3 +1452,325 @@ def test_recording_script_missing_speaker_after_gap_reports_chunk_start(tmp_path
     assert excinfo.value.location is not None
     assert excinfo.value.location.source == "bad-recording-script.xml"
     assert excinfo.value.location.line == 7
+
+
+def test_parse_speaker_selector():
+    from radio_drama.dialogue import parse_speaker_selector
+
+    assert parse_speaker_selector("Anna") == ("", "Anna")
+    assert parse_speaker_selector("~Anna") == ("", "Anna")
+    assert parse_speaker_selector("a~Anna") == ("a", "Anna")
+    assert parse_speaker_selector("A ~ Anna") == ("a", "Anna")
+    with pytest.raises(ValueError, match="must be a single letter"):
+        parse_speaker_selector("ab~Anna")
+    with pytest.raises(ValueError, match="more than one"):
+        parse_speaker_selector("~a~Anna")
+
+
+def _multi_recording_fakes(recording_audio_by_ref):
+    class FakeVibeVoice:
+        async def register_request(self, request):
+            raise AssertionError("recording-only script should not register a speech render request")
+
+    class FakeWhisperX:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+
+        @start_position_fixture
+        async def script_timing(self, contents, result, **kwargs):
+            updated = []
+            for content in contents:
+                if isinstance(content, DialogueLine):
+                    if content.spoken_text == "Second A.":
+                        start_pos = 1.0
+                    elif content.spoken_text == "First A.":
+                        start_pos = 0.0
+                    else:
+                        start_pos = 0.0
+                    updated.append(
+                        DialogueLine(
+                            speaker=content.speaker,
+                            spoken_text=content.spoken_text,
+                            handling=content.handling,
+                            source=content.source,
+                            node=content.node,
+                            start_pos=start_pos,
+                        )
+                    )
+                elif isinstance(content, ScriptGap):
+                    updated.append(
+                        ScriptGap(
+                            label=content.label,
+                            reset_alignment=content.reset_alignment,
+                            include_audio=content.include_audio,
+                            start_pos=0.5,
+                        )
+                    )
+                else:
+                    updated.append(content)
+            return updated
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            key = sound_path.name
+            assert key in recording_audio_by_ref, sound_path
+            return asyncio.create_task(
+                asyncio.sleep(0, result=recording_audio_by_ref[key])
+            )
+
+    return FakeVibeVoice, FakeWhisperX, FakeSoundCache
+
+
+def test_multiple_recordings_transition_tightly_and_keep_lead_in(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"voice")
+    (tmp_path / "ben.wav").write_bytes(b"voice")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />")
+    (tmp_path / "sounds" / "a.wav").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "sounds" / "a.wav").write_bytes(b"a")
+    (tmp_path / "sounds" / "b.wav").write_bytes(b"b")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+    a_audio = np.arange(1, 9, dtype=np.float32)
+    b_audio = np.arange(10, 14, dtype=np.float32)
+
+    FakeVibeVoice, FakeWhisperX, FakeSoundCache = _multi_recording_fakes(
+        {"a.wav": a_audio, "b.wav": b_audio}
+    )
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: ben.wav
+                  </speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="a" />
+                    <recording source="b" ref="b" />
+                    ~Anna: First A.
+                    b~Ben: First B.
+                    ~Anna: Second A.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return production_plan, await production_plan.render()
+        finally:
+            injector.close()
+
+    production_plan, result = asyncio.run(runner())
+    audio_plan = production_plan.audio_plans[0]
+    slices = audio_plan.audio_plans
+    assert [type(child).__name__ for child in slices] == ["ScriptSlice"] * 3
+    a_source = slices[0].aligned_script_source
+    b_source = slices[1].aligned_script_source
+    assert a_source is slices[2].aligned_script_source
+    assert a_source is not b_source
+    assert [type(content).__name__ for content in a_source.contents] == [
+        "DialogueLine", "ScriptGap", "DialogueLine",
+    ]
+    implicit = a_source.contents[1]
+    assert isinstance(implicit, ScriptGap)
+    assert not implicit.reset_alignment
+    assert not implicit.include_audio
+    assert [type(content).__name__ for content in b_source.contents] == [
+        "DialogueLine", "ScriptGap",
+    ]
+    assert result.audio.tolist() == pytest.approx([1.0, 2.0, 10.0, 11.0, 5.0, 6.0, 7.0, 8.0])
+
+
+def test_include_gap_at_source_transition_extends_outgoing_source(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"voice")
+    (tmp_path / "ben.wav").write_bytes(b"voice")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />")
+    (tmp_path / "sounds" / "a.wav").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "sounds" / "a.wav").write_bytes(b"a")
+    (tmp_path / "sounds" / "b.wav").write_bytes(b"b")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+    a_audio = np.arange(1, 9, dtype=np.float32)
+    b_audio = np.arange(10, 14, dtype=np.float32)
+
+    FakeVibeVoice, FakeWhisperX, FakeSoundCache = _multi_recording_fakes(
+        {"a.wav": a_audio, "b.wav": b_audio}
+    )
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: ben.wav
+                  </speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="a" />
+                    <recording source="b" ref="b" />
+                    ~Anna: First A.
+                    <script-gap mode="include" />
+                    b~Ben: First B.
+                    ~Anna: Second A.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return await production_plan.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    assert result.audio.tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 10.0, 11.0, 5.0, 6.0, 7.0, 8.0])
+
+
+def test_line_speaker_selects_recording_source(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"voice")
+    (tmp_path / "ben.wav").write_bytes(b"voice")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />")
+    (tmp_path / "sounds" / "a.wav").parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "sounds" / "a.wav").write_bytes(b"a")
+    (tmp_path / "sounds" / "b.wav").write_bytes(b"b")
+    config = ProductionConfig(voice_directory=tmp_path, output_sample_rate=4, output_channels=1)
+
+    class FakeVibeVoice:
+        async def register_request(self, request):
+            assert len(request.dialogue_lines) == 4
+
+            class Registered:
+                async def render(self) -> ScriptRenderResult:
+                    return ScriptRenderResult(
+                        audio=np.arange(20, 28, dtype=np.float32),
+                        timing=ScriptTiming(tuple(
+                            DialogueLineTiming(i * 0.5, i * 0.5 + 0.5) for i in range(4)
+                        )),
+                    )
+
+            return Registered()
+
+    _, FakeWhisperX, FakeSoundCache = _multi_recording_fakes(
+        {"a.wav": np.arange(1, 5, dtype=np.float32), "b.wav": np.arange(10, 14, dtype=np.float32)}
+    )
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), FakeWhisperX(), close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: ben.wav
+                  </speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="a" />
+                    <recording source="b" ref="b" />
+                    Anna: TTS first.
+                    <line speaker="~Anna">Recorded A.</line>
+                    <line speaker="b~Ben">Recorded B.</line>
+                    <line speaker="Anna">TTS last.</line>
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            production_plan = await root.plan(ainjector)
+            return production_plan, await production_plan.render()
+        finally:
+            injector.close()
+
+    production_plan, result = asyncio.run(runner())
+    assert result.audio.tolist() == pytest.approx([20.0, 21.0, 1.0, 2.0, 10.0, 11.0, 26.0, 27.0])
+    audio_plan = production_plan.audio_plans[0]
+    sources = {
+        id(child.aligned_script_source) for child in audio_plan.audio_plans
+        if isinstance(child, ScriptSlice)
+    }
+    assert len(sources) == 3  # TTS dry script plus the two recordings
+
+
+def test_implicit_transition_gap_does_not_reset_alignment():
+    from radio_drama.forced_alignment import AlignedClause
+    from radio_drama.forced_alignment.projection import script_timing_from_alignment
+
+    speaker = SpeakerVoiceReference("Anna", "anna.wav", Path("anna.wav"))
+    alignment = AlignmentResult(
+        words=(
+            WordTiming("hello", 0.0, 0.5),
+            WordTiming("world", 0.65, 0.85),
+            WordTiming("now", 0.85, 1.05),
+        ),
+        clauses=(AlignedClause("hello", 0.0, 0.5), AlignedClause("world", 0.6, 0.85)),
+    )
+    line1 = DialogueLine(speaker, "hello")
+    line2 = DialogueLine(speaker, "world now")
+    implicit_timing = script_timing_from_alignment(
+        [line1, ScriptGap(reset_alignment=False), line2], alignment
+    )
+    explicit_timing = script_timing_from_alignment([line1, ScriptGap(), line2], alignment)
+    assert implicit_timing.dialogue_lines[1].start == pytest.approx(0.6)
+    assert explicit_timing.dialogue_lines[1].start == pytest.approx(0.65)
+
+
+def test_recording_selector_errors(tmp_path: Path):
+    (tmp_path / "anna.wav").write_bytes(b"voice")
+    (tmp_path / "ben.wav").write_bytes(b"voice")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />")
+    (tmp_path / "sounds").mkdir()
+    (tmp_path / "sounds" / "a.wav").write_bytes(b"a")
+    config = ProductionConfig(voice_directory=tmp_path)
+
+    class FakeSoundCache:
+        async def preload(self, sound_path):
+            return asyncio.create_task(asyncio.sleep(0, result=np.zeros(4, dtype=np.float32)))
+
+    async def plan_script(selector: str):
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                f"""
+                <production>
+                  <speaker-map>
+                    Anna: anna.wav
+                    Ben: ben.wav
+                  </speaker-map>
+                  <script>
+                    <recording speaker="Anna" source="a" ref="a" />
+                    {selector}: A line.
+                  </script>
+                </production>
+                """,
+                source_name="selector.xml",
+            )
+            await root.speaker_map_node.plan(ainjector)
+            await root.script_nodes[0].plan(ainjector)
+        finally:
+            injector.close()
+
+    with pytest.raises(DocumentError, match="has no <recording source=...> declaration"):
+        asyncio.run(plan_script("z~Anna"))
+    with pytest.raises(DocumentError, match="has no <recording speaker=...> declaration"):
+        asyncio.run(plan_script("~Ben"))
+    with pytest.raises(DocumentError, match="must be a single letter"):
+        asyncio.run(plan_script("ab~Anna"))
+    asyncio.run(plan_script("a~Ben"))
+    asyncio.run(plan_script("~Anna"))

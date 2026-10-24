@@ -329,32 +329,66 @@ class ScriptNode(ElementNode):
         return await ScriptPlan.from_node(ainjector, self)
 
     @property
-    def recording_node(self) -> "RecordingNode | None":
-        recordings = [
+    def recordings(self) -> list["RecordingNode"]:
+        return [
             child for child in self.element_children if isinstance(child, RecordingNode)
         ]
-        if not recordings:
-            return None
-        return recordings[0]
+
+    @property
+    def recording_by_source(self) -> dict[str, "RecordingNode"]:
+        return {recording.source: recording for recording in self.recordings if recording.source}
+
+    @property
+    def recording_by_speaker(self) -> dict[str, "RecordingNode"]:
+        return {
+            recording.speaker.lower(): recording
+            for recording in self.recordings
+            if recording.speaker
+        }
 
     def validate_document(self) -> None:
-        recordings = [
-            child for child in self.element_children if isinstance(child, RecordingNode)
-        ]
-        if len(recordings) > 1:
-            raise recordings[1].error(
-                "<script> may contain at most one <recording> element"
-            )
-        if recordings and self.element_children[0] is not recordings[0]:
-            raise recordings[0].error(
-                "<recording> must be the first element child of <script>"
-            )
+        children = self.element_children
+        recordings = self.recordings
+        first_other = next(
+            (
+                index
+                for index, child in enumerate(children)
+                if not isinstance(child, RecordingNode)
+            ),
+            None,
+        )
+        for recording in recordings:
+            if first_other is not None and children.index(recording) > first_other:
+                raise recording.error(
+                    "<recording> must precede other element children of <script>"
+                )
+        seen_sources: set[str] = set()
+        seen_speakers: set[str] = set()
+        for recording in recordings:
+            if recording.source:
+                if recording.source in seen_sources:
+                    raise recording.error(
+                        f"<recording> source {recording.source!r} is declared more than once"
+                    )
+                seen_sources.add(recording.source)
+            if recording.speaker:
+                speaker_key = recording.speaker.lower()
+                if speaker_key in seen_speakers:
+                    raise recording.error(
+                        f"<recording> speaker alias {recording.speaker!r} is declared more than once"
+                    )
+                seen_speakers.add(speaker_key)
         return ElementNode.validate_document(self)
 
 
 @dataclass(slots=True)
 class RecordingNode(AttributeOrTextValueNode):
-    """Leading script declaration for the default recorded dialogue source."""
+    """Script declaration of one recorded dialogue source.
+
+    A recording is named by a single-letter source (``source="a"``) and/or a
+    speaker alias (``speaker="sam"``). Dialogue lines reference it through
+    the speaker selector ``a~Sam`` or ``~Sam``.
+    """
 
     tag_name: ClassVar[str] = "recording"
     allow_text: ClassVar[bool] = True
@@ -363,6 +397,34 @@ class RecordingNode(AttributeOrTextValueNode):
     @property
     def ref(self) -> str:
         return self.value_from_attribute_or_text
+
+    @property
+    def source(self) -> str:
+        raw_source = self.attributes.get("source", "")
+        normalized = raw_source.strip().lower()
+        if not normalized:
+            return ""
+        if len(normalized) != 1 or normalized in {"~", ":"}:
+            raise self.error("<recording> source must be a single letter")
+        return normalized
+
+    @property
+    def speaker(self) -> str:
+        raw_speaker = self.attributes.get("speaker", "")
+        return raw_speaker.strip()
+
+    @property
+    def key(self) -> str:
+        """Stable source key shared by every line that selects this recording."""
+        return self.source or f"~{self.speaker}"
+
+    def validate_document(self) -> None:
+        self.source
+        if not self.source and not self.speaker:
+            raise self.error(
+                "<recording> requires a source or speaker attribute"
+            )
+        return AttributeOrTextValueNode.validate_document(self)
 
 
 @dataclass(slots=True)
@@ -408,7 +470,12 @@ class GroupNode(ElementNode):
 
 @dataclass(slots=True)
 class LineNode(ElementNode):
-    """Document node for one explicit dialogue line inside a script."""
+    """Document node for one explicit dialogue line inside a script.
+
+    The speaker attribute doubles as the source selector: a plain name
+    selects TTS, ``~Sam`` the recording declared with ``speaker="Sam"``,
+    and ``a~Sam`` the recording declared with ``source="a"``.
+    """
 
     tag_name: ClassVar[str] = "line"
     allow_text: ClassVar[bool] = True
@@ -423,17 +490,14 @@ class LineNode(ElementNode):
             raise self.error("<line> speaker attribute cannot be empty")
         return normalized
 
-    @property
-    def source(self) -> str:
-        raw_source = self.attributes.get("source", "tts")
-        normalized = raw_source.strip().lower()
-        if normalized not in {"tts", "recording"}:
-            raise self.error("<line> source must be either 'tts' or 'recording'")
-        return normalized
-
     def validate_document(self) -> None:
         self.speaker
-        self.source
+        if "source" in self.attributes:
+            raise self.error(
+                "<line> no longer accepts a source attribute; select the "
+                "recording through the speaker (for example "
+                'speaker="~Anna" or speaker="a~Anna")'
+            )
         return ElementNode.validate_document(self)
 
 
