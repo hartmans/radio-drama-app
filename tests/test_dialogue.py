@@ -16,7 +16,7 @@ from radio_drama.dialogue import DialogueAudio, DialogueLine, ScriptGap, ScriptP
 from radio_drama.document import parse_production_string
 from radio_drama.effects import EffectChainRegistry, EffectPipeline, effect_chain_function
 from radio_drama.errors import DocumentError
-from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, ForcedAlignmentResource, AlignmentResult, WordTiming
+from radio_drama.forced_alignment import AlignedScriptSource, ScriptSlice, ForcedAlignmentResource, AlignmentResult, TranscriptionResult, WordTiming
 from radio_drama.qwen_tts import QwenTtsResource
 from radio_drama.rendering import DialogueLineTiming, RenderResult, ScriptRenderResult, ScriptTiming
 from radio_drama.sound import NormalizedSoundCache, SoundPlan
@@ -554,6 +554,214 @@ def test_recording_script_renders_without_tts_registration(tmp_path: Path):
     script_plan, render_result = asyncio.run(runner())
     assert isinstance(script_plan, ComposeAudioPlan)
     assert render_result.audio.tolist() == pytest.approx([0.3, 0.4])
+
+
+def test_recording_transcript_debug_writes_full_file_txt_next_to_sound(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+        debug_log_path=tmp_path / "out.wav.log",
+        debug_categories=("recording_transcript",),
+    )
+    base_audio = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            raise AssertionError("recording-only script should not register a speech render request")
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=base_audio))
+
+    class FakeAlignment:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        def __init__(self) -> None:
+            self.transcribed = []
+        async def transcribe(self, audio, sample_rate, *, language="en"):
+            self.transcribed.append((len(audio), sample_rate, language))
+            return TranscriptionResult("Door transcript.")
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        fake_alignment = FakeAlignment()
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), fake_alignment, close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="door" from="1" />
+                    ~Anna: Transcript only.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            script_plan = await root.script_nodes[0].plan(ainjector)
+            return fake_alignment, script_plan
+        finally:
+            injector.close()
+
+    fake_alignment, script_plan = asyncio.run(runner())
+    assert isinstance(script_plan, ComposeAudioPlan)
+    transcript_path = sound_file.with_suffix(".txt")
+    assert transcript_path.read_text(encoding="utf-8") == "Door transcript.\n"
+    # The transcript covers the whole sound file, not the trimmed selection.
+    assert fake_alignment.transcribed == [(4, 4, "en")]
+    assert (
+        f"[recording_transcript] {transcript_path}"
+        in config.debug_log_path.read_text(encoding="utf-8")
+    )
+
+
+def test_recording_transcript_debug_writes_txt_without_selected_lines(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+        debug_log_path=tmp_path / "out.wav.log",
+        debug_categories=("recording_transcript",),
+    )
+    base_audio = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self):
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+            return Registered()
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=base_audio))
+
+    class FakeAlignment:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        def __init__(self) -> None:
+            self.transcribed = []
+        async def transcribe(self, audio, sample_rate, *, language="en"):
+            self.transcribed.append((len(audio), sample_rate, language))
+            return TranscriptionResult("Door transcript.")
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        fake_alignment = FakeAlignment()
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), fake_alignment, close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="door" />
+                    Anna: A plain line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            script_plan = await root.script_nodes[0].plan(ainjector)
+            return fake_alignment, script_plan
+        finally:
+            injector.close()
+
+    fake_alignment, script_plan = asyncio.run(runner())
+    assert isinstance(script_plan, ScriptPlan)
+    transcript_path = sound_file.with_suffix(".txt")
+    assert transcript_path.read_text(encoding="utf-8") == "Door transcript.\n"
+    assert fake_alignment.transcribed == [(4, 4, "en")]
+
+
+def test_recording_transcript_debug_disabled_writes_nothing(tmp_path: Path):
+    voice_file = tmp_path / "anna.wav"
+    voice_file.write_bytes(b"fake")
+    xml_path = tmp_path / "production.xml"
+    xml_path.write_text("<production />", encoding="utf-8")
+    sound_file = tmp_path / "sounds" / "door.wav"
+    sound_file.parent.mkdir(parents=True, exist_ok=True)
+    sound_file.write_bytes(b"door")
+    config = ProductionConfig(
+        voice_directory=tmp_path,
+        output_sample_rate=4,
+        output_channels=1,
+    )
+    base_audio = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
+
+    class FakeVibeVoice:
+        async def register_request(self, request: ScriptRenderRequest | None):
+            class Registered:
+                async def render(self):
+                    return RenderResult(audio=np.array([1.0, 2.0], dtype=np.float32))
+            return Registered()
+
+    class FakeSoundCache:
+        async def preload(self, sound_path: Path):
+            assert sound_path == sound_file
+            return asyncio.create_task(asyncio.sleep(0, result=base_audio))
+
+    class FakeAlignment:
+        alignment_identity = "fixture:alignment"
+        transcription_identity = "fixture:transcription"
+        def __init__(self) -> None:
+            self.transcribed = []
+        async def transcribe(self, audio, sample_rate, *, language="en"):
+            self.transcribed.append((len(audio), sample_rate, language))
+            return TranscriptionResult("Door transcript.")
+
+    async def runner():
+        injector, ainjector = await make_async_injector(config, document_path=xml_path)
+        fake_alignment = FakeAlignment()
+        injector.replace_provider(InjectionKey(TtsResource, tts="vibevoice"), TimingTtsDouble(FakeVibeVoice(), injector, config), close=False)
+        injector.replace_provider(InjectionKey(ForcedAlignmentResource), fake_alignment, close=False)
+        injector.replace_provider(InjectionKey(NormalizedSoundCache), FakeSoundCache(), close=False)
+        try:
+            root = parse_production_string(
+                """
+                <production>
+                  <speaker-map>Anna: anna.wav</speaker-map>
+                  <script>
+                    <recording speaker="Anna" ref="door" />
+                    Anna: A plain line.
+                  </script>
+                </production>
+                """,
+                source_name=str(xml_path),
+            )
+            speaker_map_plan = await root.speaker_map_node.plan(ainjector)
+            await root.script_nodes[0].plan(ainjector)
+            return fake_alignment
+        finally:
+            injector.close()
+
+    fake_alignment = asyncio.run(runner())
+    assert fake_alignment.transcribed == []
+    assert not sound_file.with_suffix(".txt").exists()
 
 
 def test_recording_script_gap_aligns_against_recording_audio(tmp_path: Path):

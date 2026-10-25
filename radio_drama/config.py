@@ -7,6 +7,7 @@ from pathlib import Path
 SUPPORTED_DEBUG_CATEGORIES = (
     "compose_audio",
     "forced_alignment",
+    "recording_transcript",
     "vibevoice_output",
     "whisperx",
     "qwen_alignment",

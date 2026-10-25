@@ -347,6 +347,7 @@ Current debug hooks:
 
 * `compose_audio` logs the time span where each child plan's samples are placed during composition
 * `forced_alignment` logs each aligned `DialogueLine` start position plus a short text preview
+* `recording_transcript` writes the ASR transcript of each declared `<recording>`'s full sound file to a `.txt` next to the sound file, even when no line selects the recording
 * `vibevoice_output` writes model-native WAV artifacts for each rendered script to `OUTPUT.wav.vibevoice/`
 * `whisperx` logs the alignment decision and writes the raw transcription/alignment segment payloads to `OUTPUT.wav.whisperx/`
 

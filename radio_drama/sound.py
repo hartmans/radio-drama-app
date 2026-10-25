@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import ClassVar, cast
 
+import numpy as np
 import soundfile as sf
 from carthage.dependency_injection import AsyncInjectable, inject
 
@@ -178,6 +179,16 @@ class SoundPlan(AudioPlan):
         normalized_audio_task = await self._ensure_normalized_audio_task()
         audio = await normalized_audio_task
         return RenderResult(audio=self._trimmed_audio(audio).copy())
+
+    async def normalized_audio(self) -> np.ndarray:
+        """Return the cached normalization of the whole sound file, untrimmed.
+
+        ``render_node()`` trims this audio before returning it; callers that
+        need the complete asset (for example, transcript debugging) use this
+        instead. Normalization is shared through ``NormalizedSoundCache``.
+        """
+        task = await self._ensure_normalized_audio_task()
+        return await task
 
     async def _ensure_normalized_audio_task(self) -> asyncio.Task:
         if self._normalized_audio_task is None:

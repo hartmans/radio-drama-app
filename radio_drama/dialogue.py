@@ -623,6 +623,7 @@ class ScriptPlan(AudioPlan):
         Prepared callers construct the dry ScriptPlan with attrs={} and use this
         method only when they need composition. Marks alone do not split speech.
         """
+        await self._write_recording_transcripts()
         if self.needs_source_slicing():
             return await type(self)._build_aligned_audio_plan(
                 self.ainjector, self.node, self, attrs=attrs,
@@ -632,6 +633,47 @@ class ScriptPlan(AudioPlan):
                 ComposeAudioPlan, node=self.node, audio_plans=[self], attrs=attrs,
             )
         return self
+
+    async def _write_recording_transcripts(self) -> None:
+        """Debug: write each declared <recording>'s ASR transcript beside its sound file.
+
+        When the ``recording_transcript`` debug category is enabled, the full
+        sound file of every declared recording is transcribed and the text is
+        written to a ``.txt`` next to the sound file. Recordings are
+        transcribed even when no line selects them, so the output never
+        depends on slice selection.
+        """
+        if not self.config.debug_enabled("recording_transcript"):
+            return
+        recordings = self.node.recordings
+        if not recordings:
+            return
+        from .debug import write_debug_message
+        from .forced_alignment import ForcedAlignmentResource
+        from .sound import SoundPlan
+
+        resource = await self.ainjector.get_instance_async(ForcedAlignmentResource)
+        transcribed: set[Path] = set()
+        for recording in recordings:
+            sound_plan = await self.ainjector(
+                SoundPlan,
+                node=recording,
+                attrs=SoundPlan.attrs_from_node(recording),
+            )
+            sound_path = sound_plan.resolved_path
+            key = sound_path.resolve()
+            if key in transcribed:
+                continue
+            transcribed.add(key)
+            audio = await sound_plan.normalized_audio()
+            transcript = await resource.transcribe(
+                audio,
+                self.config.resolved_output_sample_rate,
+                language=self.config.alignment_language,
+            )
+            transcript_path = sound_path.with_suffix(".txt")
+            transcript_path.write_text(f"{transcript.text}\n", encoding="utf-8")
+            write_debug_message(self.config, "recording_transcript", str(transcript_path))
 
     @classmethod
     async def _build_aligned_audio_plan(
