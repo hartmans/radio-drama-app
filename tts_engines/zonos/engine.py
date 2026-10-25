@@ -138,7 +138,7 @@ class ZonosEngine:
                 audio = self.synthesize_batch([item.line for item in chunk])
                 for item, samples in zip(chunk, audio, strict=True):
                     torchaudio.save(str(item.path), samples, sample_rate)
-            return finish_line_work(outputs, work, sample_rate=sample_rate)
+            return finish_line_work(outputs, work, requests, sample_rate=sample_rate)
         finally:
             remove_line_work(work)
 

@@ -19,6 +19,7 @@ from .dialogue import DialogueLine, ScriptRenderRequest, SpeakerVoiceReference, 
 from .rendering import BackendTtsResult, DialogueLineTiming, ScriptTiming
 from .vibevoice import RegisteredRenderRequest
 from .voice_reference import VoiceReferenceTranscriptionResource
+from radio_drama_tts_container.lines import fill_ignored_line_spans, line_is_synthesizable
 
 
 if TYPE_CHECKING:
@@ -178,26 +179,39 @@ class QwenTtsResource(TtsResource):
             line_starts_by_script[script_index].append(float(script_frames) / native_sample_rate)
             rendered_by_script[script_index].append(audio)
 
-        return [
-            BackendTtsResult(
-                audio=self._concatenate_script_audio(clips),
-                sample_rate=native_sample_rate,
-                timing=ScriptTiming(
-                    tuple(
-                        DialogueLineTiming(
-                            start=start,
-                            end=(
-                                line_starts[index + 1]
-                                if index + 1 < len(line_starts)
-                                else sum(clip.shape[0] for clip in clips) / native_sample_rate
-                            ),
+        results = []
+        for registration, clips, line_starts in zip(
+            batch, rendered_by_script, line_starts_by_script, strict=True
+        ):
+            if line_starts:
+                ends = [
+                    line_starts[index + 1]
+                    if index + 1 < len(line_starts)
+                    else sum(clip.shape[0] for clip in clips) / native_sample_rate
+                    for index in range(len(line_starts))
+                ]
+                kept_spans = list(zip(line_starts, ends, strict=True))
+            else:
+                kept_spans = []
+            is_ignored = [
+                not line_is_synthesizable(line.handling, line.spoken_text)
+                for line in registration.request.dialogue_lines
+            ]
+            results.append(
+                BackendTtsResult(
+                    audio=self._concatenate_script_audio(clips),
+                    sample_rate=native_sample_rate,
+                    timing=ScriptTiming(
+                        tuple(
+                            DialogueLineTiming(start=start, end=end)
+                            for start, end in fill_ignored_line_spans(
+                                kept_spans, is_ignored
+                            )
                         )
-                        for index, start in enumerate(line_starts)
-                    )
-                ),
+                    ),
+                )
             )
-            for clips, line_starts in zip(rendered_by_script, line_starts_by_script, strict=True)
-        ]
+        return results
 
     def _generate_line_batch_native_sync(
         self,
@@ -231,7 +245,7 @@ class QwenTtsResource(TtsResource):
         return [
             line
             for line in request.dialogue_lines
-            if line.spoken_text.strip()
+            if line_is_synthesizable(line.handling, line.spoken_text)
         ]
 
     def _prompt_items_by_voice_sync(

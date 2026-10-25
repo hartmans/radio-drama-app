@@ -10,7 +10,14 @@ from pathlib import Path
 import numpy as np
 
 from radio_drama.proxy import load_proxy_tts_configs
-from radio_drama_tts_container import SpeakerSlots, artifact_name, finish_line_work, prepare_line_work
+from radio_drama_tts_container import (
+    SpeakerSlots,
+    artifact_name,
+    fill_ignored_line_spans,
+    finish_line_work,
+    line_is_synthesizable,
+    prepare_line_work,
+)
 from tts_engines.chatterbox.engine import ChatterboxEngine
 from tts_engines.zonos.engine import (
     ZonosEngine,
@@ -45,16 +52,63 @@ def test_shared_line_assembly_preserves_script_boundaries_and_timing(
     tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
-    outputs, work = prepare_line_work(
-        [_request("first", ("one", "two")), _request("second", ("three",))]
-    )
+    requests = [_request("first", ("one", "two")), _request("second", ("three",))]
+    outputs, work = prepare_line_work(requests)
     for index, item in enumerate(work, 1):
         _save_wav(str(item.path), np.zeros(index * 10), 100)
 
-    results = finish_line_work(outputs, work, sample_rate=100)
+    results = finish_line_work(outputs, work, requests, sample_rate=100)
 
     assert results[0]["dialogue_line_spans"] == [[0.0, 0.1], [0.1, 0.3]]
     assert results[1]["dialogue_line_spans"] == [[0.0, 0.3]]
+    with wave.open(results[0]["wav"], "rb") as source:
+        assert source.getnframes() == 30
+
+
+def test_line_is_synthesizable_skips_ignored_and_empty_lines():
+    assert line_is_synthesizable("normal", "hello")
+    assert not line_is_synthesizable("ignore", "guidance")
+    assert not line_is_synthesizable("normal", "   ")
+    assert not line_is_synthesizable("special", "")
+
+
+def test_fill_ignored_line_spans_zero_fills_skipped_lines():
+    assert fill_ignored_line_spans([(0.0, 0.5), (0.5, 1.0), (1.0, 1.5)],
+                                   [False, True, False, True, False]) == [
+        (0.0, 0.5), (0.5, 0.5), (0.5, 1.0), (1.0, 1.0), (1.0, 1.5),
+    ]
+    # Leading skips fall to 0.0; trailing skips fall to the final end.
+    assert fill_ignored_line_spans([(0.0, 1.0)], [True, False, True]) == [
+        (0.0, 0.0), (0.0, 1.0), (1.0, 1.0),
+    ]
+    # Nothing synthesized leaves every authored line zero-width at 0.0.
+    assert fill_ignored_line_spans([], [True, True]) == [(0.0, 0.0), (0.0, 0.0)]
+
+
+def test_line_assembly_skips_ignored_lines_and_zero_fills_timing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    speaker = {"voice_path": "/voices/narrator.wav"}
+    request = {
+        "first_words": "hello",
+        "dialogue_contents": [
+            {"type": "line", "spoken_text": "one", "speaker": speaker, "handling": "normal"},
+            {"type": "line", "spoken_text": "guidance", "speaker": speaker, "handling": "ignore"},
+            {"type": "line", "spoken_text": "two", "speaker": speaker, "handling": "normal"},
+        ],
+    }
+    outputs, work = prepare_line_work([request])
+
+    # Only the synthesizable lines are scheduled for the model.
+    assert [item.line["spoken_text"] for item in work] == ["one", "two"]
+    for index, item in enumerate(work, 1):
+        _save_wav(str(item.path), np.zeros(index * 10), 100)
+
+    results = finish_line_work(outputs, work, [request], sample_rate=100)
+
+    # One span per authored line; the skipped line is zero-width at its boundary.
+    assert results[0]["dialogue_line_spans"] == [[0.0, 0.1], [0.1, 0.1], [0.1, 0.3]]
     with wave.open(results[0]["wav"], "rb") as source:
         assert source.getnframes() == 30
 
@@ -86,6 +140,42 @@ def test_zonos_batches_lines_across_pending_scripts(tmp_path, monkeypatch):
         2,
         1,
     ]
+    assert not list(tmp_path.glob("*.line-*.wav"))
+
+
+def test_zonos_render_batch_skips_ignored_lines(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ZONOS_BATCH_SIZE", "2")
+    monkeypatch.setitem(
+        sys.modules, "torchaudio", types.SimpleNamespace(save=_save_wav)
+    )
+    seen = []
+
+    class FakeEngine(ZonosEngine):
+        def load_model(self):
+            return types.SimpleNamespace(
+                autoencoder=types.SimpleNamespace(sampling_rate=100)
+            )
+
+        def synthesize_batch(self, lines):
+            seen.append([line["spoken_text"] for line in lines])
+            return [np.zeros((1, 10)) for _ in lines]
+
+    speaker = {"voice_path": "/voices/narrator.wav"}
+    request = {
+        "first_words": "hello",
+        "dialogue_contents": [
+            {"type": "line", "spoken_text": "one", "speaker": speaker, "handling": "normal"},
+            {"type": "line", "spoken_text": "guidance", "speaker": speaker, "handling": "ignore"},
+            {"type": "line", "spoken_text": "two", "speaker": speaker, "handling": "normal"},
+        ],
+    }
+    results = asyncio.run(FakeEngine().render_batch([request]))
+
+    # The ignored line never reaches the model.
+    assert seen == [["one", "two"]]
+    # One span per authored line, zero-width where the line was skipped.
+    assert results[0]["dialogue_line_spans"] == [[0.0, 0.1], [0.1, 0.1], [0.1, 0.2]]
     assert not list(tmp_path.glob("*.line-*.wav"))
 
 

@@ -21,17 +21,83 @@ class LineWork:
     path: Path
 
 
+def line_is_synthesizable(handling: str, spoken_text: str) -> bool:
+    """Whether a line-oriented engine should synthesize one authored line.
+
+    Cross-line engines keep ignored guidance lines; line-oriented engines do
+    not speak them, and empty lines have nothing to say. The predicate is
+    shared by host backends (for example Qwen) and container engines so the
+    kept-line set and its timing fill stay consistent.
+    """
+    return handling != "ignore" and bool(spoken_text.strip())
+
+
+def _line_is_synthesizable(content: Mapping[str, Any]) -> bool:
+    """Synthesizability for one serialized dialogue content entry."""
+    if content.get("type") != "line":
+        return False
+    return line_is_synthesizable(
+        str(content.get("handling", "normal")), str(content.get("spoken_text", ""))
+    )
+
+
+def _line_kept_mask(request: Mapping[str, Any]) -> list[bool]:
+    """Parallel to the request's authored lines: True where one is synthesized."""
+    return [
+        _line_is_synthesizable(content)
+        for content in request["dialogue_contents"]
+        if content.get("type") == "line"
+    ]
+
+
+def fill_ignored_line_spans(
+    kept_spans: Sequence[tuple[float, float]], is_ignored: Sequence[bool]
+) -> list[tuple[float, float]]:
+    """Expand per-synthesized-line spans back to one span per authored line.
+
+    ``kept_spans`` holds the real spans in synthesized order. Every authored
+    line that was not synthesized (ignored guidance, or empty) receives a
+    zero-width span at its boundary so downstream timing keeps one span per
+    dialogue line. Synthesis is contiguous, so a skipped line's position is
+    the end of the preceding kept span, equal to the start of the following
+    one; leading skips fall to 0.0.
+    """
+    full: list[tuple[float, float] | None] = [None] * len(is_ignored)
+    kept_index = 0
+    for index, ignored in enumerate(is_ignored):
+        if not ignored:
+            full[index] = tuple(kept_spans[kept_index])
+            kept_index += 1
+    for index, ignored in enumerate(is_ignored):
+        if not ignored:
+            continue
+        position = 0.0
+        found = False
+        for previous in range(index - 1, -1, -1):
+            if full[previous] is not None:
+                position = full[previous][1]
+                found = True
+                break
+        if not found:
+            for following in range(index + 1, len(full)):
+                if full[following] is not None:
+                    position = full[following][0]
+                    break
+        full[index] = (position, position)
+    return [span for span in full if span is not None]
+
+
 def prepare_line_work(
     requests: Sequence[Mapping[str, Any]],
 ) -> tuple[list[Path], list[LineWork]]:
-    """Flatten non-empty dialogue lines while retaining request ordering."""
+    """Flatten synthesizable dialogue lines while retaining request ordering."""
 
     outputs = [Path(artifact_name(request)) for request in requests]
     work = []
     for request_index, (request, output) in enumerate(zip(requests, outputs, strict=True)):
         line_index = 0
         for content in request["dialogue_contents"]:
-            if content.get("type") != "line" or not str(content.get("spoken_text", "")).strip():
+            if not _line_is_synthesizable(content):
                 continue
             work.append(
                 LineWork(
@@ -46,15 +112,26 @@ def prepare_line_work(
 
 
 def finish_line_work(
-    outputs: Sequence[Path], work: Sequence[LineWork], *, sample_rate: int
+    outputs: Sequence[Path],
+    work: Sequence[LineWork],
+    requests: Sequence[Mapping[str, Any]],
+    *,
+    sample_rate: int,
 ) -> list[Mapping[str, Any]]:
-    """Concatenate like-formatted segments and report authored line starts."""
+    """Concatenate like-formatted segments, one span per authored line.
+
+    Skipped (ignored or empty) lines receive zero-width spans at their
+    boundary so the reported spans stay parallel to the request's authored
+    dialogue lines.
+    """
 
     by_request: list[list[LineWork]] = [[] for _ in outputs]
     for item in work:
         by_request[item.request_index].append(item)
     results = []
-    for output, request_work in zip(outputs, by_request, strict=True):
+    for request_index, (output, request_work) in enumerate(
+        zip(outputs, by_request, strict=True)
+    ):
         starts = []
         frames = 0
         chunks = []
@@ -80,11 +157,19 @@ def finish_line_work(
             destination.setsampwidth(width)
             destination.setframerate(rate)
             destination.writeframes(b"".join(chunks))
-        ends = [*starts[1:], frames / sample_rate]
+        if starts:
+            ends = [*starts[1:], frames / sample_rate]
+            kept_spans = list(zip(starts, ends, strict=True))
+        else:
+            kept_spans = []
+        is_ignored = [not kept for kept in _line_kept_mask(requests[request_index])]
         results.append(
             {
                 "wav": output.name,
-                "dialogue_line_spans": [list(span) for span in zip(starts, ends, strict=True)],
+                "dialogue_line_spans": [
+                    list(span)
+                    for span in fill_ignored_line_spans(kept_spans, is_ignored)
+                ],
             }
         )
     return results

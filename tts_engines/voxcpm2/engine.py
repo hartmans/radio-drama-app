@@ -150,7 +150,7 @@ class VoxCPM2Engine:
                 if has_instruction:
                     prompts[speaker_key] = (str(item.path), audible_text)
             return await run_in_thread(finish_line_work,
-                outputs, work, sample_rate=model.tts_model.sample_rate
+                outputs, work, requests, sample_rate=model.tts_model.sample_rate
             )
         finally:
             await run_in_thread(remove_line_work, work)

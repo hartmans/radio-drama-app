@@ -167,7 +167,7 @@ class HiggsTtsEngine:
                 audio = self.synthesize_batch([item.line for item in chunk])
                 for item, waveform in zip(chunk, audio, strict=True):
                     self.write_audio(item.path, waveform)
-            return finish_line_work(outputs, work, sample_rate=SAMPLE_RATE)
+            return finish_line_work(outputs, work, requests, sample_rate=SAMPLE_RATE)
         finally:
             if not _environment_flag("HIGGS_KEEP_LINE_WAVS", False):
                 remove_line_work(work)

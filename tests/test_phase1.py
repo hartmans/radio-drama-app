@@ -851,6 +851,70 @@ def test_qwen_resource_returns_production_format_audio(monkeypatch, tmp_path: Pa
     assert np.allclose(result.audio[:, 0], result.audio[:, 1])
 
 
+def test_qwen_resource_skips_ignored_lines_and_zero_fills_timing(
+    monkeypatch, tmp_path: Path
+):
+    config = ProductionConfig(
+        voice_directory=tmp_path, output_sample_rate=48000, output_channels=2
+    )
+    voice = tmp_path / "voice1.wav"
+    voice.write_bytes(b"fake")
+    speaker = SpeakerVoiceReference(
+        authored_name="Speaker 1", voice_name="voice1.wav", resolved_path=voice
+    )
+    request = ScriptRenderRequest(
+        dialogue_lines=[
+            DialogueLine(speaker=speaker, spoken_text="Hello"),
+            DialogueLine(speaker=speaker, spoken_text="Guidance", handling="ignore"),
+            DialogueLine(speaker=speaker, spoken_text="There"),
+        ],
+        first_words="hello",
+    )
+
+    seen_texts: list[str] = []
+
+    class FakeResource(QwenTtsResource):
+        def _ensure_loaded(self):
+            self._sample_rate = 24000
+            return object()
+
+        def _prompt_items_by_voice_sync(self, references):
+            return {
+                str(reference.resolved_path.expanduser().resolve()): [object()]
+                for reference in references
+            }
+
+        def _generate_line_batch_native_sync(self, texts, prompt_items):
+            self._sample_rate = 24000
+            seen_texts.extend(texts)
+            return [np.ones(1200, dtype=np.float32) for _ in texts]
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    async def runner():
+        injector, ainjector = await _make_async_injector(config)
+        try:
+            resource = await ainjector(FakeResource)
+            registration = await resource.register_request(request)
+            return await registration.render()
+        finally:
+            injector.close()
+
+    result = asyncio.run(runner())
+    # The ignored line never reaches the model.
+    assert seen_texts == ["Hello", "There"]
+    # Audio holds only the two synthesized lines.
+    assert result.audio.shape == (4800, 2)
+    # One span per authored line, zero-width where the line was skipped.
+    assert result.timing is not None
+    assert [
+        [line.start, line.end] for line in result.timing.dialogue_lines
+    ] == [[0.0, 0.05], [0.05, 0.05], [0.05, 0.1]]
+
+
 def test_cached_vibevoice_double_stores_metadata_and_replays(cached_vibevoice_factory, tmp_path: Path):
     cache = cached_vibevoice_factory(mode="live", cache_dir=tmp_path / "cache", seed=7)
     request = _request_from_normalized_script("Speaker 1: Hello", ("anna.wav",))

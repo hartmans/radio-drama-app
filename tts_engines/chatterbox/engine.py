@@ -63,7 +63,7 @@ class ChatterboxEngine:
             model = self.load_model()
             for item in work:
                 torchaudio.save(str(item.path), self.synthesize_line(item.line).cpu(), model.sr)
-            return finish_line_work(outputs, work, sample_rate=model.sr)
+            return finish_line_work(outputs, work, requests, sample_rate=model.sr)
         finally:
             remove_line_work(work)
 

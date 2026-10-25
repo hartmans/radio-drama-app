@@ -158,7 +158,7 @@ class F5TtsEngine:
                         f"F5-TTS returned {actual_rate} Hz audio; expected {sample_rate} Hz"
                     )
                 self.write_audio(item.path, waveform, actual_rate)
-            return finish_line_work(outputs, work, sample_rate=sample_rate)
+            return finish_line_work(outputs, work, requests, sample_rate=sample_rate)
         finally:
             if not _environment_flag("F5_TTS_KEEP_LINE_WAVS", False):
                 remove_line_work(work)

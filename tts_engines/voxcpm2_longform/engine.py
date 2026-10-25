@@ -179,7 +179,7 @@ class VoxCPM2Engine:
         tasks = [asyncio.create_task(render_script(items)) for items in by_request]
         try:
             await asyncio.gather(*tasks)
-            return await run_in_thread(finish_line_work, outputs, work, sample_rate=SAMPLE_RATE)
+            return await run_in_thread(finish_line_work, outputs, work, requests, sample_rate=SAMPLE_RATE)
         finally:
             # Stop siblings before deleting paths that may still be in use.
             for task in tasks:
